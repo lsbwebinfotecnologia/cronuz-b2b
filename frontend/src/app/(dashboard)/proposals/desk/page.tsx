@@ -593,20 +593,8 @@ export default function ProposalsDeskPage() {
   }, []);
 
   // Carrega dados híbridos do cliente (4 cards + Novidades e Fundo) ao selecionar no Autocomplete
-  // Reposição e Último Acerto possuem botão próprio "Buscar" em suas abas
-  const loadCustomerDeskData = useCallback(async (custId: string | number, fallbackCustObj?: any, savedProposalItems?: DbmItem[]) => {
-    if (!custId) {
-      setCustomer(null);
-      setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
-      setItems([]);
-      setSelectedCheckedIds({});
-      setLastOpInvoiceMeta(null);
-      setLastOpTypeSelected(null);
-      setReplenishmentMeta(null);
-      return;
-    }
-
-    setIsLoadingCustomerContext(true);
+  // Se custId for vazio, carrega apenas Novidades e Fundo de Catálogo gerais do Seller
+  const loadCustomerDeskData = useCallback(async (custId?: string | number, fallbackCustObj?: any, savedProposalItems?: DbmItem[]) => {
     setIsLoadingCatalog(true);
     setSelectedCheckedIds({});
     setLastOpInvoiceMeta(null);
@@ -615,64 +603,72 @@ export default function ProposalsDeskPage() {
 
     let resolvedDisc = globalDiscountInput;
 
-    try {
-      const resCtx = await fetch(`${API_URL}/dbm/proposals-desk/customer-context/${custId}`, {
-        headers: { 'Authorization': `Bearer ${getToken()}` }
-      });
-      if (resCtx.ok) {
-        const dataCtx = await resCtx.json();
-        const c = dataCtx.customer || {};
-        resolvedDisc = Number(c.defaultDiscount || fallbackCustObj?.discount || globalDiscountInput || 35);
-        setGlobalDiscountInput(resolvedDisc);
-        setManualDiscount(resolvedDisc);
-        setCustomer({
-          id: c.id || custId,
-          name: c.name || fallbackCustObj?.name || 'Cliente Selecionado',
-          corporate_name: c.corporate_name || c.name || fallbackCustObj?.corporate_name,
-          document: c.document || fallbackCustObj?.document || '—',
-          nickname: c.name || fallbackCustObj?.name,
-          minOrderValue: Number(c.minOrderValue ?? fallbackCustObj?.min_order_total ?? 0),
-          creditLimit: Number(c.creditLimit ?? fallbackCustObj?.credit_limit ?? 0),
-          openDebts: Number(c.usedCredit ?? fallbackCustObj?.open_debts ?? 0),
-          overdueDebt: Number(c.overdueDebt ?? 0),
-          consignedTotalUnits: Number(c.consignedTotalUnits ?? 0),
-          consignedTotalValue: Number(c.consignedTotalValue ?? 0),
-          paymentCondition: fallbackCustObj?.payment_condition || '30 DDL',
-          commercialPolicy: c.canal || fallbackCustObj?.commercial_policy?.name || 'Tabela Comercial Padrão',
-          city: c.city || fallbackCustObj?.city || '—',
-          state: c.uf || fallbackCustObj?.state || '—',
-          horus_cod_cli: c.horus_cod_cli || fallbackCustObj?.horus_cod_cli || '—',
-          observations: c.observations || ''
-        });
-        if (dataCtx.operationsMetrics) {
-          setOperationsMetrics(dataCtx.operationsMetrics);
-        }
-      } else if (fallbackCustObj) {
-        setCustomer({
-          id: fallbackCustObj.id,
-          name: fallbackCustObj.name,
-          corporate_name: fallbackCustObj.corporate_name || fallbackCustObj.name,
-          document: fallbackCustObj.document || '—',
-          nickname: fallbackCustObj.name,
-          minOrderValue: Number(fallbackCustObj.min_order_total ?? 0),
-          creditLimit: fallbackCustObj.credit_limit || 0,
-          openDebts: fallbackCustObj.open_debts || 0,
-          paymentCondition: fallbackCustObj.payment_condition || '30 DDL',
-          commercialPolicy: fallbackCustObj.commercial_policy?.name || 'Tabela Comercial Padrão',
-          city: fallbackCustObj.city || '—',
-          state: fallbackCustObj.state || '—',
-          horus_cod_cli: fallbackCustObj.horus_cod_cli || '—'
-        });
-      }
-    } catch (e) {
-      console.error('Erro ao carregar contexto do cliente:', e);
-    } finally {
+    if (!custId) {
+      setCustomer(null);
+      setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
       setIsLoadingCustomerContext(false);
+    } else {
+      setIsLoadingCustomerContext(true);
+      try {
+        const resCtx = await fetch(`${API_URL}/dbm/proposals-desk/customer-context/${custId}`, {
+          headers: { 'Authorization': `Bearer ${getToken()}` }
+        });
+        if (resCtx.ok) {
+          const dataCtx = await resCtx.json();
+          const c = dataCtx.customer || {};
+          resolvedDisc = Number(c.defaultDiscount || fallbackCustObj?.discount || globalDiscountInput || 35);
+          setGlobalDiscountInput(resolvedDisc);
+          setManualDiscount(resolvedDisc);
+          setCustomer({
+            id: c.id || custId,
+            name: c.name || fallbackCustObj?.name || 'Cliente Selecionado',
+            corporate_name: c.corporate_name || c.name || fallbackCustObj?.corporate_name,
+            document: c.document || fallbackCustObj?.document || '—',
+            nickname: c.name || fallbackCustObj?.name,
+            minOrderValue: Number(c.minOrderValue ?? fallbackCustObj?.min_order_total ?? 0),
+            creditLimit: Number(c.creditLimit ?? fallbackCustObj?.credit_limit ?? 0),
+            openDebts: Number(c.usedCredit ?? fallbackCustObj?.open_debts ?? 0),
+            overdueDebt: Number(c.overdueDebt ?? 0),
+            consignedTotalUnits: Number(c.consignedTotalUnits ?? 0),
+            consignedTotalValue: Number(c.consignedTotalValue ?? 0),
+            paymentCondition: fallbackCustObj?.payment_condition || '30 DDL',
+            commercialPolicy: c.canal || fallbackCustObj?.commercial_policy?.name || 'Tabela Comercial Padrão',
+            city: c.city || fallbackCustObj?.city || '—',
+            state: c.uf || fallbackCustObj?.state || '—',
+            horus_cod_cli: c.horus_cod_cli || fallbackCustObj?.horus_cod_cli || '—',
+            observations: c.observations || ''
+          });
+          if (dataCtx.operationsMetrics) {
+            setOperationsMetrics(dataCtx.operationsMetrics);
+          }
+        } else if (fallbackCustObj) {
+          setCustomer({
+            id: fallbackCustObj.id,
+            name: fallbackCustObj.name,
+            corporate_name: fallbackCustObj.corporate_name || fallbackCustObj.name,
+            document: fallbackCustObj.document || '—',
+            nickname: fallbackCustObj.name,
+            minOrderValue: Number(fallbackCustObj.min_order_total ?? 0),
+            creditLimit: fallbackCustObj.credit_limit || 0,
+            openDebts: fallbackCustObj.open_debts || 0,
+            paymentCondition: fallbackCustObj.payment_condition || '30 DDL',
+            commercialPolicy: fallbackCustObj.commercial_policy?.name || 'Tabela Comercial Padrão',
+            city: fallbackCustObj.city || '—',
+            state: fallbackCustObj.state || '—',
+            horus_cod_cli: fallbackCustObj.horus_cod_cli || '—'
+          });
+        }
+      } catch (e) {
+        console.error('Erro ao carregar contexto do cliente:', e);
+      } finally {
+        setIsLoadingCustomerContext(false);
+      }
     }
 
     try {
+      const custQueryParam = custId ? `customer_id=${custId}&` : '';
       const resCat = await fetch(
-        `${API_URL}/dbm/proposals-desk/catalog-tabs?customer_id=${custId}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=50&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}`,
+        `${API_URL}/dbm/proposals-desk/catalog-tabs?${custQueryParam}client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=50&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}`,
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (resCat.ok) {
@@ -795,6 +791,8 @@ export default function ProposalsDeskPage() {
     } else if (custIdParam) {
       setSelectedCustomerId(String(custIdParam));
       loadCustomerDeskData(custIdParam);
+    } else {
+      loadCustomerDeskData('');
     }
   }, [loadCustomerDeskData]);
 
@@ -1750,7 +1748,6 @@ export default function ProposalsDeskPage() {
     setSelectedCustomerId('');
     setCustomer(null);
     setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
-    setItems([]);
     setSelectedCheckedIds({});
     setSelectedRowId('');
     setLastOpInvoiceMeta(null);
@@ -1766,6 +1763,7 @@ export default function ProposalsDeskPage() {
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', '/proposals/desk');
     }
+    loadCustomerDeskData('');
     toast.info('Mesa limpa para iniciar um Novo Orçamento. Selecione o cliente acima.');
   };
 
@@ -1830,12 +1828,12 @@ export default function ProposalsDeskPage() {
     <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 p-2 sm:p-4 space-y-3 font-sans">
       
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* 1. BARRA DE COMANDO SUPERIOR (Densa, Compacta e Direta)              */}
+      {/* 1. BARRA DE COMANDO SUPERIOR (Bem Distribuída, Fluida e Sem Gargalo) */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      <div className="bg-white dark:bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+      <div className="bg-white dark:bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-wrap items-center justify-between gap-2.5">
         
         {/* Esquerda: Voltar + Título + Campo de Busca de Cliente Compacto */}
-        <div className="flex items-center gap-2.5 flex-1 min-w-0">
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 flex-1 min-w-[280px]">
           <Link 
             href="/dbm/proposals"
             title="Voltar para listagem de orçamentos e propostas DBM"
@@ -1848,7 +1846,7 @@ export default function ProposalsDeskPage() {
             <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block leading-none">
               Gestão de Vendas DBM
             </span>
-            <h1 className="text-sm font-black text-slate-900 dark:text-white leading-tight flex items-center gap-1.5">
+            <h1 className="text-sm font-black text-slate-900 dark:text-white leading-tight flex items-center gap-1.5 whitespace-nowrap">
               <span>Orçamentos & Propostas</span>
               {proposalLocalId && (
                 <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300 font-mono text-[10px] font-bold border border-indigo-200 dark:border-indigo-800">
@@ -1860,9 +1858,10 @@ export default function ProposalsDeskPage() {
 
           <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block shrink-0" />
 
-          {/* Autocomplete do Cliente em formato compacto de barra */}
-          <div className="flex-1 max-w-xs lg:max-w-sm min-w-[200px] mr-2">
+          {/* Autocomplete do Cliente em formato compacto de barra sem sobreposição */}
+          <div className="w-full sm:w-64 lg:w-72 xl:w-80 min-w-0 shrink">
             <CustomerAutocomplete
+              compact
               value={selectedCustomerId}
               onChange={(id, cust) => {
                 setSelectedCustomerId(id);
@@ -1870,29 +1869,29 @@ export default function ProposalsDeskPage() {
                 setProposalLocalId(null);
                 loadCustomerDeskData(id, cust);
               }}
-              placeholder="🔍 Selecione o Cliente (Nome, CNPJ ou Apelido)..."
+              placeholder="🔍 Selecionar cliente (nome ou CNPJ)..."
             />
           </div>
         </div>
 
-        {/* Direita: Importar Pedido + Status do Seller + Configurações + Ajuda (?) + Salvar */}
-        <div className="flex items-center gap-1.5 shrink-0 self-end md:self-auto">
+        {/* Direita: Importar Pedido + Status do Seller + Configurações + Salvar + Novo Orçamento + Ajuda (?) */}
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           
           {/* Botão de Toggle da Gaveta de Origem / Leitura de Pedidos */}
           <button
             type="button"
-            disabled={!customer}
+            title="Importar Pedido via Planilha Excel, PDF ou Texto colado"
             onClick={() => setIsIntakeDrawerOpen(!isIntakeDrawerOpen)}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-bold transition-all shadow-sm whitespace-nowrap ${
               isIntakeDrawerOpen 
                 ? 'bg-indigo-600 text-white border-indigo-600 dark:bg-indigo-500' 
                 : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800'
             }`}
           >
-            <Sparkles className="h-3.5 w-3.5" />
+            <Sparkles className="h-3.5 w-3.5 shrink-0" />
             <span>Importar Pedido</span>
-            <span className="text-[10px] font-mono opacity-80 hidden lg:inline">(Excel / PDF / Texto)</span>
-            {isIntakeDrawerOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+            <span className="text-[10px] font-mono opacity-80 hidden 2xl:inline">(Excel / PDF / Texto)</span>
+            {isIntakeDrawerOpen ? <ChevronUp className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
           </button>
 
           {/* Seletor de Status Customizável */}
@@ -2982,6 +2981,15 @@ export default function ProposalsDeskPage() {
                   <span>
                     Janela de Novidades: <strong>-9 meses</strong> até <strong>+6 meses</strong> (apenas com estoque disponível e fora do Pedido).
                   </span>
+                  <button
+                    type="button"
+                    disabled={isLoadingCatalog}
+                    onClick={() => loadCustomerDeskData(selectedCustomerId || '', customer, items.filter(it => it.tabCategory === 'pedido'))}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${isLoadingCatalog ? 'animate-spin text-indigo-600' : ''}`} />
+                    <span>Atualizar Novidades</span>
+                  </button>
                 </div>
               )}
 
@@ -2992,6 +3000,15 @@ export default function ProposalsDeskPage() {
                   <span>
                     Fundo de Catálogo: títulos de giro consolidado com saldo disponível (sem repetir itens de Pedido, Reposição ou Novidades).
                   </span>
+                  <button
+                    type="button"
+                    disabled={isLoadingCatalog}
+                    onClick={() => loadCustomerDeskData(selectedCustomerId || '', customer, items.filter(it => it.tabCategory === 'pedido'))}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${isLoadingCatalog ? 'animate-spin text-indigo-600' : ''}`} />
+                    <span>Atualizar Catálogo</span>
+                  </button>
                 </div>
               )}
 
@@ -3500,8 +3517,13 @@ export default function ProposalsDeskPage() {
               {activeItems.length === 0 ? (
                 <tr>
                   <td colSpan={18} className="py-12 text-center text-slate-400 font-sans text-xs">
-                    {!customer ? (
-                      <span>Selecione um cliente no topo da tela para carregar os itens e iniciar o orçamento.</span>
+                    {isLoadingCatalog || isLoadingLastOp || isLoadingReplenishment ? (
+                      <span className="inline-flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-medium">
+                        <RefreshCw className="h-4 w-4 animate-spin" />
+                        Consultando base híbrida Hórus + Cronuz...
+                      </span>
+                    ) : !customer && (activeTab === 'pedido' || activeTab === 'reposicao' || activeTab === 'ultimo_acerto') ? (
+                      <span>Selecione um cliente no topo da tela para carregar os itens deste cliente e iniciar o orçamento.</span>
                     ) : activeTab === 'reposicao' && !replenishmentMeta && !isLoadingReplenishment ? (
                       <span>
                         Clique no botão <b>&ldquo;Buscar&rdquo;</b> acima para coletar os itens com <b>Saldo Consignado (API)</b> e o <b>Histórico de Vendas ({replenishmentSalesDays} dias)</b> deste cliente.
@@ -3509,11 +3531,6 @@ export default function ProposalsDeskPage() {
                     ) : activeTab === 'ultimo_acerto' && !lastOpTypeSelected ? (
                       <span>
                         Clique em <b>&ldquo;Último Acerto&rdquo;</b> ou <b>&ldquo;Última Venda Firme&rdquo;</b> acima para carregar os itens da nota fiscal do cliente.
-                      </span>
-                    ) : isLoadingCatalog || isLoadingLastOp || isLoadingReplenishment ? (
-                      <span className="inline-flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-medium">
-                        <RefreshCw className="h-4 w-4 animate-spin" />
-                        Consultando base híbrida Hórus + Cronuz...
                       </span>
                     ) : (
                       <span>Nenhum item localizado para os filtros informados nesta aba.</span>

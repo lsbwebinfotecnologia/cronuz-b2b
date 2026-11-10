@@ -129,25 +129,25 @@ export default function CustomerAutocomplete({ value, onChange, required = false
       <input type="text" required={required} value={value} onChange={() => {}} className="absolute opacity-0 w-0 h-0" tabIndex={-1} />
 
       <div 
-        className={`w-full ${compact ? 'h-9 px-3 py-1.5 text-xs' : 'px-4 py-3 text-sm'} flex items-center justify-between cursor-pointer border rounded-xl transition-colors shadow-xs
+        className={`w-full ${compact ? 'h-9 px-3 py-1.5 text-xs' : 'px-4 py-3 text-sm'} flex items-center justify-between cursor-pointer border rounded-xl transition-colors shadow-xs overflow-hidden
           ${isOpen 
             ? 'border-[var(--color-primary-base)] ring-2 ring-[var(--color-primary-base)]/20 bg-white dark:bg-slate-950' 
             : 'border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950 hover:border-slate-300 dark:hover:border-slate-700'
           }`}
         onClick={() => setIsOpen(!isOpen)}
       >
-        <div className="flex-1 truncate">
+        <div className="flex-1 min-w-0 truncate">
           {selectedCustomer ? (
-            <span className="text-slate-900 dark:text-white font-medium">
+            <span className="text-slate-900 dark:text-white font-medium truncate block">
               {selectedCustomer.id} - {selectedCustomer.name}
               {selectedCustomer.corporate_name && selectedCustomer.corporate_name !== selectedCustomer.name && ` (${selectedCustomer.corporate_name})`}
             </span>
           ) : (
-            <span className="text-slate-500 dark:text-slate-400">{placeholder}</span>
+            <span className="text-slate-500 dark:text-slate-400 truncate block">{placeholder}</span>
           )}
         </div>
         
-        <div className="flex items-center gap-2 ml-2">
+        <div className="flex items-center gap-1.5 ml-2 shrink-0">
           {selectedCustomer && (
             <button 
               type="button" 

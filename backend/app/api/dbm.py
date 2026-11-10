@@ -1743,6 +1743,29 @@ def _enrich_items_with_bi_metrics(
                         k = str(cr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
                         if k:
                             consig_map[k] = int(float(cr.get("saldo_consig") or 0))
+                else:
+                    sql_batch_gen_only = f"""
+                        SELECT
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(NFI.COD_ITEM AS VARCHAR))))) AS isbn,
+                            SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS gen_qty
+                        FROM NF_ITENS NFI WITH (NOLOCK)
+                        INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                            ON NF.COD_NF = NFI.COD_NF
+                            AND NF.COD_FILIAL = NFI.COD_FILIAL
+                            AND NF.COD_EMPRESA = NFI.COD_EMPRESA
+                        INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
+                        WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                          AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
+                          AND {clean_cfop_expr} IN ({cfop_sales_in})
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                        GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
+                    """
+                    params_gen = (general_sales_days, general_sales_days) + tuple(chunk) + tuple(chunk)
+                    g_rows = sql_client.query(sql_batch_gen_only, params_gen, max_rows=300)
+                    for gr in (g_rows or []):
+                        k = str(gr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
+                        if k:
+                            gen_period_map[k] = int(float(gr.get("gen_qty") or 0))
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao enriquecer giro via Horus SQL em lote: {e}")
 
@@ -1917,7 +1940,7 @@ def _is_item_excluded_by_dbm_flags(
 
 @router.get("/proposals-desk/catalog-tabs")
 async def get_proposals_desk_catalog_tabs(
-    customer_id: int = Query(..., description="ID do cliente selecionado"),
+    customer_id: Optional[int] = Query(None, description="ID do cliente selecionado (opcional)"),
     company_id: Optional[int] = Query(None),
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
@@ -1928,7 +1951,7 @@ async def get_proposals_desk_catalog_tabs(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Retorna os itens das abas de catálogo para o cliente selecionado:
+    Retorna os itens das abas de catálogo para o seller (e cliente selecionado, quando informado):
     - NOVIDADES: produtos com data de lançamento entre 9 meses para trás (-270d) e 6 meses para frente (+180d),
       indicando status de lançamento e dias para expirar da vitrine de novidades.
     - REPOSIÇÃO: produtos de maior giro no cliente / curva A com saldo disponível.
@@ -1941,16 +1964,18 @@ async def get_proposals_desk_catalog_tabs(
     from app.models.horus_bi_sale import HorusBISale
 
     seller_id = _resolve_seller_id(current_user, company_id)
-    customer = db.query(Customer).filter(
-        Customer.id == customer_id,
-        Customer.company_id == seller_id
-    ).first()
-    if not customer:
-        raise HTTPException(status_code=404, detail="Cliente não encontrado.")
+    customer = None
+    if customer_id:
+        customer = db.query(Customer).filter(
+            Customer.id == customer_id,
+            Customer.company_id == seller_id
+        ).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Cliente não encontrado.")
 
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
     legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
-    default_disc = float(customer.discount or 35.0)
+    default_disc = float(customer.discount or 35.0) if customer else 35.0
 
     sql_client = None
     try:
@@ -1958,7 +1983,7 @@ async def get_proposals_desk_catalog_tabs(
     except Exception:
         sql_client = None
 
-    cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
+    cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client) if customer else None
     cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
 
     now_dt = datetime.utcnow()
