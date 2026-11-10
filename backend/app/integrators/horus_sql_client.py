@@ -256,6 +256,33 @@ class HorusSQLClient:
                 _CONNECTION_POOL.pop(self._conn_key, None)
             raise
 
+    def execute(self, sql: str, params: Optional[tuple] = None) -> int:
+        """
+        Executa comando DML parametrizado (UPDATE/INSERT) com lock thread-safe na conexão do pool.
+        """
+        try:
+            entry = self._get_connection_entry()
+            with entry["lock"]:
+                with entry["conn"].cursor() as cur:
+                    if params:
+                        cur.execute(sql, params)
+                    else:
+                        cur.execute(sql)
+                    rowcount = getattr(cur, "rowcount", 0) or 0
+                entry["last_used"] = time.time()
+                return int(rowcount)
+        except Exception as e:
+            logger.error("[HorusSQLClient] Erro no execute company=%s: %s", self.company_id, e)
+            with _POOL_LOCK:
+                _CONNECTION_POOL.pop(self._conn_key, None)
+            raise
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
     def close(self):
         """Nao fecha imediatamente — retorna ao pool para reutilizacao."""
         pass

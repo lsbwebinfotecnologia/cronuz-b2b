@@ -183,87 +183,137 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
     paid_dt = charge.paid_at or datetime.now(timezone.utc)
     paid_date_iso = (paid_dt.date() if isinstance(paid_dt, datetime) else date.today()).strftime("%Y-%m-%d")
 
-    from app.integrators.horus_sql import HorusSQLClient
+    from app.integrators.horus_sql_client import HorusSQLClient
 
     try:
-        with HorusSQLClient(settings) as sql:
-            # Localiza o título aberto em LANCTOS_CRECEBERA
-            rows = sql.fetch_all(
-                """
-                SELECT
-                    a.COD_EMPRESA,
-                    a.COD_FILIAL,
-                    a.NRO_LANCTO_CRECEBER,
-                    a.COD_PARCELA,
-                    a.STA_LANCTO_CRECEBER,
-                    a.COD_FORMA,
-                    a.NRO_CARTEIRA,
-                    r.VLR_LANCTO_CRECEBER
-                FROM LANCTOS_CRECEBERA a
-                INNER JOIN LANCTOS_CRECEBER r
-                    ON r.COD_EMPRESA = a.COD_EMPRESA
-                   AND r.COD_FILIAL = a.COD_FILIAL
-                   AND r.NRO_LANCTO_CRECEBER = a.NRO_LANCTO_CRECEBER
-                WHERE a.NRO_LANCTO_CRECEBER = %s
-                ORDER BY a.COD_PARCELA ASC
-                """,
-                (nro_lancto,),
+        sql = HorusSQLClient(db, charge.company_id)
+        # Localiza o título aberto em LANCTOS_CRECEBERA
+        rows = sql.query(
+            """
+            SELECT
+                a.COD_EMPRESA,
+                a.COD_FILIAL,
+                a.NRO_LANCTO_CRECEBER,
+                a.COD_PARCELA,
+                a.STA_LANCTO_CRECEBER,
+                a.COD_FORMA,
+                a.NRO_CARTEIRA,
+                r.VLR_LANCTO_CRECEBER
+            FROM LANCTOS_CRECEBERA a WITH (NOLOCK)
+            INNER JOIN LANCTOS_CRECEBER r WITH (NOLOCK)
+                ON r.COD_EMPRESA = a.COD_EMPRESA
+               AND r.COD_FILIAL = a.COD_FILIAL
+               AND r.NRO_LANCTO_CRECEBER = a.NRO_LANCTO_CRECEBER
+            WHERE a.NRO_LANCTO_CRECEBER = %s
+            ORDER BY a.COD_PARCELA ASC
+            """,
+            (nro_lancto,),
+        )
+        if not rows:
+            _record_settlement_event(
+                db,
+                charge,
+                "horus_settle_error",
+                f"Título NRO_LANCTO_CRECEBER #{nro_lancto} não encontrado no Horus SQL.",
             )
-            if not rows:
-                _record_settlement_event(
-                    db,
-                    charge,
-                    "horus_settle_error",
-                    f"Título NRO_LANCTO_CRECEBER #{nro_lancto} não encontrado no Horus SQL.",
-                )
-                db.commit()
-                return
+            db.commit()
+            return
 
-            open_rows = [r for r in rows if str(r.get("STA_LANCTO_CRECEBER") or "").strip().upper() == "AB"]
-            if not open_rows:
-                _record_settlement_event(
-                    db,
-                    charge,
-                    "horus_settled",
-                    f"Título #{nro_lancto} já constava como liquidado no Horus ERP.",
-                )
-                db.commit()
-                return
+        open_rows = [r for r in rows if str(r.get("STA_LANCTO_CRECEBER") or "").strip().upper() == "AB"]
+        if not open_rows:
+            _record_settlement_event(
+                db,
+                charge,
+                "horus_settled",
+                f"Título #{nro_lancto} já constava como liquidado no Horus ERP.",
+            )
+            db.commit()
+            return
 
-            target = open_rows[0]
-            cod_empresa = int(target["COD_EMPRESA"])
-            cod_filial = int(target["COD_FILIAL"])
-            cod_parcela = int(target["COD_PARCELA"])
-            orig_val = Decimal(str(target.get("VLR_LANCTO_CRECEBER") or "0.00")).quantize(Decimal("0.01"))
-            correcao_val = (paid_val - orig_val) if paid_val > orig_val else Decimal("0.00")
-            eff_cod_forma = cod_forma if cod_forma is not None else int(target.get("COD_FORMA") or 1)
-            eff_carteira = (nro_carteira_str or str(target.get("NRO_CARTEIRA") or "").strip())[:10] or None
+        target = open_rows[0]
+        cod_empresa = int(target["COD_EMPRESA"])
+        cod_filial = int(target["COD_FILIAL"])
+        cod_parcela = int(target["COD_PARCELA"])
+        orig_val = Decimal(str(target.get("VLR_LANCTO_CRECEBER") or "0.00")).quantize(Decimal("0.01"))
+        correcao_val = (paid_val - orig_val) if paid_val > orig_val else Decimal("0.00")
+        eff_cod_forma = cod_forma if cod_forma is not None else int(target.get("COD_FORMA") or 1)
+        eff_carteira = (nro_carteira_str or str(target.get("NRO_CARTEIRA") or "").strip())[:10] or None
 
-            # 1) Atualiza LANCTOS_CRECEBERA (somente se STA_LANCTO_CRECEBER = 'AB')
-            # Isso aciona automaticamente a trigger TRG_IMP_LANCTO_CRECEBER que grava em BLANCTOS (STA_FECHADO = 'N')
+        # 1) Atualiza LANCTOS_CRECEBERA (somente se STA_LANCTO_CRECEBER = 'AB')
+        # Isso aciona automaticamente a trigger TRG_IMP_LANCTO_CRECEBER que grava em BLANCTOS (STA_FECHADO = 'N')
+        sql.execute(
+            """
+            UPDATE LANCTOS_CRECEBERA
+               SET STA_LANCTO_CRECEBER = 'PG',
+                   COD_SITUACAO = 2,
+                   VLR_LANCTO_PAGO = %s,
+                   VLR_LANCTO_RECEBIDO = %s,
+                   VLR_LANCTO_CORRECAO = %s,
+                   DAT_PAGTO_CRECEBER = %s,
+                   DAT_PAGTO_CONTA = %s,
+                   DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                   COD_BANCO = %s,
+                   COD_AGENCIA = %s,
+                   COD_CONTAC = %s,
+                   NRO_CARTEIRA = %s,
+                   COD_FORMA = %s,
+                   VLR_TARIF_BOL = %s,
+                   PROC_RETORNO = 'S',
+                   BAIXA_RETORNO = 'S'
+             WHERE COD_EMPRESA = %s
+               AND COD_FILIAL = %s
+               AND NRO_LANCTO_CRECEBER = %s
+               AND COD_PARCELA = %s
+               AND STA_LANCTO_CRECEBER = 'AB'
+            """,
+            (
+                float(paid_val),
+                float(paid_val),
+                float(correcao_val),
+                paid_date_iso,
+                paid_date_iso,
+                cod_banco,
+                cod_agencia,
+                cod_contac,
+                eff_carteira,
+                eff_cod_forma,
+                float(tarifa_val),
+                cod_empresa,
+                cod_filial,
+                nro_lancto,
+                cod_parcela,
+            ),
+        )
+
+        # 2) Atualiza o cabeçalho LANCTOS_CRECEBER caso não restem sub-parcelas em aberto
+        rem_rows = sql.query(
+            """
+            SELECT COUNT(1) AS CNT
+              FROM LANCTOS_CRECEBERA WITH (NOLOCK)
+             WHERE COD_EMPRESA = %s
+               AND COD_FILIAL = %s
+               AND NRO_LANCTO_CRECEBER = %s
+               AND STA_LANCTO_CRECEBER = 'AB'
+            """,
+            (cod_empresa, cod_filial, nro_lancto),
+            max_rows=1,
+        )
+        rem = rem_rows[0] if rem_rows else {}
+        if int((rem or {}).get("CNT") or 0) == 0:
             sql.execute(
                 """
-                UPDATE LANCTOS_CRECEBERA
+                UPDATE LANCTOS_CRECEBER
                    SET STA_LANCTO_CRECEBER = 'PG',
-                       COD_SITUACAO = 2,
                        VLR_LANCTO_PAGO = %s,
                        VLR_LANCTO_RECEBIDO = %s,
                        VLR_LANCTO_CORRECAO = %s,
                        DAT_PAGTO_CRECEBER = %s,
                        DAT_PAGTO_CONTA = %s,
                        DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                       COD_BANCO = %s,
-                       COD_AGENCIA = %s,
-                       COD_CONTAC = %s,
-                       NRO_CARTEIRA = %s,
-                       COD_FORMA = %s,
-                       VLR_TARIF_BOL = %s,
-                       PROC_RETORNO = 'S',
-                       BAIXA_RETORNO = 'S'
+                       VLR_TARIF_BOL = %s
                  WHERE COD_EMPRESA = %s
                    AND COD_FILIAL = %s
                    AND NRO_LANCTO_CRECEBER = %s
-                   AND COD_PARCELA = %s
                    AND STA_LANCTO_CRECEBER = 'AB'
                 """,
                 (
@@ -272,68 +322,20 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
                     float(correcao_val),
                     paid_date_iso,
                     paid_date_iso,
-                    cod_banco,
-                    cod_agencia,
-                    cod_contac,
-                    eff_carteira,
-                    eff_cod_forma,
                     float(tarifa_val),
                     cod_empresa,
                     cod_filial,
                     nro_lancto,
-                    cod_parcela,
                 ),
             )
 
-            # 2) Atualiza o cabeçalho LANCTOS_CRECEBER caso não restem sub-parcelas em aberto
-            rem = sql.fetch_one(
-                """
-                SELECT COUNT(1) AS CNT
-                  FROM LANCTOS_CRECEBERA
-                 WHERE COD_EMPRESA = %s
-                   AND COD_FILIAL = %s
-                   AND NRO_LANCTO_CRECEBER = %s
-                   AND STA_LANCTO_CRECEBER = 'AB'
-                """,
-                (cod_empresa, cod_filial, nro_lancto),
-            )
-            if int((rem or {}).get("CNT") or 0) == 0:
-                sql.execute(
-                    """
-                    UPDATE LANCTOS_CRECEBER
-                       SET STA_LANCTO_CRECEBER = 'PG',
-                           VLR_LANCTO_PAGO = %s,
-                           VLR_LANCTO_RECEBIDO = %s,
-                           VLR_LANCTO_CORRECAO = %s,
-                           DAT_PAGTO_CRECEBER = %s,
-                           DAT_PAGTO_CONTA = %s,
-                           DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                           VLR_TARIF_BOL = %s
-                     WHERE COD_EMPRESA = %s
-                       AND COD_FILIAL = %s
-                       AND NRO_LANCTO_CRECEBER = %s
-                       AND STA_LANCTO_CRECEBER = 'AB'
-                    """,
-                    (
-                        float(paid_val),
-                        float(paid_val),
-                        float(correcao_val),
-                        paid_date_iso,
-                        paid_date_iso,
-                        float(tarifa_val),
-                        cod_empresa,
-                        cod_filial,
-                        nro_lancto,
-                    ),
-                )
-
-            msg = (
-                f"Baixa Horus ERP concluída: Lanç. #{nro_lancto}/{cod_parcela} (R$ {paid_val:.2f}) "
-                f"no Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS aberto para fechamento)."
-            )
-            _record_settlement_event(db, charge, "horus_settled", msg)
-            db.commit()
-            logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
+        msg = (
+            f"Baixa Horus ERP concluída: Lanç. #{nro_lancto}/{cod_parcela} (R$ {paid_val:.2f}) "
+            f"no Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS aberto para fechamento)."
+        )
+        _record_settlement_event(db, charge, "horus_settled", msg)
+        db.commit()
+        logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
 
     except Exception as e:
         db.rollback()
