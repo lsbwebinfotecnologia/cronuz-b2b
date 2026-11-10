@@ -141,17 +141,20 @@ def list_horus_invoices_for_boletos_endpoint(
 ):
     _access(db, current_user, company_id, provider)
     from app.payments import horus_invoices
-    return horus_invoices.list_horus_invoices_for_boletos(
-        db,
-        company_id,
-        date_from=date_from,
-        date_to=date_to,
-        cod_ped_venda=cod_ped_venda,
-        nro_nota_fiscal=nro_nota_fiscal,
-        search=search,
-        status_filter=status_filter,
-        force_refresh=force_refresh,
-    )
+    try:
+        return horus_invoices.list_horus_invoices_for_boletos(
+            db,
+            company_id,
+            date_from=date_from,
+            date_to=date_to,
+            cod_ped_venda=cod_ped_venda,
+            nro_nota_fiscal=nro_nota_fiscal,
+            search=search,
+            status_filter=status_filter,
+            force_refresh=force_refresh,
+        )
+    except PaymentProviderError as e:
+        raise _http_error(e)
 
 
 class HorusInvoiceInstallmentItemPayload(BaseModel):

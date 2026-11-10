@@ -124,6 +124,7 @@ export default function CoraHorusInvoicesPage() {
 
   const [data, setData] = useState<HorusInvoicesResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [expandedNfs, setExpandedNfs] = useState<Record<string, boolean>>({});
   const [pdfBusyId, setPdfBusyId] = useState<number | string | null>(null);
   const [emitModalInvoice, setEmitModalInvoice] = useState<HorusInvoiceItem | null>(null);
@@ -199,6 +200,7 @@ export default function CoraHorusInvoicesPage() {
   const load = useCallback(async (overrideDates?: { from: string; to: string }, forceRefresh = false) => {
     if (!companyId) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const df = overrideDates ? overrideDates.from : dateFrom;
       const dt = overrideDates ? overrideDates.to : dateTo;
@@ -218,7 +220,9 @@ export default function CoraHorusInvoicesPage() {
       });
       setExpandedNfs(prev => ({ ...autoExpand, ...prev }));
     } catch (e: any) {
-      toast.error(e.message || 'Falha ao consultar Notas Fiscais no Horus.');
+      const msg = e.message || 'Falha ao consultar Notas Fiscais no Horus.';
+      setLoadError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
@@ -723,6 +727,27 @@ export default function CoraHorusInvoicesPage() {
         <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs text-amber-800 dark:bg-amber-950/20 dark:border-amber-900 dark:text-amber-300 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0" />
           A integração com o Horus ERP não está ativa para esta empresa. Configure o Horus para consultar as Notas Fiscais emitidas.
+        </div>
+      )}
+
+      {/* Alerta explícito de erro na consulta */}
+      {loadError && (
+        <div className="rounded-2xl border border-rose-300 bg-rose-50 p-4 text-xs md:text-sm text-rose-900 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="h-5 w-5 shrink-0 text-rose-600 dark:text-rose-400 mt-0.5" />
+            <div>
+              <p className="font-bold">Falha ao consultar Notas Fiscais no Horus ERP</p>
+              <p className="mt-0.5 text-rose-700 dark:text-rose-300">{loadError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => load(undefined, true)}
+            disabled={loading}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Tentar novamente
+          </button>
         </div>
       )}
 

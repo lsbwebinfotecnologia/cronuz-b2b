@@ -247,13 +247,36 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         body_text = body.decode()
     except Exception:
         body_text = "<body não decodificável>"
-    _main_logger.warning("[422] Validation error | body=%s | errors=%s", body_text[:200], exc.errors())
+    raw_errors = exc.errors()
+    _main_logger.warning("[422] Validation error | path=%s | body=%s | errors=%s", request.url.path, body_text[:200], raw_errors)
     origin = request.headers.get("origin") or "*"
+
+    field_messages = []
+    for err in raw_errors[:6]:
+        loc_parts = [str(p) for p in (err.get("loc") or []) if str(p) not in ("body", "query", "path")]
+        field_name = ".".join(loc_parts) if loc_parts else "parâmetro"
+        msg = str(err.get("msg") or "valor inválido")
+        if msg == "Field required":
+            msg = "campo obrigatório ausente"
+        elif "valid integer" in msg.lower():
+            msg = "deve ser um número inteiro válido"
+        elif "valid number" in msg.lower():
+            msg = "deve ser um valor numérico válido"
+        elif "valid date" in msg.lower():
+            msg = "data inválida"
+        field_messages.append(f"{field_name} ({msg})")
+
+    detail_str = (
+        f"Erro de validação nos dados enviados: {', '.join(field_messages)}."
+        if field_messages
+        else "Alguns campos obrigatórios não foram preenchidos corretamente. Verifique os dados informados e tente novamente."
+    )
+
     return JSONResponse(
         status_code=422,
         content={
-            "detail": "Alguns campos obrigatórios não foram preenchidos corretamente. Verifique os dados informados e tente novamente.",
-            "errors": exc.errors(),
+            "detail": detail_str,
+            "errors": raw_errors,
         },
         headers={
             "Access-Control-Allow-Origin": origin,
@@ -265,11 +288,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    _main_logger.error("[500] %s", _traceback.format_exc())
+    _main_logger.error("[500] path=%s | %s", request.url.path, _traceback.format_exc())
     origin = request.headers.get("origin") or "*"
+    err_reason = str(exc).strip() or type(exc).__name__
     return JSONResponse(
         status_code=500,
-        content={"detail": "Não foi possível concluir sua solicitação neste momento. Por favor, aguarde alguns instantes e tente novamente."},
+        content={
+            "detail": f"Erro ao processar solicitação em {request.url.path}: {err_reason[:300]}",
+            "error_type": type(exc).__name__,
+        },
         headers={
             "Access-Control-Allow-Origin": origin,
             "Access-Control-Allow-Credentials": "true",

@@ -285,30 +285,35 @@ git push origin --delete feature/nome-da-funcionalidade
 
 ---
 
-## 💬 12. Padrão Obrigatório de Comunicação, Retornos de API e Mensagens Amigáveis por Público (`Customer`, `Seller` e `Master`)
+## 💬 12. Padrão Obrigatório de Comunicação, Retornos de API e Transparência Clara do Motivo de Erro
 
 > [!IMPORTANT]
-> **Todo e qualquer retorno de API ou mensagem de interface — seja de erro, alerta ou sucesso — DEVE OBRIGATORIAMENTE ser amigável, claro e orientado ao objetivo da tela.**
-> É terminantemente proibido exibir termos técnicos internos, códigos HTTP crus (`Method Not Allowed`, `HTTP 402`, `500`), stack traces, payloads JSON/XML brutos ou nomes de provedores/integradores para públicos que não devem conhecê-los.
+> **REGRA ARQUITETURAL MANDATÓRIA: Todo e qualquer retorno de erro (Backend e Frontend) DEVE informar claramente o motivo real do erro.**
+> 1. **Proibição Absoluta de Erros Silenciosos (`Silent Fail`)**:
+>    - É **terminantemente proibido** capturar exceções de banco de dados, API externa (Horus REST, Horus SQL, Cora, Vindi, Sefaz, etc.) ou validação com `except Exception: return []` / `pass` e devolver lista vazia (`HTTP 200`) fingindo que "não há registros no período". Se a consulta falhar, o sistema deve tentar o fallback homologado (ex: Horus SQL ↔ Horus REST) e, se indisponível, retornar erro explícito informando exatamente qual serviço falhou e por quê.
+> 2. **Proibição de Mensagens Genéricas Vagas sem Causa**:
+>    - Nunca retorne frases genéricas cegas como *"Não foi possível concluir sua solicitação neste momento"* ou *"Alguns campos obrigatórios não foram preenchidos"* sem explicitar **quais campos falharam** ou **qual foi o motivo real da falha**.
+>    - Em erros de validação (`HTTP 422`), o retorno `detail` deve listar claramente os campos e o motivo (ex.: `"Campos inválidos ou obrigatórios: data_vencimento (formato inválido), cliente_id (obrigatório)"`).
+>    - Em erros de integração ou processamento (`HTTP 400` / `500` / `502`), o `detail` deve informar de forma clara e direta o motivo real (ex.: `"Falha ao consultar Notas Fiscais no Horus: A API Horus REST (walianca-editora.dalla.srv.br:8060) não respondeu (timeout/conexão recusada) e o SQL Server retornou: ..."`).
 
 ### Diretrizes Mandatórias por Camada de Público:
 1. **Consumidor Final (`Customer` — Storefront B2C, Checkout, Portais de Escolas/Eventos, Links de Pagamento e Webhooks de Retorno)**:
    - **Proibição de Jargões Técnicos e Nomes de Gateways/Integradores**:
      - O consumidor final **não sabe e não precisa saber** o que é *Vindi*, *Yapay*, *Efí*, *Cora*, *Cielo*, *Rede*, *Horus*, *Tray*, *Webhook*, *Token* ou *Sandbox*.
      - Nos componentes de loja e checkout (ex.: `B2COpenStorefront.tsx`), nunca utilize rótulos como *"Checkout Express Vindi"*, *"Link Seguro Vindi"* ou *"QR Code • Efí"*. Utilize sempre termos orientados à experiência de compra: **"Checkout Rápido"**, **"Identificação Rápida por CPF"**, **"Ambiente Seguro de Pagamento"**, **"Pagamento Online Seguro"**, **"Liberação Imediata • QR Code"** e **"Aprovação Imediata"**.
-   - **Mensagens de Erro e Sucesso Amigáveis na API Pública**:
-     - Qualquer falha de comunicação ou recusa de gateway deve ser traduzida para uma orientação humana e acolhedora (ex.: *"Não foi possível concluir o processamento do pagamento agora. Confira os dados informados ou escolha outra forma de pagamento."*), mantendo os detalhes técnicos apenas nos logs internos.
+   - **Mensagens de Erro Claras na API Pública**:
+     - Qualquer falha de validação ou recusa de pagamento deve informar claramente ao comprador o motivo prático (ex.: *"Cartão recusado pelo banco emissor — verifique os dados do cartão ou tente outra forma de pagamento"*, *"CEP ou endereço incompleto"*), sem expor nomes de gateways internos.
    - **Redirecionamento Inteligente em Endpoints de Retorno / Webhook**:
      - Caso o navegador do consumidor acesse diretamente uma rota de retorno ou webhook (via `GET` ou `POST` com `Accept: text/html`, como `/api/b2c/webhooks/vindi`), o sistema **nunca** deve exibir JSON cru ou `{"detail": "Method Not Allowed"}`. Deve processar a confirmação silenciosamente e apresentar uma tela amigável redirecionando automaticamente o cliente de volta para a **página inicial da loja**.
 
 2. **Lojista (`Seller` — Painel Administrativo da Loja / Operação Comercial)**:
-   - **Linguagem de Negócio (Menos Técnica e Focada na Ação)**:
-     - Ao tratar erros ou confirmações para o `Seller`, as mensagens devem explicar **o que aconteceu na operação** e **qual ação prática realizar na tela**, evitando códigos técnicos de protocolo, nomes de variáveis de banco (`token_account`, `b2c_showcases_config`) ou despejo de respostas HTTP cruas.
-     - Exemplo correto: *"Não foi possível validar a conexão com a operadora de pagamento. Verifique se a chave de acesso está preenchida corretamente e se o modo Teste/Produção corresponde à sua conta."*
+   - **Transparência Total do Motivo do Erro + Ação Prática**:
+     - Ao tratar erros no painel administrativo (`Seller`), a mensagem deve SEMPRE informar **exatamente o motivo do erro** (qual campo, qual serviço/banco falhou e a razão retornada) acompanhado de como resolver.
+     - Exemplo correto: *"Não foi possível consultar o Horus REST (walianca-editora.dalla.srv.br:8060 — conexão recusada). Verifique se o serviço TServerB2B está ativo na porta 8060 ou utilize a conexão Horus SQL Direct."*
 
 3. **Ambiente `Master` (Super Admin / Engenharia / Homologação Técnica)**:
    - **Diagnóstico Técnico Completo e Auditoria**:
-     - Informações técnicas aprofundadas (códigos de retorno de APIs externas como `001001`/`003039`, endpoints chamados, status HTTP, payloads sanitizados para auditoria e logs de integração) devem ficar **exclusivamente** restritas ao painel **Master** e aos logs internos do servidor.
+     - Informações técnicas aprofundadas (códigos de retorno de APIs externas, endpoints chamados, status HTTP, payloads sanitizados para auditoria e logs de integração) devem estar sempre visíveis e detalhadas para diagnóstico imediato.
 
 ---
 
