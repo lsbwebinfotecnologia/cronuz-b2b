@@ -139,6 +139,27 @@ def update_horus_sql_settings(
 
     if payload.horus_sql_enabled is not None:
         settings.horus_sql_enabled = payload.horus_sql_enabled
+        from app.models.company import Company
+        comp = db.query(Company).filter(Company.id == company_id).first()
+        if comp:
+            comp.module_horus_sql = bool(payload.horus_sql_enabled)
+        if payload.horus_sql_enabled is True:
+            from app.models.user import User, UserRole
+            seller_users = db.query(User).filter(
+                User.company_id == company_id,
+                User.type == UserRole.SELLER,
+            ).all()
+            for su in seller_users:
+                if isinstance(su.allowed_modules, list) and len(su.allowed_modules) > 0:
+                    updated_list = list(su.allowed_modules)
+                    changed_su = False
+                    for p in ("horus_sql", "dbm"):
+                        if p not in updated_list:
+                            updated_list.append(p)
+                            changed_su = True
+                    if changed_su:
+                        su.allowed_modules = updated_list
+                        flag_modified(su, "allowed_modules")
     if payload.horus_sql_host is not None:
         settings.horus_sql_host = payload.horus_sql_host.strip() or None
     if payload.horus_sql_port is not None:

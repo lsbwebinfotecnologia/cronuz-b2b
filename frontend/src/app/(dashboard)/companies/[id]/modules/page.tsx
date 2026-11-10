@@ -355,6 +355,9 @@ export default function CompanyModulesPage() {
         }
       );
       if (!res.ok) throw new Error('Falha ao atualizar módulo');
+      if (moduleName === 'module_horus_sql') {
+        setHorusSQLData((prev) => (prev ? { ...prev, module_horus_sql: !currentValue } : prev));
+      }
       toast.success('Módulo atualizado com sucesso!');
       refreshCompany();
     } catch {

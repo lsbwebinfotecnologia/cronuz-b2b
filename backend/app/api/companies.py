@@ -180,6 +180,13 @@ def update_company(
             
     for key, value in update_data.items():
         setattr(company, key, value)
+
+    if "module_horus_sql" in update_data and update_data["module_horus_sql"] is not None:
+        settings_row = db.query(settings_models.CompanySettings).filter(
+            settings_models.CompanySettings.company_id == company_id
+        ).first()
+        if settings_row:
+            settings_row.horus_sql_enabled = bool(update_data["module_horus_sql"])
         
     # Validations Phase 3
     if getattr(company, "nfse_enabled", False):
@@ -259,6 +266,13 @@ def update_company_modules(
 
     for key, value in update_data.items():
         setattr(company, key, value)
+
+    if "module_horus_sql" in update_data and update_data["module_horus_sql"] is not None:
+        settings_row = db.query(settings_models.CompanySettings).filter(
+            settings_models.CompanySettings.company_id == company_id
+        ).first()
+        if settings_row:
+            settings_row.horus_sql_enabled = bool(update_data["module_horus_sql"])
 
     # Sincroniza novos módulos ativados pelo Master com usuários Seller que possuem lista restrita de allowed_modules
     MODULE_TO_USER_PERMISSIONS = {
