@@ -218,12 +218,12 @@ def get_service_orders(
         
     total = query.count()
     
-    from sqlalchemy import func, case
+    from sqlalchemy import func, case, and_
     from app.models.service import ServiceOrderStatus
     stats_query = db.query(
         func.sum(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), ServiceOrder.negotiated_value), else_=0)).label("total_pending"),
         func.sum(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, ServiceOrder.negotiated_value), else_=0)).label("total_completed"),
-        func.sum(case((ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.negotiated_value), else_=0)).label("total_cancelled")
+        func.sum(case((and_(ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.grouped_in_id.is_(None)), ServiceOrder.negotiated_value), else_=0)).label("total_cancelled")
     ).filter(ServiceOrder.company_id == current_user.company_id)
     
     if start_date:
@@ -667,14 +667,17 @@ def bill_service_order(
 
 @router.post("/service-orders/bulk/bill")
 def bulk_bill_service_orders(
-    bulk_req: ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
+    bulk_req: ServiceOrderBulkBillRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     from app.models.financial import FinancialTransaction, FinancialInstallment
     from app.models.service import ServiceOrderNfseStatus
     
-    orders = db.query(ServiceOrder).options(joinedload(ServiceOrder.service)).filter(
+    orders = db.query(ServiceOrder).options(
+        joinedload(ServiceOrder.service),
+        joinedload(ServiceOrder.customer)
+    ).filter(
         ServiceOrder.id.in_(bulk_req.order_ids),
         ServiceOrder.company_id == current_user.company_id
     ).all()
@@ -684,22 +687,47 @@ def bulk_bill_service_orders(
         
     for order in orders:
         if order.status != ServiceOrderStatus.COMPLETED:
-            raise HTTPException(status_code=400, detail=f"OS #{order.id} não está Concluída.")
+            raise HTTPException(status_code=400, detail=f"OS #{order.local_id or order.id} não está Concluída.")
         if order.status_nfse not in [ServiceOrderNfseStatus.NOT_ISSUED, ServiceOrderNfseStatus.ERROR]:
-            raise HTTPException(status_code=400, detail=f"OS #{order.id} já possui faturamento vinculado.")
+            raise HTTPException(status_code=400, detail=f"OS #{order.local_id or order.id} já possui faturamento vinculado.")
     customer_ids = set(order.customer_id for order in orders)
     if len(customer_ids) > 1:
         raise HTTPException(status_code=400, detail="Todas as Ordens agrupadas devem pertencer ao mesmo Cliente.")
         
-    customer_id = customer_ids.pop()
-    total_negotiated = round(sum(order.negotiated_value for order in orders), 2)
-    category_id = orders[0].service.category_id if orders[0].service else None
+    sorted_orders = sorted(orders, key=lambda x: (x.execution_date, x.id))
+    target_order = sorted_orders[0]
+    other_orders = [o for o in sorted_orders if o.id != target_order.id]
+
+    customer_id = target_order.customer_id
+    total_negotiated = round(sum(order.negotiated_value for order in sorted_orders), 2)
+    category_id = target_order.service.category_id if target_order.service else None
+    service_name = target_order.service.name if target_order.service else "Ordem de Serviço"
     
-    order_ids_str = ", ".join(f"#{o.id}" for o in orders)
+    order_ids_str = ", ".join(f"#{o.local_id or o.id}" for o in sorted_orders)
+
+    # Se houver 2 ou mais O.S., consolida valores e discriminações na O.S. mestre para emitir 1 única NFS-e
+    if len(sorted_orders) > 1:
+        desc_parts = []
+        for o in sorted_orders:
+            srv_title = o.service.name if o.service else "Serviço"
+            obs = (o.custom_description or "").strip()
+            if obs:
+                desc_parts.append(f"OS #{o.local_id or o.id} ({srv_title} - R$ {o.negotiated_value:,.2f}): {obs}")
+            else:
+                desc_parts.append(f"OS #{o.local_id or o.id} ({srv_title} - R$ {o.negotiated_value:,.2f})")
+        target_order.custom_description = " | ".join(desc_parts)
+        target_order.negotiated_value = total_negotiated
+
+        for o in other_orders:
+            o.status = ServiceOrderStatus.CANCELLED
+            o.grouped_in_id = target_order.id
+            tag = f"[AGRUPADA NA OS #{target_order.local_id or target_order.id}]"
+            if not o.custom_description or tag not in o.custom_description:
+                o.custom_description = f"{tag} {o.custom_description or ''}".strip()
     
     transaction = FinancialTransaction(
         company_id=current_user.company_id,
-        description=f"Faturamento Agrupado OS {order_ids_str}",
+        description=f"Faturamento Agrupado OS #{target_order.id} ({order_ids_str}) - {service_name}",
         category_id=category_id,
         type="RECEIVABLE",
         transaction_status="CONFIRMADO",
@@ -733,46 +761,92 @@ def bulk_bill_service_orders(
         )
         db.add(inst)
         
-    for order in orders:
-        order.status_nfse = ServiceOrderNfseStatus.PROCESSING
+    target_order.status_nfse = ServiceOrderNfseStatus.PROCESSING
+    db.commit()
         
     msg = "Faturamento agrupado gerado com sucesso."
     if bulk_req.print_point_id:
         from app.models.nfse import NFSeQueue
-        for order in orders:
-            new_queue_item = NFSeQueue(
-                company_id=current_user.company_id,
-                service_order_id=order.id,
-                print_point_id=bulk_req.print_point_id,
-                status="PENDING"
-            )
-            db.add(new_queue_item)
+        new_queue_item = NFSeQueue(
+            company_id=current_user.company_id,
+            service_order_id=target_order.id,
+            print_point_id=bulk_req.print_point_id,
+            status="PENDING"
+        )
+        db.add(new_queue_item)
         db.commit()
+        db.refresh(new_queue_item)
         
-        from app.tasks.nfse_worker import process_nfse_queue_jobs
-        process_nfse_queue_jobs()
+        import asyncio
+        from app.integrators.nfse.factory import NFSeFactory
         
-        db.expire_all()
-        failed_orders = []
-        for order in orders:
-            db.refresh(order)
-            q = db.query(NFSeQueue).filter(NFSeQueue.service_order_id == order.id).order_by(NFSeQueue.id.desc()).first()
-            if q and q.status.value == "REJECTED":
-                err = q.error_message if q.error_message else "Falha de validação ou Certificado não encontrado"
-                failed_orders.append(f"OS #{order.id}: {err}")
-        
-        if failed_orders:
-            raise HTTPException(status_code=400, detail="Faturado, mas com erros na emissão:\n" + "\n".join(failed_orders))
+        try:
+            client = NFSeFactory.get_provider(current_user.company)
+        except ValueError as e:
+            q = new_queue_item
+            q.status = "REJECTED"
+            q.error_message = str(e)
+            target_order.status_nfse = ServiceOrderNfseStatus.ERROR
+            db.commit()
+            return {
+                "status": "error",
+                "message": str(e),
+                "status_sefaz": 400,
+                "resposta_bruta": str(e),
+                "xml_enviado": ""
+            }
             
-        msg = "Faturamento agrupado e Emissões realizados com sucesso."
-    else:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        emit_result = loop.run_until_complete(
+            client.emitir_nota(
+                target_order,
+                target_order.service,
+                target_order.customer,
+                target_order.customer.addresses[0] if target_order.customer and target_order.customer.addresses else None,
+                new_queue_item.print_point
+            )
+        )
+        
+        status_sefaz = emit_result.get("status_code", 500)
+        raw_body = emit_result.get("raw_body", str(emit_result.get("error", "")))
+        xml_enviado = emit_result.get("xml", "")
+        
+        q = new_queue_item
+        if emit_result.get("success"):
+            q.status = "SUCCESS"
+            q.xml_protocol_id = emit_result.get("protocol_id", "")
+            q.nfse_response_json = emit_result.get("response", {})
+            q.xml_retorno = xml_enviado
+            target_order.status_nfse = ServiceOrderNfseStatus.ISSUED
+            if q.print_point:
+                q.print_point.current_number += 1
+            msg = "Faturamento agrupado e Emissão de NFS-e única realizados com sucesso."
+        else:
+            q.status = "REJECTED"
+            q.error_message = f"HTTP {status_sefaz}: {raw_body}"
+            target_order.status_nfse = ServiceOrderNfseStatus.ERROR
+            msg = f"HTTP {status_sefaz}: Emissão não finalizada."
+            
         db.commit()
+        return {
+            "status": "success",
+            "message": msg,
+            "transaction_id": transaction.id,
+            "status_sefaz": status_sefaz,
+            "resposta_bruta": raw_body,
+            "xml_enviado": xml_enviado
+        }
     
     return {"status": "success", "message": msg, "transaction_id": transaction.id}
 
 @router.post("/service-orders/bulk/bill-individual")
 def bulk_bill_individual_service_orders(
-    bulk_req: ServiceOrderBulkBillRequest, ServiceOrderBulkDeleteRequest,
+    bulk_req: ServiceOrderBulkBillRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1624,10 +1698,10 @@ def group_service_orders(
                 status_code=400,
                 detail=f"A O.S. #{o.local_id or o.id} já possui nota fiscal emitida ou em processamento e não pode ser agrupada."
             )
-        if o.status == ServiceOrderStatus.COMPLETED:
+        if o.status == ServiceOrderStatus.CANCELLED:
             raise HTTPException(
                 status_code=400,
-                detail=f"A O.S. #{o.local_id or o.id} já está Concluída e não pode ser agrupada."
+                detail=f"A O.S. #{o.local_id or o.id} está Cancelada e não pode ser agrupada."
             )
 
     # 3. Determina O.S. mestre
@@ -1639,6 +1713,10 @@ def group_service_orders(
         target_order = sorted_orders[0]
 
     other_orders = [o for o in orders if o.id != target_order.id]
+
+    # Se alguma das O.S. agrupadas já estava Concluída, mantém a O.S. mestre como Concluída
+    if any(o.status == ServiceOrderStatus.COMPLETED for o in orders):
+        target_order.status = ServiceOrderStatus.COMPLETED
 
     # 4. Soma dos valores negociados
     total_value = sum(o.negotiated_value for o in orders)
@@ -1965,11 +2043,11 @@ def get_service_orders_projection_chart(
             month_col.label("month_key"),
             func.sum(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, ServiceOrder.negotiated_value), else_=0.0)).label("total_completed"),
             func.sum(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), ServiceOrder.negotiated_value), else_=0.0)).label("total_pending"),
-            func.sum(case((ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.negotiated_value), else_=0.0)).label("total_cancelled"),
-            func.sum(ServiceOrder.negotiated_value).label("total_all"),
+            func.sum(case((and_(ServiceOrder.status == ServiceOrderStatus.CANCELLED, ServiceOrder.grouped_in_id.is_(None)), ServiceOrder.negotiated_value), else_=0.0)).label("total_cancelled"),
+            func.sum(case((ServiceOrder.grouped_in_id.is_(None), ServiceOrder.negotiated_value), else_=0.0)).label("total_all"),
             func.count(case((ServiceOrder.status == ServiceOrderStatus.COMPLETED, 1))).label("count_completed"),
             func.count(case((ServiceOrder.status.in_([ServiceOrderStatus.PENDING, ServiceOrderStatus.IN_PROGRESS]), 1))).label("count_pending"),
-            func.count(ServiceOrder.id).label("count_total")
+            func.count(case((ServiceOrder.grouped_in_id.is_(None), 1))).label("count_total")
         ).filter(
             ServiceOrder.company_id == current_user.company_id,
             ServiceOrder.execution_date >= dt_start,

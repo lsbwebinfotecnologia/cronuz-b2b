@@ -331,9 +331,9 @@ export default function ServiceOrdersPage() {
             toast.error(`A OS #${billed.local_id || billed.id} já possui nota fiscal ou faturamento e não pode ser agrupada.`);
             return;
         }
-        const completed = selectedObj.find(o => o.status === 'Concluido');
-        if (completed) {
-            toast.error(`A OS #${completed.local_id || completed.id} já está Concluída e não pode ser agrupada.`);
+        const cancelled = selectedObj.find(o => o.status === 'Cancelado');
+        if (cancelled) {
+            toast.error(`A OS #${cancelled.local_id || cancelled.id} está Cancelada e não pode ser agrupada.`);
             return;
         }
 
@@ -891,6 +891,7 @@ export default function ServiceOrdersPage() {
                 setSelectedOrders([]);
                 
                 const data = await res.json();
+                fetchOrders();
                 if (data.status_sefaz !== undefined) {
                     setSefazLog({
                         status: data.status_sefaz,
@@ -898,8 +899,6 @@ export default function ServiceOrdersPage() {
                         xml: data.xml_enviado
                     });
                     setIsPrintPointModalOpen(true);
-                } else {
-                    fetchOrders();
                 }
             } else {
                 const data = await res.json();
@@ -1477,7 +1476,7 @@ export default function ServiceOrdersPage() {
                             const canGroupOS = selectedObj.length >= 2 && 
                                 selectedObj.every(o => o.customer_id === selectedObj[0].customer_id) && 
                                 selectedObj.every(o => o.status_nfse === 'Nao Emitida' || o.status_nfse === 'Erro') && 
-                                selectedObj.every(o => o.status !== 'Concluido');
+                                selectedObj.every(o => o.status !== 'Cancelado');
                             
                             if (!canGroupOS) return null;
                             return (
