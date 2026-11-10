@@ -466,6 +466,19 @@ def _fetch_horus_invoices_and_debits_sql(
         sit_nf = _clean(r.get("SIT_NF") or "")
         status_str = "CANCELADA" if sit_nf.upper() == "C" else (sit_nf or "AUTORIZADA")
 
+        doc_cand = ""
+        for raw_d in (r.get("CNPJ"), r.get("CPF"), r.get("CPF_CNPJ_END")):
+            d_str = _digits(raw_d)
+            if d_str and d_str.lstrip("0") and len(d_str) in (11, 14):
+                doc_cand = d_str
+                break
+        if not doc_cand:
+            for raw_d in (r.get("CNPJ"), r.get("CPF"), r.get("CPF_CNPJ_END")):
+                d_str = _digits(raw_d)
+                if d_str and d_str.lstrip("0"):
+                    doc_cand = d_str.zfill(11) if len(d_str) <= 11 else d_str.zfill(14)
+                    break
+
         raw_invoices.append({
             "COD_EMPRESA": r.get("COD_EMPRESA") or emp_int,
             "COD_FILIAL": r.get("COD_FILIAL") or fil_int,
@@ -485,7 +498,7 @@ def _fetch_horus_invoices_and_debits_sql(
             "_COD_METODO": r.get("COD_METODO"),
             "_SQL_ID_GUID": _clean(r.get("ID_GUID")),
             "_SQL_PAYER": {
-                "document": _digits(r.get("CNPJ") or r.get("CPF") or r.get("CPF_CNPJ_END")),
+                "document": doc_cand,
                 "name": _clean(r.get("NOM_CLI") or r.get("NOM_REDUZIDO")),
                 "email": first_email,
                 "street": _clean(r.get("DESC_ENDERECO")),
@@ -1103,10 +1116,9 @@ def list_horus_invoices_for_boletos(
                 })
         elif nf_debits:
             for idx, d in enumerate(nf_debits, start=1):
-                parc_num = str(d.get("COD_PARCELA") or idx).strip() or str(idx)
                 raw_installments.append({
-                    "installment_number": parc_num,
-                    "raw_dup_number": f"{int(parc_num) if parc_num.isdigit() else idx:03d}",
+                    "installment_number": str(idx),
+                    "raw_dup_number": f"{idx:03d}",
                     "due_date": _parse_date_iso(d.get("DAT_VENC_CRECEBER")) or issue_dt,
                     "amount": _parse_amount(d.get("VLR_LANCTO_CRECEBER")) or vlr_liquido,
                     "debit": d,

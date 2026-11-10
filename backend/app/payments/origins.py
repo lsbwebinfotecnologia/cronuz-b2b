@@ -272,7 +272,9 @@ def search_customers(db: Session, company_id: int, search: Optional[str] = None,
     # Enriquecimento/busca no Horus SQL Direct quando habilitado
     if horus_sql_enabled and len(term) >= 2:
         for h in _search_horus_sql_customers(db, company_id, term, limit=15):
-            h_doc = _digits(h.get("CNPJ") or h.get("CPF"))
+            raw_cnpj = _digits(h.get("CNPJ"))
+            raw_cpf = _digits(h.get("CPF"))
+            h_doc = raw_cnpj if (raw_cnpj and raw_cnpj.lstrip("0")) else raw_cpf
             h_cod = str(h.get("COD_CLI") or "").strip()
             h_guid = _clean_str(h.get("ID_GUID"))
             h_addr = {
