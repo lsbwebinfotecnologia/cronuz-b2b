@@ -325,65 +325,65 @@ def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), 
             detail="A conexão Horus SQL não está habilitada para esta empresa.",
         )
 
-    from app.integrators.horus_sql import HorusSQLClient
+    from app.integrators.horus_sql_client import HorusSQLClient
 
     bank_accounts = []
     payment_forms = []
     try:
-        with HorusSQLClient(settings) as sql:
-            rows_acc = sql.fetch_all("""
-                SELECT
-                    cg.COD_EMPRESA,
-                    cg.COD_FILIAL,
-                    cg.COD_BANCO,
-                    b.NOME_BANCO,
-                    cg.COD_AGENCIA,
-                    ag.NOME_AGENCIA,
-                    cg.COD_CONTAC,
-                    cg.NUM_CC,
-                    cg.DIG_CC,
-                    cg.NOME_CONTAC,
-                    cart.NRO_CARTEIRA
-                FROM BCONTAC_GERAL cg
-                LEFT JOIN BBANCOS b ON b.COD_BANCO = cg.COD_BANCO
-                LEFT JOIN BAGENCIAS ag ON ag.COD_BANCO = cg.COD_BANCO AND ag.COD_AGENCIA = cg.COD_AGENCIA
-                LEFT JOIN BCONTAC_CARTEIRA cart
-                    ON cart.COD_BANCO = cg.COD_BANCO
-                   AND cart.COD_AGENCIA = cg.COD_AGENCIA
-                   AND cart.COD_CONTAC = cg.COD_CONTAC
-                ORDER BY cg.COD_BANCO, cg.COD_AGENCIA, cg.COD_CONTAC
-            """)
-            for r in rows_acc:
-                bank_accounts.append({
-                    "cod_empresa": str(r.get("COD_EMPRESA") or "").strip(),
-                    "cod_filial": str(r.get("COD_FILIAL") or "").strip(),
-                    "cod_banco": str(r.get("COD_BANCO") or "").strip(),
-                    "nome_banco": str(r.get("NOME_BANCO") or "").strip(),
-                    "cod_agencia": str(r.get("COD_AGENCIA") or "").strip(),
-                    "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
-                    "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
-                    "num_cc": str(r.get("NUM_CC") or "").strip(),
-                    "dig_cc": str(r.get("DIG_CC") or "").strip(),
-                    "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
-                    "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
-                })
+        sql = HorusSQLClient(db, company_id)
+        rows_acc = sql.query("""
+            SELECT
+                cg.COD_EMPRESA,
+                cg.COD_FILIAL,
+                cg.COD_BANCO,
+                b.NOME_BANCO,
+                cg.COD_AGENCIA,
+                ag.NOME_AGENCIA,
+                cg.COD_CONTAC,
+                cg.NUM_CC,
+                cg.DIG_CC,
+                cg.NOME_CONTAC,
+                cart.NRO_CARTEIRA
+            FROM BCONTAC_GERAL cg WITH (NOLOCK)
+            LEFT JOIN BBANCOS b WITH (NOLOCK) ON b.COD_BANCO = cg.COD_BANCO
+            LEFT JOIN BAGENCIAS ag WITH (NOLOCK) ON ag.COD_BANCO = cg.COD_BANCO AND ag.COD_AGENCIA = cg.COD_AGENCIA
+            LEFT JOIN BCONTAC_CARTEIRA cart WITH (NOLOCK)
+                ON cart.COD_BANCO = cg.COD_BANCO
+               AND cart.COD_AGENCIA = cg.COD_AGENCIA
+               AND cart.COD_CONTAC = cg.COD_CONTAC
+            ORDER BY cg.COD_BANCO, cg.COD_AGENCIA, cg.COD_CONTAC
+        """)
+        for r in rows_acc:
+            bank_accounts.append({
+                "cod_empresa": str(r.get("COD_EMPRESA") or "").strip(),
+                "cod_filial": str(r.get("COD_FILIAL") or "").strip(),
+                "cod_banco": str(r.get("COD_BANCO") or "").strip(),
+                "nome_banco": str(r.get("NOME_BANCO") or "").strip(),
+                "cod_agencia": str(r.get("COD_AGENCIA") or "").strip(),
+                "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
+                "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
+                "num_cc": str(r.get("NUM_CC") or "").strip(),
+                "dig_cc": str(r.get("DIG_CC") or "").strip(),
+                "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
+                "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
+            })
 
-            rows_fp = sql.fetch_all("""
-                SELECT COD_FORMA, NOM_FORMA, TIPO_FORMA_PAGTO
-                FROM FORMA_PAGTO
-                ORDER BY COD_FORMA
-            """)
-            for f in rows_fp:
-                payment_forms.append({
-                    "cod_forma": str(f.get("COD_FORMA") or "").strip(),
-                    "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
-                    "tipo_forma_pagto": str(f.get("TIPO_FORMA_PAGTO") or "").strip(),
-                })
+        rows_fp = sql.query("""
+            SELECT COD_FORMA, NOM_FORMA, TIPO_FORMA
+            FROM FORMA_PAGTO WITH (NOLOCK)
+            ORDER BY COD_FORMA
+        """)
+        for f in rows_fp:
+            payment_forms.append({
+                "cod_forma": str(f.get("COD_FORMA") or "").strip(),
+                "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
+                "tipo_forma_pagto": str(f.get("TIPO_FORMA") or "").strip(),
+            })
     except Exception as e:
         logger.warning("[Cora] Falha ao consultar contas/formas no Horus SQL company=%s: %s", company_id, e)
         raise HTTPException(
             status_code=400,
-            detail="Não foi possível consultar as tabelas bancárias do Horus no momento. Você pode preencher os códigos diretamente nos campos abaixo.",
+            detail=f"Não foi possível consultar as tabelas bancárias do Horus SQL: {str(e)[:220]}",
         )
 
     return {

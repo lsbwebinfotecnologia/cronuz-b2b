@@ -172,7 +172,7 @@ def _search_horus_sql_customers(db: Session, company_id: int, term: str, limit: 
             SELECT TOP {int(limit)}
                 C.COD_CLI,
                 C.NOM_CLI,
-                C.NOM_FANTASIA,
+                C.NOM_REDUZIDO AS NOM_FANTASIA,
                 C.CNPJ,
                 C.CPF,
                 C.EMAIL,
@@ -184,24 +184,29 @@ def _search_horus_sql_customers(db: Session, company_id: int, term: str, limit: 
                 E.NOM_BAIRRO,
                 E.CEP,
                 UF.SIGLA_UF,
-                M.NOM_MUNICIPIO
-            FROM CLIENTES C
+                COALESCE(M.NOM_MUNICIPIO, LOC.NOM_LOCAL) AS NOM_MUNICIPIO
+            FROM CLIENTES C WITH (NOLOCK)
             OUTER APPLY (
-                SELECT TOP 1 DESC_ENDERECO, NUM_END, COM_ENDERECO, NOM_BAIRRO, CEP, COD_UF, COD_IBGE
-                FROM ENDERECOS_CLIENTE EC
+                SELECT TOP 1 DESC_ENDERECO, NUM_END, COM_ENDERECO, NOM_BAIRRO, CEP, COD_UF, COD_MUNICIPIO, COD_IBGE
+                FROM ENDERECOS_CLIENTE EC WITH (NOLOCK)
                 WHERE EC.COD_CLI = C.COD_CLI
-                ORDER BY CASE WHEN EC.STA_DEFAULT = 'S' THEN 0 ELSE 1 END, EC.SEQ_ENDERECO ASC
+                ORDER BY CASE WHEN EC.STA_DEFAULT = 'S' THEN 0 ELSE 1 END, EC.COD_TPO_END ASC, EC.COD_END ASC
             ) E
-            LEFT JOIN TABELA_UF UF ON UF.COD_UF = E.COD_UF
+            LEFT JOIN TABELA_UF UF WITH (NOLOCK) ON UF.COD_UF = E.COD_UF
             OUTER APPLY (
                 SELECT TOP 1 NOM_MUNICIPIO
-                FROM IBS_MUNICIPIOS_UF_ALIQ IB
+                FROM IBS_MUNICIPIOS_UF_ALIQ IB WITH (NOLOCK)
                 WHERE IB.COD_IBGE = E.COD_IBGE
             ) M
+            OUTER APPLY (
+                SELECT TOP 1 NOM_LOCAL
+                FROM LOCALIDADES L WITH (NOLOCK)
+                WHERE L.COD_UF = E.COD_UF AND L.COD_LOCAL = E.COD_MUNICIPIO
+            ) LOC
             WHERE C.STA_ATIVO = 'S'
               AND (
                   C.NOM_CLI LIKE %s
-                  OR C.NOM_FANTASIA LIKE %s
+                  OR C.NOM_REDUZIDO LIKE %s
                   OR (%s <> '' AND (REPLACE(REPLACE(REPLACE(C.CNPJ, '.', ''), '/', ''), '-', '') LIKE %s
                                     OR REPLACE(REPLACE(C.CPF, '.', ''), '-', '') LIKE %s
                                     OR CAST(C.COD_CLI AS VARCHAR(30)) = %s))

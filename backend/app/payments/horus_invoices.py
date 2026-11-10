@@ -273,11 +273,327 @@ def _run_async(coro):
 
 
 def _resolve_horus_emp_fil(settings: CompanySettings) -> Tuple[str, str]:
-    emp = _clean(settings.horus_company or "1") or "1"
-    raw_branch = _clean(settings.horus_branch or "1")
+    emp = _clean(getattr(settings, "horus_sql_cod_empresa", None) or settings.horus_company or "1") or "1"
+    raw_branch = _clean(getattr(settings, "horus_sql_cod_filial", None) or settings.horus_branch or "1")
     branch_digits = _digits(raw_branch)
     fil = raw_branch if (branch_digits and len(branch_digits) < 11) else "1"
     return emp, fil
+
+
+def _fetch_horus_invoices_and_debits_sql(
+    db: Session,
+    company_id: int,
+    settings: CompanySettings,
+    *,
+    date_from: date,
+    date_to: date,
+    cod_ped_venda: Optional[str] = None,
+    nro_nota_fiscal: Optional[str] = None,
+    force_refresh: bool = False,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[Dict[str, Any]]], Dict[int, str], List[Dict[str, str]]]:
+    """
+    Consulta rápida e direta no SQL Server do Horus ERP (`HorusSQLClient` / `pytds`):
+      1. `METODO_VENDA` + `FORMA_PAGTO` cacheados por 30 minutos por empresa.
+      2. `NF_MESTRE` + `PEDIDOS_VENDA` + `CLIENTES` + `ENDERECOS_CLIENTE` + `TABELA_UF` + `IBS_MUNICIPIOS_UF_ALIQ` / `LOCALIDADES`.
+      3. `LANCTOS_CRECEBER` + `LANCTOS_CRECEBERA` + `FORMA_PAGTO` para todas as notas encontradas.
+    """
+    from app.integrators.horus_sql_client import HorusSQLClient
+
+    emp, fil = _resolve_horus_emp_fil(settings)
+    emp_int = int(emp) if emp.isdigit() else 1
+    fil_int = int(fil) if fil.isdigit() else 1
+    clean_ped = _clean(cod_ped_venda) if cod_ped_venda else ""
+    clean_nf = _clean(nro_nota_fiscal).lstrip("0") if nro_nota_fiscal else ""
+    now_ts = time.time()
+
+    sql_client = HorusSQLClient(db, company_id)
+
+    cached_cat = _CATALOG_CACHE.get(company_id)
+    if cached_cat and (now_ts - cached_cat[0] < 1800) and not force_refresh:
+        methods_map = dict(cached_cat[1])
+        payment_forms_catalog = [dict(x) for x in cached_cat[2]]
+    else:
+        methods_map = {
+            1: "Direta",
+            2: "Consignação",
+            3: "Web",
+            4: "Representante",
+            5: "Sem desconto na NF",
+            6: "Pré-venda",
+            7: "E-book",
+        }
+        payment_forms_catalog = []
+        try:
+            m_rows = sql_client.query(
+                "SELECT COD_METODO, DESC_METODO FROM METODO_VENDA WITH (NOLOCK) ORDER BY COD_METODO",
+                max_rows=200,
+            )
+            parsed_methods = {}
+            for m in m_rows:
+                if m.get("COD_METODO") is not None:
+                    try:
+                        parsed_methods[int(m["COD_METODO"])] = _clean(m.get("DESC_METODO")) or str(m["COD_METODO"])
+                    except (ValueError, TypeError):
+                        pass
+            if parsed_methods:
+                methods_map = parsed_methods
+        except Exception as e:
+            logger.debug("[HorusInvoices][SQL] Fallback METODO_VENDA company=%s: %s", company_id, e)
+
+        try:
+            fp_rows = sql_client.query(
+                "SELECT COD_FORMA, NOM_FORMA FROM FORMA_PAGTO WITH (NOLOCK) ORDER BY COD_FORMA",
+                max_rows=300,
+            )
+            for fp in fp_rows:
+                c_forma = _clean(fp.get("COD_FORMA"))
+                n_forma = _clean(fp.get("NOM_FORMA")) or c_forma
+                if n_forma:
+                    payment_forms_catalog.append({"code": c_forma or n_forma, "name": n_forma})
+            if payment_forms_catalog:
+                _CATALOG_CACHE[company_id] = (now_ts, dict(methods_map), [dict(x) for x in payment_forms_catalog])
+        except Exception as e:
+            logger.debug("[HorusInvoices][SQL] Fallback FORMA_PAGTO company=%s: %s", company_id, e)
+
+    cache_key = (company_id, f"SQL:{date_from.isoformat()}", date_to.isoformat(), f"{clean_ped}:{clean_nf}")
+    cached_data = _HORUS_DATA_CACHE.get(cache_key)
+    if cached_data and (now_ts - cached_data[0] < 90) and not force_refresh:
+        return cached_data[1], cached_data[2], methods_map, payment_forms_catalog
+
+    where_clauses = ["NF.COD_EMPRESA = %s", "NF.COD_FILIAL = %s"]
+    nf_params: List[Any] = [emp_int, fil_int]
+
+    if clean_ped:
+        where_clauses.append("(CAST(NF.COD_PED_VENDA AS VARCHAR(40)) = %s OR PV.COD_PEDIDO_ORIGEM = %s)")
+        nf_params.extend([clean_ped, clean_ped])
+    elif clean_nf:
+        where_clauses.append("(LTRIM(RTRIM(NF.NRO_NOTA_FISCAL)) = %s OR LTRIM(RTRIM(NF.NRO_NOTA_FISCAL)) LIKE %s)")
+        nf_params.extend([clean_nf, f"%{clean_nf}"])
+    else:
+        d_ini_sql = f"{date_from.strftime('%Y-%m-%d')} 00:00:00"
+        d_fim_sql = f"{date_to.strftime('%Y-%m-%d')} 23:59:59"
+        where_clauses.append("NF.DAT_EMISSAO_NF >= %s AND NF.DAT_EMISSAO_NF <= %s")
+        nf_params.extend([d_ini_sql, d_fim_sql])
+
+    where_sql = " AND ".join(where_clauses)
+    nf_query = f"""
+        SELECT TOP 500
+            NF.COD_EMPRESA,
+            NF.COD_FILIAL,
+            NF.NRO_NOTA_FISCAL,
+            NF.SERIE_FISCAL,
+            NF.COD_NF,
+            NF.COD_PED_VENDA,
+            NF.COD_CLI,
+            NF.COD_NATUREZA,
+            NF.CHAVE_ACESSO_NFE,
+            NF.SIT_NF,
+            NF.DAT_EMISSAO_NF,
+            NF.VLR_BRUTO_NF,
+            NF.VLR_LIQUIDO_NF,
+            PV.COD_PEDIDO_ORIGEM,
+            PV.COD_METODO,
+            C.NOM_CLI,
+            C.NOM_REDUZIDO,
+            C.CNPJ,
+            C.CPF,
+            C.EMAIL,
+            C.EMAILB2B,
+            C.ID_GUID,
+            E.DESC_ENDERECO,
+            E.NUM_END,
+            E.COM_ENDERECO,
+            E.NOM_BAIRRO,
+            E.CEP,
+            E.EMAIL AS EMAIL_END,
+            E.CPF_CNPJ AS CPF_CNPJ_END,
+            UF.SIGLA_UF,
+            COALESCE(M.NOM_MUNICIPIO, LOC.NOM_LOCAL) AS NOM_MUNICIPIO
+        FROM NF_MESTRE NF WITH (NOLOCK)
+        LEFT JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
+            ON PV.COD_PED_VENDA = NF.COD_PED_VENDA
+           AND PV.COD_FILIAL = NF.COD_FILIAL
+           AND PV.COD_EMPRESA = NF.COD_EMPRESA
+        LEFT JOIN CLIENTES C WITH (NOLOCK)
+            ON C.COD_CLI = NF.COD_CLI
+        OUTER APPLY (
+            SELECT TOP 1 DESC_ENDERECO, NUM_END, COM_ENDERECO, NOM_BAIRRO, CEP, COD_UF, COD_MUNICIPIO, COD_IBGE, EMAIL, CPF_CNPJ
+            FROM ENDERECOS_CLIENTE EC WITH (NOLOCK)
+            WHERE EC.COD_CLI = NF.COD_CLI
+            ORDER BY CASE WHEN EC.STA_DEFAULT = 'S' THEN 0 ELSE 1 END, EC.COD_TPO_END ASC, EC.COD_END ASC
+        ) E
+        LEFT JOIN TABELA_UF UF WITH (NOLOCK)
+            ON UF.COD_UF = E.COD_UF
+        OUTER APPLY (
+            SELECT TOP 1 NOM_MUNICIPIO
+            FROM IBS_MUNICIPIOS_UF_ALIQ IB WITH (NOLOCK)
+            WHERE IB.COD_IBGE = E.COD_IBGE
+        ) M
+        OUTER APPLY (
+            SELECT TOP 1 NOM_LOCAL
+            FROM LOCALIDADES L WITH (NOLOCK)
+            WHERE L.COD_UF = E.COD_UF AND L.COD_LOCAL = E.COD_MUNICIPIO
+        ) LOC
+        WHERE {where_sql}
+        ORDER BY NF.DAT_EMISSAO_NF DESC, NF.COD_NF DESC
+    """
+    nf_rows = sql_client.query(nf_query, tuple(nf_params), max_rows=500)
+
+    raw_invoices: List[Dict[str, Any]] = []
+    cod_nf_to_nro: Dict[int, str] = {}
+    ped_to_nro: Dict[int, str] = {}
+
+    for r in nf_rows:
+        nro_nf = _clean(r.get("NRO_NOTA_FISCAL"))
+        cod_nf_val = r.get("COD_NF")
+        ped_val = r.get("COD_PED_VENDA")
+        if cod_nf_val is not None and str(cod_nf_val).isdigit():
+            cod_nf_to_nro[int(cod_nf_val)] = nro_nf
+        if ped_val is not None and str(ped_val).isdigit():
+            ped_to_nro[int(ped_val)] = nro_nf
+
+        raw_cep = r.get("CEP")
+        if isinstance(raw_cep, (int, float, Decimal)):
+            cep_str = _digits(str(int(raw_cep)))
+        else:
+            cep_str = _digits(raw_cep)
+        if cep_str and len(cep_str) < 8:
+            cep_str = cep_str.zfill(8)
+
+        raw_email = _clean(r.get("EMAILB2B") or r.get("EMAIL") or r.get("EMAIL_END") or "")
+        first_email = re.split(r"[;,\s]+", raw_email)[0] if raw_email else ""
+
+        sit_nf = _clean(r.get("SIT_NF") or "")
+        status_str = "CANCELADA" if sit_nf.upper() == "C" else (sit_nf or "AUTORIZADA")
+
+        raw_invoices.append({
+            "COD_EMPRESA": r.get("COD_EMPRESA") or emp_int,
+            "COD_FILIAL": r.get("COD_FILIAL") or fil_int,
+            "NRO_NOTA_FISCAL": nro_nf,
+            "SERIE_FISCAL": _clean(r.get("SERIE_FISCAL") or "1"),
+            "COD_NF": cod_nf_val,
+            "COD_PED_VENDA": ped_val,
+            "COD_PEDIDO_ORIGEM": _clean(r.get("COD_PEDIDO_ORIGEM")),
+            "COD_CLI": r.get("COD_CLI"),
+            "COD_NATUREZA": _clean(r.get("COD_NATUREZA")),
+            "CHAVE_ACESSO_NFE": _clean(r.get("CHAVE_ACESSO_NFE")),
+            "STATUS": status_str,
+            "DAT_EMISSAO_NF": r.get("DAT_EMISSAO_NF"),
+            "VLR_BRUTO_NF": r.get("VLR_BRUTO_NF"),
+            "VLR_LIQUIDO_NF": r.get("VLR_LIQUIDO_NF"),
+            "COD_METODO": r.get("COD_METODO"),
+            "_COD_METODO": r.get("COD_METODO"),
+            "_SQL_ID_GUID": _clean(r.get("ID_GUID")),
+            "_SQL_PAYER": {
+                "document": _digits(r.get("CNPJ") or r.get("CPF") or r.get("CPF_CNPJ_END")),
+                "name": _clean(r.get("NOM_CLI") or r.get("NOM_REDUZIDO")),
+                "email": first_email,
+                "street": _clean(r.get("DESC_ENDERECO")),
+                "number": _clean(r.get("NUM_END")) or "S/N",
+                "complement": _clean(r.get("COM_ENDERECO")),
+                "district": _clean(r.get("NOM_BAIRRO")),
+                "city": _clean(r.get("NOM_MUNICIPIO")),
+                "state": _clean(r.get("SIGLA_UF"))[:2].upper(),
+                "zip_code": cep_str[:8],
+            },
+        })
+
+    debits_by_cli: Dict[str, List[Dict[str, Any]]] = {}
+    if cod_nf_to_nro or ped_to_nro:
+        cod_nfs_list = list(cod_nf_to_nro.keys())
+        peds_list = list(ped_to_nro.keys())
+
+        or_conds = []
+        lr_params: List[Any] = [emp_int, fil_int]
+        if cod_nfs_list:
+            ph_nf = ", ".join(["%s"] * len(cod_nfs_list))
+            or_conds.append(f"LR.COD_NF IN ({ph_nf})")
+            lr_params.extend(cod_nfs_list)
+        if peds_list:
+            ph_ped = ", ".join(["%s"] * len(peds_list))
+            or_conds.append(f"(LR.COD_NF IS NULL AND LR.COD_PED_VENDA IN ({ph_ped}))")
+            lr_params.extend(peds_list)
+
+        or_sql = " OR ".join(or_conds)
+        lr_query = f"""
+            SELECT
+                LR.NRO_LANCTO_CRECEBER,
+                LR.COD_EMPRESA,
+                LR.COD_FILIAL,
+                LR.COD_CLI,
+                LR.COD_NF,
+                LR.COD_PED_VENDA,
+                LR.DAT_VENC_CRECEBER AS LR_DAT_VENC,
+                LR.VLR_LANCTO_TOTAL AS LR_VLR_TOTAL,
+                LR.VLR_LANCTO_CRECEBER AS LR_VLR_BRUTO,
+                LR.STA_LANCTO_CRECEBER AS LR_STA,
+                LR.NRO_CONTROLE AS LR_NRO_CONTROLE,
+                LRA.COD_PARCELA,
+                LRA.COD_FORMA,
+                FP.NOM_FORMA,
+                LRA.DAT_VENC_CRECEBER AS LRA_DAT_VENC,
+                LRA.VLR_LANCTO_TOTAL AS LRA_VLR_TOTAL,
+                LRA.VLR_LANCTO_CRECEBER AS LRA_VLR_BRUTO,
+                LRA.STA_LANCTO_CRECEBER AS LRA_STA,
+                LRA.NRO_CONTROLE AS LRA_NRO_CONTROLE,
+                LRA.CODIGO_BARRAS,
+                LRA.LINHA_DIGITAVEL,
+                LRA.COD_SOLICITACAO,
+                LRA.CAMINHO_PDF
+            FROM LANCTOS_CRECEBER LR WITH (NOLOCK)
+            LEFT JOIN LANCTOS_CRECEBERA LRA WITH (NOLOCK)
+                ON LRA.NRO_LANCTO_CRECEBER = LR.NRO_LANCTO_CRECEBER
+               AND LRA.COD_EMPRESA = LR.COD_EMPRESA
+               AND LRA.COD_FILIAL = LR.COD_FILIAL
+            LEFT JOIN FORMA_PAGTO FP WITH (NOLOCK)
+                ON FP.COD_FORMA = LRA.COD_FORMA
+            WHERE LR.COD_EMPRESA = %s
+              AND LR.COD_FILIAL = %s
+              AND ({or_sql})
+            ORDER BY LR.NRO_LANCTO_CRECEBER ASC, ISNULL(LRA.COD_PARCELA, 1) ASC
+        """
+        lr_rows = sql_client.query(lr_query, tuple(lr_params), max_rows=2500)
+        for d in lr_rows:
+            c_cli_str = str(d.get("COD_CLI") or "").strip()
+            if not c_cli_str:
+                continue
+            c_nf_int = int(d["COD_NF"]) if (d.get("COD_NF") is not None and str(d["COD_NF"]).isdigit()) else None
+            c_ped_int = int(d["COD_PED_VENDA"]) if (d.get("COD_PED_VENDA") is not None and str(d["COD_PED_VENDA"]).isdigit()) else None
+            mapped_nro_nf = (
+                (cod_nf_to_nro.get(c_nf_int) if c_nf_int is not None else None)
+                or (ped_to_nro.get(c_ped_int) if c_ped_int is not None else None)
+                or ""
+            )
+            deb_item = {
+                "NRO_LANCTO_CRECEBER": d.get("NRO_LANCTO_CRECEBER"),
+                "COD_PARCELA": d.get("COD_PARCELA") or 1,
+                "COD_NF": d.get("COD_NF"),
+                "COD_PED_VENDA": d.get("COD_PED_VENDA"),
+                "NRO_NOTA_FISCAL": mapped_nro_nf,
+                "COD_FORMA": d.get("COD_FORMA"),
+                "NOM_FORMA": _clean(d.get("NOM_FORMA")),
+                "DAT_VENC_CRECEBER": d.get("LRA_DAT_VENC") or d.get("LR_DAT_VENC"),
+                "VLR_LANCTO_CRECEBER": (
+                    d.get("LRA_VLR_TOTAL")
+                    if d.get("LRA_VLR_TOTAL") is not None
+                    else (
+                        d.get("LRA_VLR_BRUTO")
+                        if d.get("LRA_VLR_BRUTO") is not None
+                        else (d.get("LR_VLR_TOTAL") if d.get("LR_VLR_TOTAL") is not None else d.get("LR_VLR_BRUTO"))
+                    )
+                ),
+                "STA_LANCTO_CRECEBER": _clean(d.get("LRA_STA") or d.get("LR_STA") or "AB"),
+                "NRO_CONTROLE": _clean(d.get("LRA_NRO_CONTROLE") or d.get("LR_NRO_CONTROLE")),
+                "CODIGO_BARRAS": _clean(d.get("CODIGO_BARRAS")),
+                "LINHA_DIGITAVEL": _clean(d.get("LINHA_DIGITAVEL")),
+                "COD_SOLICITACAO": _clean(d.get("COD_SOLICITACAO")),
+            }
+            debits_by_cli.setdefault(c_cli_str, []).append(deb_item)
+
+    if len(_HORUS_DATA_CACHE) > 30:
+        _HORUS_DATA_CACHE.clear()
+    _HORUS_DATA_CACHE[cache_key] = (time.time(), raw_invoices, debits_by_cli)
+    return raw_invoices, debits_by_cli, methods_map, payment_forms_catalog
 
 
 async def _fetch_horus_invoices_and_debits_async(
@@ -385,6 +701,7 @@ async def _fetch_horus_invoices_and_debits_async(
         sem = asyncio.Semaphore(8)
         d_ini_str = f"{date_from.strftime('%d/%m/%Y')} 00:00:00"
         d_fim_str = f"{date_to.strftime('%d/%m/%Y')} 23:59:59"
+        method_errors: List[str] = []
 
         async def _fetch_by_method(cod_metodo: int) -> List[Dict[str, Any]]:
             async with sem:
@@ -420,9 +737,14 @@ async def _fetch_horus_invoices_and_debits_async(
                         return out_rows
                 except Exception as e:
                     logger.warning("[HorusInvoices] Erro em Busca_NotaFiscal metodo=%s company=%s: %s", cod_metodo, company_id, e)
+                    method_errors.append(str(e))
                 return []
 
         method_Lists = await asyncio.gather(*[_fetch_by_method(m) for m in target_methods])
+        if method_errors and len(method_errors) >= len(target_methods):
+            raise PaymentProviderError(
+                f"Falha ao consultar Notas Fiscais na API Horus REST: {method_errors[0]}"
+            )
         raw_invoices: List[Dict[str, Any]] = []
         seen_nf_keys = set()
         for sublist in method_Lists:
@@ -508,7 +830,7 @@ def list_horus_invoices_for_boletos(
     auto_emit_enabled = bool(getattr(cora_cfg, "invoice_auto_emit_enabled", False)) if cora_cfg else False
     allowed_upper_set = {f.upper() for f in saved_allowed_forms}
 
-    if not settings or not settings.horus_enabled:
+    if not settings or (not settings.horus_enabled and not getattr(settings, "horus_sql_enabled", False)):
         return {
             "horus_enabled": False,
             "date_from": (date_from or (date.today() - timedelta(days=3))).isoformat(),
@@ -538,17 +860,56 @@ def list_horus_invoices_for_boletos(
 
     emp, fil = _resolve_horus_emp_fil(settings)
 
-    raw_invoices, debits_by_cli, methods_map, payment_forms_catalog = _run_async(
-        _fetch_horus_invoices_and_debits_async(
-            db,
-            company_id,
-            settings,
-            date_from=eff_from,
-            date_to=eff_to,
-            cod_ped_venda=cod_ped_venda,
-            force_refresh=force_refresh,
+    sql_error_msg: Optional[str] = None
+    rest_error_msg: Optional[str] = None
+    raw_invoices: Optional[List[Dict[str, Any]]] = None
+    debits_by_cli: Dict[str, List[Dict[str, Any]]] = {}
+    methods_map: Dict[int, str] = {}
+    payment_forms_catalog: List[Dict[str, str]] = []
+
+    if getattr(settings, "horus_sql_enabled", False):
+        try:
+            raw_invoices, debits_by_cli, methods_map, payment_forms_catalog = _fetch_horus_invoices_and_debits_sql(
+                db,
+                company_id,
+                settings,
+                date_from=eff_from,
+                date_to=eff_to,
+                cod_ped_venda=cod_ped_venda,
+                nro_nota_fiscal=nro_nota_fiscal,
+                force_refresh=force_refresh,
+            )
+        except Exception as sql_exc:
+            sql_error_msg = str(sql_exc)
+            logger.warning("[HorusInvoices] Falha ao consultar Notas Fiscais via Horus SQL company=%s: %s", company_id, sql_exc)
+
+    if raw_invoices is None and settings.horus_enabled:
+        try:
+            raw_invoices, debits_by_cli, methods_map, payment_forms_catalog = _run_async(
+                _fetch_horus_invoices_and_debits_async(
+                    db,
+                    company_id,
+                    settings,
+                    date_from=eff_from,
+                    date_to=eff_to,
+                    cod_ped_venda=cod_ped_venda,
+                    force_refresh=force_refresh,
+                )
+            )
+        except Exception as rest_exc:
+            rest_error_msg = str(rest_exc)
+            logger.warning("[HorusInvoices] Falha ao consultar Notas Fiscais via Horus REST company=%s: %s", company_id, rest_exc)
+
+    if raw_invoices is None:
+        reasons = []
+        if sql_error_msg:
+            reasons.append(f"Horus SQL Direct ({settings.horus_sql_host or 'sem host'}): {sql_error_msg}")
+        if rest_error_msg:
+            reasons.append(f"Horus API REST ({settings.horus_url or 'sem URL'}): {rest_error_msg}")
+        raise PaymentProviderError(
+            "Não foi possível consultar as Notas Fiscais no Horus ERP. Motivo: "
+            + (" | ".join(reasons) if reasons else "Nenhuma conexão Horus ativa respondeu.")
         )
-    )
     forms_name_by_code = {fp["code"].upper(): fp["name"] for fp in payment_forms_catalog}
     forms_code_by_name = {fp["name"].upper(): fp["code"] for fp in payment_forms_catalog}
     # Expande o conjunto permitido para casar tanto pelo código (ex: "1") quanto pelo nome (ex: "BOLETO")
@@ -657,9 +1018,9 @@ def list_horus_invoices_for_boletos(
         if nf_filter and nf_filter not in nro_nf_norm and _clean(nro_nota_fiscal) not in nro_nf:
             continue
 
-        # Extrai destinatário e duplicatas do XML_Base64 (pré-cacheado)
+        # Extrai destinatário e duplicatas do XML_Base64 (pré-cacheado) ou do SQL Direct (_SQL_PAYER)
         xml_info = parsed_xml_by_nf_idx.get(idx_nf) or _parse_nfe_xml_base64(nf.get("XML_Base64") or nf.get("XML_BASE64"))
-        xml_payer = xml_info["payer"]
+        xml_payer = nf.get("_SQL_PAYER") or xml_info["payer"]
         xml_dups = xml_info["duplicatas"]
 
         # Enriquecimento com cadastro local se existir
@@ -697,10 +1058,17 @@ def list_horus_invoices_for_boletos(
         nf_debits: List[Dict[str, Any]] = []
         for d in cli_debits:
             d_nf = _clean(d.get("NRO_NOTA_FISCAL")).lstrip("0")
+            d_cod_nf = _clean(d.get("COD_NF"))
+            d_ped = _clean(d.get("COD_PED_VENDA"))
             d_chave = _clean(d.get("CHAVE_ACESSO_NFE"))
-            if (nro_nf_norm and d_nf == nro_nf_norm) or (chave_nfe and d_chave == chave_nfe):
+            if (
+                (nro_nf_norm and d_nf == nro_nf_norm)
+                or (cod_nf and d_cod_nf == cod_nf)
+                or (chave_nfe and d_chave == chave_nfe)
+                or (ped_venda and not d_cod_nf and not d_nf and d_ped == ped_venda)
+            ):
                 nf_debits.append(d)
-        nf_debits.sort(key=lambda x: (_parse_date_iso(x.get("DAT_VENC_CRECEBER")) or "", str(x.get("NRO_LANCTO_CRECEBER") or "")))
+        nf_debits.sort(key=lambda x: (_parse_date_iso(x.get("DAT_VENC_CRECEBER")) or "", int(x.get("COD_PARCELA") or 1), str(x.get("NRO_LANCTO_CRECEBER") or "")))
 
         # Monta lista de parcelas da Nota Fiscal combinando `<cobr><dup>` do XML com `Busca_debitos`
         raw_installments: List[Dict[str, Any]] = []
@@ -735,9 +1103,10 @@ def list_horus_invoices_for_boletos(
                 })
         elif nf_debits:
             for idx, d in enumerate(nf_debits, start=1):
+                parc_num = str(d.get("COD_PARCELA") or idx).strip() or str(idx)
                 raw_installments.append({
-                    "installment_number": str(idx),
-                    "raw_dup_number": f"{idx:03d}",
+                    "installment_number": parc_num,
+                    "raw_dup_number": f"{int(parc_num) if parc_num.isdigit() else idx:03d}",
                     "due_date": _parse_date_iso(d.get("DAT_VENC_CRECEBER")) or issue_dt,
                     "amount": _parse_amount(d.get("VLR_LANCTO_CRECEBER")) or vlr_liquido,
                     "debit": d,
@@ -790,7 +1159,8 @@ def list_horus_invoices_for_boletos(
             horus_linha = _clean(deb.get("LINHA_DIGITAVEL"))
             horus_barras = _clean(deb.get("CODIGO_BARRAS"))
             horus_nosso = _clean(deb.get("NOSSO_NUMERO") or deb.get("NRO_CONTROLE"))
-            has_horus_boleto = has_horus_pdf or bool(horus_linha or horus_barras)
+            horus_cod_sol = _clean(deb.get("COD_SOLICITACAO"))
+            has_horus_boleto = has_horus_pdf or bool(horus_linha or horus_barras or horus_cod_sol)
 
             origin_ref = f"horus_nf:{emp}:{fil}:{nro_nf}:{inst_num}"
             existing_charge = (
@@ -927,7 +1297,7 @@ def list_horus_invoices_for_boletos(
             "vlr_bruto_nf": vlr_bruto,
             "vlr_liquido_nf": vlr_liquido,
             "customer_id": local_cust.id if local_cust else None,
-            "horus_id_guid": (local_cust.id_guid if local_cust and local_cust.id_guid else None),
+            "horus_id_guid": _clean(nf.get("_SQL_ID_GUID")) or (local_cust.id_guid if local_cust and local_cust.id_guid else None),
             "payer": {
                 "name": payer_name,
                 "document": payer_doc,
