@@ -291,6 +291,21 @@ export default function B2COpenStorefront({
       .catch(console.error);
   }, [companyId, apiBase]);
 
+  // Apply store favicon dynamically to browser tab
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const rawFav = storeInfo?.branding?.favicon_url || domainInfo?.favicon_url || storeInfo?.favicon_url;
+    if (!rawFav) return;
+    const resolvedFav = getImageUrl(rawFav);
+    let link = document.querySelector("link[rel~='icon']") as HTMLLinkElement | null;
+    if (!link) {
+      link = document.createElement('link');
+      link.rel = 'icon';
+      document.head.appendChild(link);
+    }
+    link.href = resolvedFav;
+  }, [storeInfo, domainInfo]);
+
   // Helper to update browser URL without full page reload
   const navigateToStorePath = (subPath: string, replace = false) => {
     if (typeof window === 'undefined') return;

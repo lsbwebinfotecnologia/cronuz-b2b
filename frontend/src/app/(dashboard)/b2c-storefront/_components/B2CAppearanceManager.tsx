@@ -49,6 +49,7 @@ export interface B2CBranding {
   primary_color: string;
   secondary_color: string;
   logo_url: string;
+  favicon_url?: string;
   hero_badge_text: string;
   hero_title: string;
   hero_subtitle: string;
@@ -375,16 +376,16 @@ export default function B2CAppearanceManager({
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const maxMB = target === 'logo' ? 2 : 5;
+    const maxMB = target === 'logo' || target === 'favicon' ? 2 : 5;
     if (file.size > maxMB * 1024 * 1024) {
       toast.error(`O arquivo excede o limite máximo permitido de ${maxMB} MB para este tipo de envio.`);
       e.target.value = '';
       return;
     }
 
-    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/x-icon', 'image/vnd.microsoft.icon'];
     if (!allowed.includes(file.type)) {
-      toast.error('Formato inválido. Utilize imagens JPG, PNG ou WEBP.');
+      toast.error('Formato inválido. Utilize imagens JPG, PNG, WEBP ou ICO.');
       e.target.value = '';
       return;
     }
@@ -410,6 +411,9 @@ export default function B2CAppearanceManager({
 
       if (target === 'logo') {
         nextBranding = { ...branding, logo_url: data.url };
+        setBranding(nextBranding);
+      } else if (target === 'favicon') {
+        nextBranding = { ...branding, favicon_url: data.url };
         setBranding(nextBranding);
       } else if (target === 'hero_banner') {
         nextBranding = { ...branding, hero_banner_url: data.url };
@@ -818,56 +822,114 @@ export default function B2CAppearanceManager({
               <div className="flex items-center gap-2">
                 <Palette className="w-5 h-5 text-indigo-600" />
                 <h2 className="text-base font-bold text-slate-900 dark:text-white">
-                  Logo do Cliente & Paleta de Cores da Loja Padronizada
+                  Logo, Ícone (Favicon) & Paleta de Cores da Loja Padronizada
                 </h2>
               </div>
 
-              {/* Logo Upload */}
-              <div className="flex flex-col sm:flex-row sm:items-center gap-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
-                <div className="w-20 h-20 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
-                  {branding.logo_url ? (
-                    <img
-                      src={getImageUrl(branding.logo_url)}
-                      alt="Logo Loja"
-                      className="w-full h-full object-contain p-1.5"
-                    />
-                  ) : (
-                    <ImageIcon className="w-7 h-7 text-slate-300" />
-                  )}
-                </div>
-                <div className="flex-1 space-y-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="cursor-pointer inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-colors">
-                      {uploadingTarget === 'logo' ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <UploadCloud className="w-3.5 h-3.5" />
-                      )}
-                      Enviar Logo (PNG/JPG/WEBP • Máx 2MB)
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(e) => handleUploadImage(e, 'logo')}
+              {/* Logo & Favicon Uploads */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Logo Upload */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3.5 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                  <div className="w-16 h-16 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
+                    {branding.logo_url ? (
+                      <img
+                        src={getImageUrl(branding.logo_url)}
+                        alt="Logo Loja"
+                        className="w-full h-full object-contain p-1.5"
                       />
-                    </label>
-                    {branding.logo_url && (
-                      <button
-                        type="button"
-                        onClick={() => setBranding({ ...branding, logo_url: '' })}
-                        className="px-2.5 py-1.5 rounded-lg text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
-                      >
-                        Remover
-                      </button>
+                    ) : (
+                      <ImageIcon className="w-6 h-6 text-slate-300" />
                     )}
                   </div>
-                  <input
-                    type="text"
-                    value={branding.logo_url}
-                    onChange={(e) => setBranding({ ...branding, logo_url: e.target.value })}
-                    placeholder="Ou cole a URL da imagem da logo..."
-                    className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-300"
-                  />
+                  <div className="flex-1 space-y-2 min-w-0">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Logo Principal da Loja
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-colors">
+                        {uploadingTarget === 'logo' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <UploadCloud className="w-3.5 h-3.5" />
+                        )}
+                        Enviar Logo (Máx 2MB)
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          className="hidden"
+                          onChange={(e) => handleUploadImage(e, 'logo')}
+                        />
+                      </label>
+                      {branding.logo_url && (
+                        <button
+                          type="button"
+                          onClick={() => setBranding({ ...branding, logo_url: '' })}
+                          className="px-2 py-1 rounded-lg text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      value={branding.logo_url}
+                      onChange={(e) => setBranding({ ...branding, logo_url: e.target.value })}
+                      placeholder="URL da imagem da logo..."
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-300"
+                    />
+                  </div>
+                </div>
+
+                {/* Favicon / Ícone Upload */}
+                <div className="flex flex-col sm:flex-row sm:items-center gap-3.5 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800">
+                  <div className="w-16 h-16 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center overflow-hidden shrink-0">
+                    {branding.favicon_url ? (
+                      <img
+                        src={getImageUrl(branding.favicon_url)}
+                        alt="Favicon Loja"
+                        className="w-10 h-10 object-contain"
+                      />
+                    ) : (
+                      <Globe className="w-6 h-6 text-slate-300" />
+                    )}
+                  </div>
+                  <div className="flex-1 space-y-2 min-w-0">
+                    <span className="block text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Ícone / Favicon da Loja (Aba do Navegador)
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <label className="cursor-pointer inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 dark:bg-slate-700 dark:hover:bg-slate-600 text-white text-xs font-bold transition-colors">
+                        {uploadingTarget === 'favicon' ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <UploadCloud className="w-3.5 h-3.5" />
+                        )}
+                        Enviar Ícone (PNG/ICO • Máx 2MB)
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/x-icon,image/vnd.microsoft.icon"
+                          className="hidden"
+                          onChange={(e) => handleUploadImage(e, 'favicon')}
+                        />
+                      </label>
+                      {branding.favicon_url && (
+                        <button
+                          type="button"
+                          onClick={() => setBranding({ ...branding, favicon_url: '' })}
+                          className="px-2 py-1 rounded-lg text-xs text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                        >
+                          Remover
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="text"
+                      value={branding.favicon_url || ''}
+                      onChange={(e) => setBranding({ ...branding, favicon_url: e.target.value })}
+                      placeholder="URL do ícone/favicon (ex: 64x64px)..."
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-700 dark:text-slate-300"
+                    />
+                  </div>
                 </div>
               </div>
 

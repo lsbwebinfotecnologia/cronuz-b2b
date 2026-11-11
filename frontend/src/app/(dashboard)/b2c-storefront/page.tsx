@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Ticket,
   Building2,
@@ -54,6 +55,7 @@ export default function SellerB2CStorefrontManagementPage({
   initialTab?: string;
 } = {}) {
   // Determine effective section based on Left Sidebar route
+  const router = useRouter();
   const effectiveSection: 'coupons' | 'orders' | 'customers' | 'settings' =
     initialTab === 'orders'
       ? 'orders'
@@ -62,6 +64,7 @@ export default function SellerB2CStorefrontManagementPage({
       : initialTab === 'lgpd'
       ? 'settings'
       : viewMode;
+  const [fromCustomerId, setFromCustomerId] = useState<number | null>(null);
 
   // Sub-filter inside the Coupons page only (Cupons Individuais vs Lotes/Campanhas vs Histórico de Uso)
   const [couponSubView, setCouponSubView] = useState<'list' | 'batches' | 'history'>('list');
@@ -526,7 +529,11 @@ export default function SellerB2CStorefrontManagementPage({
       }
       if (batchRes.ok) setBatches(await batchRes.json());
       if (coupRes.ok) setCoupons(await coupRes.json());
-      if (ordRes.ok) setB2cOrders(await ordRes.json());
+      let loadedOrders: any[] = [];
+      if (ordRes.ok) {
+        loadedOrders = await ordRes.json();
+        setB2cOrders(loadedOrders);
+      }
       if (custRes.ok) {
         const custData = await custRes.json();
         setB2cCustomers(custData.customers || []);
@@ -535,11 +542,47 @@ export default function SellerB2CStorefrontManagementPage({
       if (redRes.ok) setRedemptions(await redRes.json());
       if (lgpdRes.ok) setLgpdConsents(await lgpdRes.json());
       if (cacheRes.ok) setCacheStatus(await cacheRes.json());
+
+      if (typeof window !== 'undefined') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const paramOrderId = Number(urlParams.get('order_id') || 0);
+        const paramFromCustId = Number(urlParams.get('from_customer_id') || 0);
+        const paramCustId = Number(urlParams.get('customer_id') || 0);
+
+        if (paramFromCustId > 0) {
+          setFromCustomerId(paramFromCustId);
+        }
+
+        if (effectiveSection === 'orders' && paramOrderId > 0) {
+          let foundOrder = loadedOrders.find((o: any) => Number(o.id) === paramOrderId);
+          if (!foundOrder) {
+            const directRes = await fetch(`${apiBase}/b2c/orders?search=${paramOrderId}`, { headers });
+            if (directRes.ok) {
+              const directList = await directRes.json();
+              foundOrder = (directList || []).find((o: any) => Number(o.id) === paramOrderId);
+            }
+          }
+          if (foundOrder) {
+            openOrderDetailsModal(foundOrder);
+          }
+        } else if (effectiveSection === 'customers' && paramCustId > 0 && !selectedCustomer360) {
+          openCustomer360View(paramCustId);
+        }
+      }
     } catch (e) {
       console.error(e);
     } finally {
       setLoading(false);
     }
+  };
+
+  const navigateToOrderDetails = (orderId: number, customerId?: number | null) => {
+    if (!orderId) return;
+    const qs = new URLSearchParams({ order_id: String(orderId) });
+    if (customerId) {
+      qs.set('from_customer_id', String(customerId));
+    }
+    router.push(`/b2c-storefront/orders?${qs.toString()}`);
   };
 
   useEffect(() => {
@@ -1687,11 +1730,30 @@ export default function SellerB2CStorefrontManagementPage({
                     </tr>
                   ) : (
                     redemptions.map((r) => (
-                      <tr key={r.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                      <tr
+                        key={r.id}
+                        onClick={() => r.order_id && navigateToOrderDetails(r.order_id)}
+                        className={`hover:bg-slate-50/70 dark:hover:bg-slate-800/40 ${
+                          r.order_id ? 'cursor-pointer group' : ''
+                        }`}
+                      >
                         <td className="py-3.5 px-4">
-                          <span className="font-bold text-slate-900 dark:text-white">
-                            Pedido #{r.order_id || '—'}
-                          </span>
+                          {r.order_id ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                navigateToOrderDetails(r.order_id);
+                              }}
+                              className="font-bold text-indigo-600 dark:text-indigo-400 group-hover:underline inline-flex items-center gap-1 cursor-pointer"
+                              title={`Abrir detalhes do Pedido #${r.order_id}`}
+                            >
+                              Pedido #{r.order_id}
+                              <ExternalLink className="w-3 h-3 opacity-70" />
+                            </button>
+                          ) : (
+                            <span className="font-bold text-slate-900 dark:text-white">Pedido #—</span>
+                          )}
                           <span className="block text-[11px] text-slate-400">
                             {r.created_at ? new Date(r.created_at).toLocaleString('pt-BR') : ''}
                           </span>
@@ -1801,13 +1863,29 @@ export default function SellerB2CStorefrontManagementPage({
             <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
                 <div>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedOrder(null)}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:underline cursor-pointer mb-1.5"
-                  >
-                    ← Voltar para Lista de Pedidos
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3 mb-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedOrder(null);
+                        if (typeof window !== 'undefined' && window.location.search.includes('order_id=')) {
+                          router.replace('/b2c-storefront/orders');
+                        }
+                      }}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      ← Voltar para Lista de Pedidos
+                    </button>
+                    {fromCustomerId && (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/b2c-storefront/customers?customer_id=${fromCustomerId}`)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 hover:text-indigo-600 hover:underline cursor-pointer"
+                      >
+                        • Voltar para Ficha do Cliente
+                      </button>
+                    )}
+                  </div>
                   <div className="flex flex-wrap items-center gap-2.5">
                     <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">
                       Detalhes do Pedido #{selectedOrder.id}
@@ -1831,13 +1909,6 @@ export default function SellerB2CStorefrontManagementPage({
                     • Canal: {selectedOrder.payment_gateway || selectedOrder.checkout_mode}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedOrder(null)}
-                  className="self-start sm:self-auto px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
-                >
-                  ← Voltar para Pedidos
-                </button>
               </div>
 
               {/* Régua Oficial de Status do Pedido B2C + Reenvio Manual de E-mail */}
@@ -2687,9 +2758,24 @@ export default function SellerB2CStorefrontManagementPage({
                               B2C_ORDER_STATUS_STEPS.find((s) => s.key === ord.status) ||
                               B2C_ORDER_STATUS_STEPS[0];
                             return (
-                              <tr key={ord.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                              <tr
+                                key={ord.id}
+                                onClick={() => navigateToOrderDetails(ord.id, selectedCustomer360.customer?.id)}
+                                className="hover:bg-indigo-50/50 dark:hover:bg-slate-800/50 cursor-pointer transition-colors group"
+                                title={`Clique para abrir os detalhes do Pedido #${ord.id}`}
+                              >
                                 <td className="py-3 px-4 font-extrabold text-slate-900 dark:text-white">
-                                  #{ord.id}
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      navigateToOrderDetails(ord.id, selectedCustomer360.customer?.id);
+                                    }}
+                                    className="font-extrabold text-indigo-600 dark:text-indigo-400 group-hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    #{ord.id}
+                                    <ExternalLink className="w-3 h-3 opacity-70" />
+                                  </button>
                                   <span className="block text-[10px] font-normal text-slate-400">
                                     {ord.payment_method}
                                   </span>
@@ -2787,7 +2873,16 @@ export default function SellerB2CStorefrontManagementPage({
                           </thead>
                           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                             {selectedCustomer360.coupon_redemptions.map((red: any) => (
-                              <tr key={red.id}>
+                              <tr
+                                key={red.id}
+                                onClick={() =>
+                                  red.order_id &&
+                                  navigateToOrderDetails(red.order_id, selectedCustomer360.customer?.id)
+                                }
+                                className={`hover:bg-indigo-50/40 dark:hover:bg-slate-800/40 ${
+                                  red.order_id ? 'cursor-pointer group' : ''
+                                }`}
+                              >
                                 <td className="py-2.5 px-4 font-mono text-slate-500">
                                   {red.created_at ? new Date(red.created_at).toLocaleString('pt-BR') : '—'}
                                 </td>
@@ -2799,7 +2894,24 @@ export default function SellerB2CStorefrontManagementPage({
                                   {red.partner_company_name ? ` (${red.partner_company_name})` : ''}
                                 </td>
                                 <td className="py-2.5 px-4 font-bold">
-                                  {red.order_id ? `#${red.order_id}` : '—'}
+                                  {red.order_id ? (
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        navigateToOrderDetails(
+                                          red.order_id,
+                                          selectedCustomer360.customer?.id
+                                        );
+                                      }}
+                                      className="font-bold text-indigo-600 dark:text-indigo-400 group-hover:underline inline-flex items-center gap-1 cursor-pointer"
+                                    >
+                                      #{red.order_id}
+                                      <ExternalLink className="w-3 h-3 opacity-70" />
+                                    </button>
+                                  ) : (
+                                    '—'
+                                  )}
                                 </td>
                                 <td className="py-2.5 px-4 text-right font-mono">
                                   {formatBRL(red.previous_balance)}

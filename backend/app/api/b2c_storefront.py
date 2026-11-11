@@ -4022,6 +4022,7 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
         "primary_color": raw_branding.get("primary_color") or "#4f46e5",
         "secondary_color": raw_branding.get("secondary_color") or "#0f172a",
         "logo_url": raw_branding.get("logo_url") or company.logo or "",
+        "favicon_url": raw_branding.get("favicon_url") or getattr(company, "favicon_url", None) or "",
         "hero_badge_text": (raw_branding.get("hero_badge_text") or "Destaques e Lançamentos").replace("&", "e"),
         "hero_title": raw_branding.get("hero_title") or f"Bem-vindo à {company.name}",
         "hero_subtitle": raw_branding.get("hero_subtitle") or "Explore nosso catálogo completo com entrega rápida e segura para todo o Brasil.",
@@ -4233,9 +4234,11 @@ def update_b2c_appearance(
         if merged_branding.get("store_slug"):
             merged_branding["store_slug"] = _slugify_store_name(merged_branding["store_slug"], company.id)
         current_cfg["branding"] = merged_branding
-        # Sync logo to company.logo when updated or cleared
+        # Sync logo and favicon to company.logo / company.favicon_url when updated or cleared
         if "logo_url" in data.branding:
             company.logo = merged_branding.get("logo_url") or None
+        if "favicon_url" in data.branding:
+            company.favicon_url = merged_branding.get("favicon_url") or None
 
     if data.banners is not None:
         current_cfg["banners"] = data.banners
