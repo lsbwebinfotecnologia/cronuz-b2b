@@ -50,6 +50,35 @@ interface Config {
   horus_nro_carteira?: string;
   horus_cod_forma?: string;
   horus_tarifa_boleto?: number | null;
+  horus_cpagar_tarifa_enabled?: boolean;
+  horus_cp_cod_grp_fornecedor?: string;
+  horus_cp_cod_fornecedor?: string;
+  horus_cp_cod_departamento?: string;
+  horus_cp_cod_centro_custo?: string;
+  horus_cp_cod_grup_desp?: string;
+  horus_cp_cod_despesa?: string;
+  horus_cp_cod_forma?: string;
+}
+
+interface HorusCpagarOptions {
+  departamentos: { cod_departamento: string; nom_departamento: string }[];
+  centros_custo: { cod_departamento: string; cod_centro_custo: string; nom_centro_custo: string }[];
+  grupos_despesa: { cod_grup_desp: string; nom_grup_desp: string }[];
+  despesas: { cod_despesa: string; nom_despesa: string; cod_grup_desp: string }[];
+  grupos_fornecedor: { cod_grp_fornecedor: string; nom_grp_fornecedor: string }[];
+  fornecedores_sugeridos: { cod_grp_fornecedor: string; cod_fornecedor: string; nom_fornecedor: string; nom_fantasia: string }[];
+  recent_tariff_presets: {
+    cod_grp_fornecedor: string;
+    cod_fornecedor: string;
+    nom_fornecedor: string;
+    cod_departamento: string;
+    cod_centro_custo: string;
+    cod_grup_desp: string;
+    cod_despesa: string;
+    nom_despesa: string;
+    cod_forma: string;
+    vlr_tarifa: number;
+  }[];
 }
 
 interface CronuzAccountOption {
@@ -205,6 +234,7 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
   const [loadingHorusOptions, setLoadingHorusOptions] = useState(false);
   const [horusBankAccounts, setHorusBankAccounts] = useState<HorusBankAccountOption[]>([]);
   const [horusPaymentForms, setHorusPaymentForms] = useState<HorusPaymentFormOption[]>([]);
+  const [horusCpagarOptions, setHorusCpagarOptions] = useState<HorusCpagarOptions | null>(null);
 
   // Webhook
   const [webhookBase, setWebhookBase] = useState(API.startsWith('https://') ? API : '');
@@ -365,6 +395,7 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
       if (!res.ok) throw new Error(typeof body?.detail === 'string' ? body.detail : 'Erro ao consultar bancos do Horus.');
       setHorusBankAccounts(body.bank_accounts || []);
       setHorusPaymentForms(body.payment_forms || []);
+      setHorusCpagarOptions(body.cpagar_options || null);
       toast.success(`Consultado no Horus: ${(body.bank_accounts || []).length} conta(s) e ${(body.payment_forms || []).length} forma(s).`);
     } catch (e: any) {
       toast.error(e.message);
@@ -398,6 +429,14 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
           horus_nro_carteira: config.horus_nro_carteira ?? '',
           horus_cod_forma: config.horus_cod_forma ?? '',
           horus_tarifa_boleto: config.horus_tarifa_boleto ?? 0,
+          horus_cpagar_tarifa_enabled: config.horus_cpagar_tarifa_enabled ?? false,
+          horus_cp_cod_grp_fornecedor: config.horus_cp_cod_grp_fornecedor ?? '',
+          horus_cp_cod_fornecedor: config.horus_cp_cod_fornecedor ?? '',
+          horus_cp_cod_departamento: config.horus_cp_cod_departamento ?? '',
+          horus_cp_cod_centro_custo: config.horus_cp_cod_centro_custo ?? '',
+          horus_cp_cod_grup_desp: config.horus_cp_cod_grup_desp ?? '',
+          horus_cp_cod_despesa: config.horus_cp_cod_despesa ?? '',
+          horus_cp_cod_forma: config.horus_cp_cod_forma ?? '',
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -868,12 +907,244 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
                   </div>
                 </div>
 
+                {/* Subseção: Lançamento e Baixa Automática da Tarifa no Contas a Pagar do Horus (LANCTOS_CPAGAR_GERAL -> BLANCTOS) */}
+                <div className="rounded-xl border border-pink-200/80 dark:border-pink-900/50 bg-white/80 dark:bg-slate-900/70 p-3.5 space-y-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="space-y-0.5">
+                      <p className="text-xs font-bold text-slate-900 dark:text-white">
+                        Lançar e baixar automaticamente a Tarifa do Boleto no Contas a Pagar do Horus (<code className="font-mono text-[11px]">LANCTOS_CPAGAR_GERAL</code>)
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Ao baixar o boleto, cria a despesa da tarifa já liquidada (<code className="font-mono text-[10px]">STA_LANCTO_CPAGAR = &apos;PG&apos;</code>) na mesma data do pagamento, acionando a trigger <code className="font-mono text-[10px]">TRG_IMP_LANCTO_CPAGAR</code> para lançar a saída (<code className="font-mono text-[10px]">DÉBITO · CAP</code>) no Fechamento Bancário (<code className="font-mono text-[10px]">BLANCTOS</code>).
+                      </p>
+                    </div>
+                    <Toggle
+                      checked={!!config.horus_cpagar_tarifa_enabled}
+                      disabled={!data.integrations?.can_use_horus_baixa}
+                      onChange={v => setCfg('horus_cpagar_tarifa_enabled', v)}
+                    />
+                  </div>
+
+                  {config.horus_cpagar_tarifa_enabled && (
+                    <div className="space-y-3 pt-1">
+                      {horusCpagarOptions?.recent_tariff_presets && horusCpagarOptions.recent_tariff_presets.length > 0 && (
+                        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/50 dark:bg-emerald-950/20 p-2.5 space-y-1">
+                          <label className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">
+                            Autopreencher com padrão de Tarifa Bancária já utilizado no Horus ERP:
+                          </label>
+                          <select
+                            className={inputCls}
+                            defaultValue=""
+                            onChange={e => {
+                              const idx = Number(e.target.value);
+                              const pr = horusCpagarOptions.recent_tariff_presets[idx];
+                              if (!pr) return;
+                              setCfg('horus_cp_cod_grp_fornecedor', pr.cod_grp_fornecedor);
+                              setCfg('horus_cp_cod_fornecedor', pr.cod_fornecedor);
+                              setCfg('horus_cp_cod_departamento', pr.cod_departamento);
+                              setCfg('horus_cp_cod_centro_custo', pr.cod_centro_custo);
+                              setCfg('horus_cp_cod_grup_desp', pr.cod_grup_desp);
+                              setCfg('horus_cp_cod_despesa', pr.cod_despesa);
+                              setCfg('horus_cp_cod_forma', pr.cod_forma);
+                              if ((!config.horus_tarifa_boleto || config.horus_tarifa_boleto <= 0) && pr.vlr_tarifa > 0) {
+                                setCfg('horus_tarifa_boleto', pr.vlr_tarifa);
+                              }
+                            }}
+                          >
+                            <option value="">Selecione um modelo de lançamento de tarifa encontrado no seu Horus...</option>
+                            {horusCpagarOptions.recent_tariff_presets.map((pr, idx) => (
+                              <option key={idx} value={idx}>
+                                Forn #{pr.cod_fornecedor} ({pr.nom_fornecedor || 'Tarifa'}) · GrpForn #{pr.cod_grp_fornecedor} · Depto #{pr.cod_departamento} · C.Custo #{pr.cod_centro_custo} · GrpDesp #{pr.cod_grup_desp} · Desp #{pr.cod_despesa} ({pr.nom_despesa || 'Tarifa'}) · Forma #{pr.cod_forma} · R$ {pr.vlr_tarifa.toFixed(2).replace('.', ',')}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                        <div className="space-y-1">
+                          <label className={labelCls}>Grupo Fornecedor (COD_GRP_FORNECEDOR) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_grp_fornecedor || ''}
+                            onChange={e => setCfg('horus_cp_cod_grp_fornecedor', e.target.value)}
+                            placeholder="Ex: 5"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className={labelCls}>Fornecedor Tarifa (COD_FORNECEDOR) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_fornecedor || ''}
+                            onChange={e => setCfg('horus_cp_cod_fornecedor', e.target.value)}
+                            placeholder="Ex: 310 (BANCO - TARIFAS)"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className={labelCls}>Departamento (COD_DEPARTAMENTO) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_departamento || ''}
+                            onChange={e => setCfg('horus_cp_cod_departamento', e.target.value)}
+                            placeholder="Ex: 7"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className={labelCls}>Centro de Custo (COD_CENTRO_CUSTO) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_centro_custo || ''}
+                            onChange={e => setCfg('horus_cp_cod_centro_custo', e.target.value)}
+                            placeholder="Ex: 5"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className={labelCls}>Grupo Despesa (COD_GRUP_DESP) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_grup_desp || ''}
+                            onChange={e => setCfg('horus_cp_cod_grup_desp', e.target.value)}
+                            placeholder="Ex: 14"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className={labelCls}>Despesa (COD_DESPESA) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_despesa || ''}
+                            onChange={e => setCfg('horus_cp_cod_despesa', e.target.value)}
+                            placeholder="Ex: 70 (TARIFA BANCÁRIA)"
+                          />
+                        </div>
+                        <div className="space-y-1 sm:col-span-2">
+                          <label className={labelCls}>Forma de Baixa do Contas a Pagar (COD_FORMA_BAIXA) *</label>
+                          <input
+                            className={`${inputCls} font-mono`}
+                            value={config.horus_cp_cod_forma || ''}
+                            onChange={e => setCfg('horus_cp_cod_forma', e.target.value)}
+                            placeholder="Ex: 17 (DEBITO EM CONTA)"
+                          />
+                        </div>
+                      </div>
+
+                      {horusCpagarOptions && (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 pt-1">
+                          {horusCpagarOptions.fornecedores_sugeridos.length > 0 && (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-slate-500">Sugestão de Fornecedor no Horus</label>
+                              <select
+                                className={inputCls}
+                                value=""
+                                onChange={e => {
+                                  const fn = horusCpagarOptions.fornecedores_sugeridos[Number(e.target.value)];
+                                  if (!fn) return;
+                                  setCfg('horus_cp_cod_fornecedor', fn.cod_fornecedor);
+                                  if (fn.cod_grp_fornecedor) setCfg('horus_cp_cod_grp_fornecedor', fn.cod_grp_fornecedor);
+                                }}
+                              >
+                                <option value="">Escolher fornecedor (Banco/Tarifa/Cora)...</option>
+                                {horusCpagarOptions.fornecedores_sugeridos.map((fn, i) => (
+                                  <option key={`${fn.cod_fornecedor}-${i}`} value={i}>
+                                    #{fn.cod_fornecedor} (Grp #{fn.cod_grp_fornecedor}) - {fn.nom_fornecedor}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {horusCpagarOptions.departamentos.length > 0 && (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-slate-500">Selecionar Departamento</label>
+                              <select
+                                className={inputCls}
+                                value={config.horus_cp_cod_departamento || ''}
+                                onChange={e => setCfg('horus_cp_cod_departamento', e.target.value)}
+                              >
+                                <option value="">Escolher departamento...</option>
+                                {horusCpagarOptions.departamentos.map(d => (
+                                  <option key={d.cod_departamento} value={d.cod_departamento}>
+                                    #{d.cod_departamento} - {d.nom_departamento}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {horusCpagarOptions.centros_custo.length > 0 && (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-slate-500">Selecionar Centro de Custo</label>
+                              <select
+                                className={inputCls}
+                                value={config.horus_cp_cod_centro_custo || ''}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setCfg('horus_cp_cod_centro_custo', val);
+                                  const found = horusCpagarOptions.centros_custo.find(c => c.cod_centro_custo === val);
+                                  if (found && !config.horus_cp_cod_departamento) {
+                                    setCfg('horus_cp_cod_departamento', found.cod_departamento);
+                                  }
+                                }}
+                              >
+                                <option value="">Escolher centro de custo...</option>
+                                {horusCpagarOptions.centros_custo
+                                  .filter(c => !config.horus_cp_cod_departamento || c.cod_departamento === config.horus_cp_cod_departamento)
+                                  .map((c, i) => (
+                                    <option key={`${c.cod_departamento}-${c.cod_centro_custo}-${i}`} value={c.cod_centro_custo}>
+                                      #{c.cod_centro_custo} (Depto #{c.cod_departamento}) - {c.nom_centro_custo}
+                                    </option>
+                                  ))}
+                              </select>
+                            </div>
+                          )}
+                          {horusCpagarOptions.despesas.length > 0 && (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-slate-500">Selecionar Despesa (preenche Grupo + Despesa)</label>
+                              <select
+                                className={inputCls}
+                                value={config.horus_cp_cod_despesa || ''}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setCfg('horus_cp_cod_despesa', val);
+                                  const dp = horusCpagarOptions.despesas.find(x => x.cod_despesa === val);
+                                  if (dp && dp.cod_grup_desp) setCfg('horus_cp_cod_grup_desp', dp.cod_grup_desp);
+                                }}
+                              >
+                                <option value="">Escolher despesa...</option>
+                                {horusCpagarOptions.despesas.map(dp => (
+                                  <option key={dp.cod_despesa} value={dp.cod_despesa}>
+                                    #{dp.cod_despesa} (Grp #{dp.cod_grup_desp}) - {dp.nom_despesa}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {horusPaymentForms.length > 0 && (
+                            <div className="space-y-1">
+                              <label className="text-[11px] font-medium text-slate-500">Selecionar Forma de Baixa (Contas a Pagar)</label>
+                              <select
+                                className={inputCls}
+                                value={config.horus_cp_cod_forma || ''}
+                                onChange={e => setCfg('horus_cp_cod_forma', e.target.value)}
+                              >
+                                <option value="">Escolher forma de baixa...</option>
+                                {horusPaymentForms.map(fp => (
+                                  <option key={fp.cod_forma} value={fp.cod_forma}>
+                                    #{fp.cod_forma} - {fp.nom_forma}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* Auxiliar opcional: Consultar tabelas do Horus para autopreencher */}
                 {data.integrations?.can_use_horus_baixa && (
                   <div className="pt-2 border-t border-pink-200/60 dark:border-pink-900/40 space-y-3">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <span className="text-[11px] text-slate-600 dark:text-slate-400">
-                        Você pode digitar os códigos diretamente acima ou consultar as contas e formas já cadastradas no Horus ERP:
+                        Você pode digitar os códigos diretamente acima ou consultar as contas, formas e parâmetros de Contas a Pagar já cadastrados no Horus ERP:
                       </span>
                       <button
                         type="button"
@@ -882,7 +1153,7 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
                         className="inline-flex items-center gap-1.5 rounded-lg border border-pink-300 dark:border-pink-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-pink-700 dark:text-pink-300 hover:bg-pink-50 transition-colors self-start sm:self-auto"
                       >
                         {loadingHorusOptions ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                        Consultar contas no Horus
+                        Consultar contas e parâmetros no Horus
                       </button>
                     </div>
 

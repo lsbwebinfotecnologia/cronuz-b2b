@@ -70,6 +70,16 @@ class CoraConfig(Base):
     horus_cod_forma = Column(String(20), nullable=True)              # COD_FORMA em FORMA_PAGTO (ex: 30 = BOLETO CORA)
     horus_tarifa_boleto = Column(Numeric(10, 2), nullable=True)      # VLR_TARIF_BOL padrão (R$) por boleto liquidado
 
+    # Lançamento e Baixa Automática da Tarifa do Boleto no Contas a Pagar do Horus (LANCTOS_CPAGAR_GERAL -> BLANCTOS via TRG_IMP_LANCTO_CPAGAR)
+    horus_cpagar_tarifa_enabled = Column(Boolean, nullable=False, default=False)
+    horus_cp_cod_grp_fornecedor = Column(String(20), nullable=True)  # COD_GRP_FORNECEDOR em LANCTOS_CPAGAR_GERAL (ex: 5)
+    horus_cp_cod_fornecedor = Column(String(20), nullable=True)      # COD_FORNECEDOR em LANCTOS_CPAGAR_GERAL (ex: 310 = BANCO - TARIFAS BANCARIA)
+    horus_cp_cod_departamento = Column(String(20), nullable=True)    # COD_DEPARTAMENTO em LANCTOS_CPAGAR_GERAL (ex: 7)
+    horus_cp_cod_centro_custo = Column(String(20), nullable=True)    # COD_CENTRO_CUSTO em LANCTOS_CPAGAR_GERAL (ex: 5)
+    horus_cp_cod_grup_desp = Column(String(20), nullable=True)       # COD_GRUP_DESP em LANCTOS_CPAGAR_GERAL (ex: 14)
+    horus_cp_cod_despesa = Column(String(20), nullable=True)         # COD_DESPESA em LANCTOS_CPAGAR_GERAL (ex: 70)
+    horus_cp_cod_forma = Column(String(20), nullable=True)           # COD_FORMA / COD_FORMA_BAIXA em LANCTOS_CPAGAR_GERAL (ex: 17 = DEBITO EM CONTA)
+
     updated_by_user_id = Column(Integer, ForeignKey("usr_user.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

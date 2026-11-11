@@ -63,7 +63,15 @@ def _ensure_cora_settlement_columns(db: Session) -> None:
             "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_contac VARCHAR(20); "
             "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_nro_carteira VARCHAR(20); "
             "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cod_forma VARCHAR(20); "
-            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_tarifa_boleto NUMERIC(10, 2);"
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_tarifa_boleto NUMERIC(10, 2); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cpagar_tarifa_enabled BOOLEAN NOT NULL DEFAULT FALSE; "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_grp_fornecedor VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_fornecedor VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_departamento VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_centro_custo VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_grup_desp VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_despesa VARCHAR(20); "
+            "ALTER TABLE fin_cora_config ADD COLUMN IF NOT EXISTS horus_cp_cod_forma VARCHAR(20);"
         ))
         db.commit()
         _CORA_SETTLEMENT_COLUMNS_CHECKED = True
@@ -163,6 +171,14 @@ def _serialize_config(config: Optional[CoraConfig]) -> dict:
         "horus_nro_carteira": (getattr(config, "horus_nro_carteira", None) or "") if config else "",
         "horus_cod_forma": (getattr(config, "horus_cod_forma", None) or "") if config else "",
         "horus_tarifa_boleto": dec(getattr(config, "horus_tarifa_boleto", None)) if config else None,
+        "horus_cpagar_tarifa_enabled": bool(getattr(config, "horus_cpagar_tarifa_enabled", False)) if config else False,
+        "horus_cp_cod_grp_fornecedor": (getattr(config, "horus_cp_cod_grp_fornecedor", None) or "") if config else "",
+        "horus_cp_cod_fornecedor": (getattr(config, "horus_cp_cod_fornecedor", None) or "") if config else "",
+        "horus_cp_cod_departamento": (getattr(config, "horus_cp_cod_departamento", None) or "") if config else "",
+        "horus_cp_cod_centro_custo": (getattr(config, "horus_cp_cod_centro_custo", None) or "") if config else "",
+        "horus_cp_cod_grup_desp": (getattr(config, "horus_cp_cod_grup_desp", None) or "") if config else "",
+        "horus_cp_cod_despesa": (getattr(config, "horus_cp_cod_despesa", None) or "") if config else "",
+        "horus_cp_cod_forma": (getattr(config, "horus_cp_cod_forma", None) or "") if config else "",
     }
 
 
@@ -379,6 +395,130 @@ def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), 
                 "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
                 "tipo_forma_pagto": str(f.get("TIPO_FORMA") or "").strip(),
             })
+
+        # Opções complementares para o lançamento automático da Tarifa do Boleto em LANCTOS_CPAGAR_GERAL
+        cpagar_options = {
+            "departamentos": [],
+            "centros_custo": [],
+            "grupos_despesa": [],
+            "despesas": [],
+            "grupos_fornecedor": [],
+            "fornecedores_sugeridos": [],
+            "recent_tariff_presets": [],
+        }
+        try:
+            for d in sql.query("SELECT COD_DEPARTAMENTO, NOM_DEPARTAMENTO FROM DEPARTAMENTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO"):
+                cpagar_options["departamentos"].append({
+                    "cod_departamento": str(d.get("COD_DEPARTAMENTO") or "").strip(),
+                    "nom_departamento": str(d.get("NOM_DEPARTAMENTO") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for cc in sql.query("SELECT COD_DEPARTAMENTO, COD_CENTRO_CUSTO, NOM_CENTRO_CUSTO FROM CENTRO_CUSTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO, COD_CENTRO_CUSTO"):
+                cpagar_options["centros_custo"].append({
+                    "cod_departamento": str(cc.get("COD_DEPARTAMENTO") or "").strip(),
+                    "cod_centro_custo": str(cc.get("COD_CENTRO_CUSTO") or "").strip(),
+                    "nom_centro_custo": str(cc.get("NOM_CENTRO_CUSTO") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for gd in sql.query("SELECT COD_GRUP_DESP, NOM_GRUP_DESP FROM DESPESAGRP_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP"):
+                cpagar_options["grupos_despesa"].append({
+                    "cod_grup_desp": str(gd.get("COD_GRUP_DESP") or "").strip(),
+                    "nom_grup_desp": str(gd.get("NOM_GRUP_DESP") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for dp in sql.query("SELECT COD_DESPESA, NOM_DESPESA, COD_GRUP_DESP FROM DESPESAS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP, COD_DESPESA"):
+                cpagar_options["despesas"].append({
+                    "cod_despesa": str(dp.get("COD_DESPESA") or "").strip(),
+                    "nom_despesa": str(dp.get("NOM_DESPESA") or "").strip(),
+                    "cod_grup_desp": str(dp.get("COD_GRUP_DESP") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for gf in sql.query("SELECT COD_GRP_FORNECEDOR, NOM_GRP_FORNECEDOR FROM GRUPO_FORNECEDORES WITH (NOLOCK) ORDER BY COD_GRP_FORNECEDOR"):
+                cpagar_options["grupos_fornecedor"].append({
+                    "cod_grp_fornecedor": str(gf.get("COD_GRP_FORNECEDOR") or "").strip(),
+                    "nom_grp_fornecedor": str(gf.get("NOM_GRP_FORNECEDOR") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for fn in sql.query("""
+                SELECT TOP 50 COD_GRP_FORNECEDOR, COD_FORNECEDOR, NOM_FORNECEDOR, NOM_FANTASIA
+                FROM FORNECEDORES_GERAL WITH (NOLOCK)
+                WHERE NOM_FORNECEDOR LIKE '%TARIFA%'
+                   OR NOM_FORNECEDOR LIKE '%BANCO%'
+                   OR NOM_FORNECEDOR LIKE '%CORA%'
+                   OR NOM_FANTASIA LIKE '%TARIFA%'
+                   OR NOM_FANTASIA LIKE '%BANCO%'
+                   OR NOM_FANTASIA LIKE '%CORA%'
+                ORDER BY COD_FORNECEDOR
+            """):
+                cpagar_options["fornecedores_sugeridos"].append({
+                    "cod_grp_fornecedor": str(fn.get("COD_GRP_FORNECEDOR") or "").strip(),
+                    "cod_fornecedor": str(fn.get("COD_FORNECEDOR") or "").strip(),
+                    "nom_fornecedor": str(fn.get("NOM_FORNECEDOR") or "").strip(),
+                    "nom_fantasia": str(fn.get("NOM_FANTASIA") or "").strip(),
+                })
+        except Exception:
+            pass
+        try:
+            for pr in sql.query("""
+                SELECT TOP 5
+                    cp.COD_GRP_FORNECEDOR,
+                    cp.COD_FORNECEDOR,
+                    fg.NOM_FORNECEDOR,
+                    cp.COD_DEPARTAMENTO,
+                    cp.COD_CENTRO_CUSTO,
+                    cp.COD_GRUP_DESP,
+                    cp.COD_DESPESA,
+                    dg.NOM_DESPESA,
+                    ISNULL(cp.COD_FORMA_BAIXA, cp.COD_FORMA) AS COD_FORMA_USADA,
+                    cp.VLR_LANCTO_CPAGAR,
+                    MAX(cp.NRO_LANCTO_CPAGAR) AS ULT_LANCTO
+                FROM LANCTOS_CPAGAR_GERAL cp WITH (NOLOCK)
+                LEFT JOIN FORNECEDORES_GERAL fg WITH (NOLOCK)
+                    ON fg.COD_EMPRESA = cp.COD_EMPRESA
+                   AND fg.COD_FILIAL = cp.COD_FILIAL
+                   AND fg.COD_FORNECEDOR = cp.COD_FORNECEDOR
+                LEFT JOIN DESPESAS_GERAL dg WITH (NOLOCK)
+                    ON dg.COD_DESPESA = cp.COD_DESPESA
+                WHERE cp.OBS_CPAGAR LIKE '%TARIFA%'
+                   OR dg.NOM_DESPESA LIKE '%TARIFA%'
+                   OR dg.NOM_DESPESA LIKE '%BANC%'
+                GROUP BY
+                    cp.COD_GRP_FORNECEDOR,
+                    cp.COD_FORNECEDOR,
+                    fg.NOM_FORNECEDOR,
+                    cp.COD_DEPARTAMENTO,
+                    cp.COD_CENTRO_CUSTO,
+                    cp.COD_GRUP_DESP,
+                    cp.COD_DESPESA,
+                    dg.NOM_DESPESA,
+                    ISNULL(cp.COD_FORMA_BAIXA, cp.COD_FORMA),
+                    cp.VLR_LANCTO_CPAGAR
+                ORDER BY ULT_LANCTO DESC
+            """):
+                cpagar_options["recent_tariff_presets"].append({
+                    "cod_grp_fornecedor": str(pr.get("COD_GRP_FORNECEDOR") or "").strip(),
+                    "cod_fornecedor": str(pr.get("COD_FORNECEDOR") or "").strip(),
+                    "nom_fornecedor": str(pr.get("NOM_FORNECEDOR") or "").strip(),
+                    "cod_departamento": str(pr.get("COD_DEPARTAMENTO") or "").strip(),
+                    "cod_centro_custo": str(pr.get("COD_CENTRO_CUSTO") or "").strip(),
+                    "cod_grup_desp": str(pr.get("COD_GRUP_DESP") or "").strip(),
+                    "cod_despesa": str(pr.get("COD_DESPESA") or "").strip(),
+                    "nom_despesa": str(pr.get("NOM_DESPESA") or "").strip(),
+                    "cod_forma": str(pr.get("COD_FORMA_USADA") or "").strip(),
+                    "vlr_tarifa": float(pr.get("VLR_LANCTO_CPAGAR") or 0),
+                })
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("[Cora] Falha ao consultar contas/formas no Horus SQL company=%s: %s", company_id, e)
         raise HTTPException(
@@ -389,6 +529,7 @@ def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), 
     return {
         "bank_accounts": bank_accounts,
         "payment_forms": payment_forms,
+        "cpagar_options": cpagar_options,
     }
 
 
@@ -414,6 +555,14 @@ class CoraConfigPayload(BaseModel):
     horus_nro_carteira: Optional[str] = Field(None, max_length=20)
     horus_cod_forma: Optional[str] = Field(None, max_length=20)
     horus_tarifa_boleto: Optional[float] = Field(None, ge=0, le=99999)
+    horus_cpagar_tarifa_enabled: Optional[bool] = None
+    horus_cp_cod_grp_fornecedor: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_fornecedor: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_departamento: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_centro_custo: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_grup_desp: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_despesa: Optional[str] = Field(None, max_length=20)
+    horus_cp_cod_forma: Optional[str] = Field(None, max_length=20)
 
     @field_validator("active_environment")
     @classmethod
@@ -476,7 +625,20 @@ def update_cora_config(
             raise HTTPException(status_code=400, detail="Conta bancária do Cronuz inválida para esta empresa.")
 
     # Sanitiza campos textuais do Horus
-    for h_str_field in ("horus_cod_banco", "horus_cod_agencia", "horus_cod_contac", "horus_nro_carteira", "horus_cod_forma"):
+    for h_str_field in (
+        "horus_cod_banco",
+        "horus_cod_agencia",
+        "horus_cod_contac",
+        "horus_nro_carteira",
+        "horus_cod_forma",
+        "horus_cp_cod_grp_fornecedor",
+        "horus_cp_cod_fornecedor",
+        "horus_cp_cod_departamento",
+        "horus_cp_cod_centro_custo",
+        "horus_cp_cod_grup_desp",
+        "horus_cp_cod_despesa",
+        "horus_cp_cod_forma",
+    ):
         if h_str_field in data:
             val = (data[h_str_field] or "").strip()
             data[h_str_field] = val or None
@@ -499,6 +661,34 @@ def update_cora_config(
             raise HTTPException(
                 status_code=400,
                 detail="Informe os códigos obrigatórios do Horus (Código do Banco, Código da Agência e Código da Conta Corrente) antes de ativar a baixa automática no Horus ERP.",
+            )
+
+    next_cpagar_tarifa = data.get("horus_cpagar_tarifa_enabled", bool(getattr(config, "horus_cpagar_tarifa_enabled", False)))
+    if next_cpagar_tarifa:
+        eff_tarifa = data.get("horus_tarifa_boleto", getattr(config, "horus_tarifa_boleto", None))
+        if not eff_tarifa or float(eff_tarifa) <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Informe um valor maior que R$ 0,00 no campo 'Tarifa do Boleto (VLR_TARIF_BOL)' para ativar o lançamento automático da taxa no Contas a Pagar do Horus.",
+            )
+        req_cp_fields = [
+            ("horus_cp_cod_grp_fornecedor", "Grupo de Fornecedor (COD_GRP_FORNECEDOR)"),
+            ("horus_cp_cod_fornecedor", "Fornecedor da Tarifa (COD_FORNECEDOR)"),
+            ("horus_cp_cod_departamento", "Departamento (COD_DEPARTAMENTO)"),
+            ("horus_cp_cod_centro_custo", "Centro de Custo (COD_CENTRO_CUSTO)"),
+            ("horus_cp_cod_grup_desp", "Grupo de Despesa (COD_GRUP_DESP)"),
+            ("horus_cp_cod_despesa", "Despesa (COD_DESPESA)"),
+            ("horus_cp_cod_forma", "Forma de Baixa do Contas a Pagar (COD_FORMA_BAIXA)"),
+        ]
+        missing_cp = [
+            label
+            for field_key, label in req_cp_fields
+            if not (data.get(field_key, getattr(config, field_key, None)) or "").strip().isdigit()
+        ]
+        if missing_cp:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Para lançar e baixar a tarifa do boleto no Contas a Pagar do Horus, preencha com códigos numéricos: {', '.join(missing_cp)}.",
             )
 
     for field in ("fine_rate", "interest_rate", "discount_rate", "horus_tarifa_boleto"):

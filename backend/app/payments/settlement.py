@@ -146,11 +146,214 @@ def _settle_cronuz_native(db: Session, charge: PayCharge, config: CoraConfig) ->
     logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
 
 
+def _settle_horus_cpagar_tarifa(
+    db: Session,
+    sql,
+    charge: PayCharge,
+    config: CoraConfig,
+    *,
+    cod_empresa: int,
+    cod_filial: int,
+    nro_lancto_creceber: int,
+    cod_parcela: int,
+    cod_banco: int,
+    cod_agencia: int,
+    cod_contac: int,
+    tarifa_val: Decimal,
+    paid_date_iso: str,
+) -> Optional[int]:
+    """
+    Lança e baixa automaticamente a tarifa do boleto no Contas a Pagar do Horus (`dbo.LANCTOS_CPAGAR_GERAL`)
+    com a mesma data da movimentação (`paid_date_iso`).
+
+    Como a trigger nativa `TRG_IMP_LANCTO_CPAGAR` do Horus é `FOR UPDATE` (`IF UPDATE(STA_LANCTO_CPAGAR)`),
+    executamos em 2 passos atômicos:
+      1) `INSERT INTO LANCTOS_CPAGAR_GERAL` com `STA_LANCTO_CPAGAR = 'AB'`;
+      2) `UPDATE LANCTOS_CPAGAR_GERAL SET STA_LANCTO_CPAGAR = 'PG', ...`
+    Isso faz o próprio Horus inserir o débito correspondente (`STA_LANCTO = 'S'`, `STA_RASTREIO = 'CAP'`,
+    `COD_TPOLAN = 5 - CONTAS A PAGAR`, `STA_FECHADO = 'N'`) na tabela `BLANCTOS` para o Fechamento Bancário.
+    """
+    if not getattr(config, "horus_cpagar_tarifa_enabled", False):
+        return None
+    if _already_settled(db, charge.id, "horus_cpagar_tarifa_settled"):
+        return None
+    if tarifa_val is None or tarifa_val <= Decimal("0.00"):
+        return None
+
+    cp_grp_forn = (getattr(config, "horus_cp_cod_grp_fornecedor", None) or "").strip()
+    cp_forn = (getattr(config, "horus_cp_cod_fornecedor", None) or "").strip()
+    cp_depto = (getattr(config, "horus_cp_cod_departamento", None) or "").strip()
+    cp_ccusto = (getattr(config, "horus_cp_cod_centro_custo", None) or "").strip()
+    cp_grp_desp = (getattr(config, "horus_cp_cod_grup_desp", None) or "").strip()
+    cp_desp = (getattr(config, "horus_cp_cod_despesa", None) or "").strip()
+    cp_forma = (getattr(config, "horus_cp_cod_forma", None) or "").strip()
+
+    if not all(x.isdigit() for x in (cp_grp_forn, cp_forn, cp_depto, cp_ccusto, cp_grp_desp, cp_desp, cp_forma)):
+        _record_settlement_event(
+            db,
+            charge,
+            "horus_cpagar_tarifa_error",
+            "Tarifa Contas a Pagar não lançada: preencha todos os códigos numéricos de Contas a Pagar nas configurações do Cora.",
+        )
+        db.commit()
+        return None
+
+    cod_grp_fornecedor = int(cp_grp_forn)
+    cod_fornecedor = int(cp_forn)
+    cod_departamento = int(cp_depto)
+    cod_centro_custo = int(cp_ccusto)
+    cod_grup_desp = int(cp_grp_desp)
+    cod_despesa = int(cp_desp)
+    cod_forma_cp = int(cp_forma)
+
+    # Regra 11 (AGENTS.md): Todos os campos textuais enviados ao Horus ERP obrigatoriamente em UPPERCASE
+    nro_duplicata = str(charge.invoice_number or nro_lancto_creceber).strip().upper()[:12]
+    obs_cpagar = (
+        f"TARIFA BOLETO CORA #{charge.id} - NF {charge.invoice_number or '-'} - LANCTO CR #{nro_lancto_creceber}/{cod_parcela}"
+    ).strip().upper()[:500]
+
+    # Idempotência diretamente no SQL Server para evitar duplicidade caso o evento não tenha sido gravado
+    existing = sql.query(
+        """
+        SELECT TOP 1 NRO_LANCTO_CPAGAR, STA_LANCTO_CPAGAR
+          FROM LANCTOS_CPAGAR_GERAL WITH (NOLOCK)
+         WHERE COD_EMPRESA = %s
+           AND COD_FILIAL = %s
+           AND OBS_CPAGAR LIKE %s
+         ORDER BY NRO_LANCTO_CPAGAR DESC
+        """,
+        (cod_empresa, cod_filial, f"%CORA #{charge.id}%"),
+        max_rows=1,
+    )
+
+    if existing:
+        nro_cpagar = int(existing[0]["NRO_LANCTO_CPAGAR"])
+        sta_atual = str(existing[0].get("STA_LANCTO_CPAGAR") or "").strip().upper()
+    else:
+        next_rows = sql.query(
+            """
+            SELECT ISNULL(MAX(NRO_LANCTO_CPAGAR), 0) + 1 AS NEXT_NRO
+              FROM LANCTOS_CPAGAR_GERAL WITH (UPDLOCK, HOLDLOCK)
+             WHERE COD_EMPRESA = %s
+               AND COD_FILIAL = %s
+            """,
+            (cod_empresa, cod_filial),
+            max_rows=1,
+        )
+        nro_cpagar = int((next_rows[0] if next_rows else {}).get("NEXT_NRO") or 1)
+        sta_atual = "AB"
+
+        # Passo 1: Insere o título no Contas a Pagar como 'AB' (COD_SEQ é IDENTITY(1,1))
+        sql.execute(
+            """
+            INSERT INTO LANCTOS_CPAGAR_GERAL (
+                COD_EMPRESA,
+                COD_FILIAL,
+                NRO_LANCTO_CPAGAR,
+                COD_GRP_FORNECEDOR,
+                COD_FORNECEDOR,
+                COD_DEPARTAMENTO,
+                COD_CENTRO_CUSTO,
+                COD_GRUP_DESP,
+                COD_DESPESA,
+                COD_BANCO,
+                COD_FORMA,
+                NRO_DUPLICATA,
+                DAT_EMISS_CPAGAR,
+                DAT_VENC_CPAGAR,
+                VLR_DESP_CARTORIO,
+                VLR_LANCTO_CPAGAR,
+                VLR_LANCTO_DEB_CRED,
+                VLR_LANCTO_TOTAL,
+                OBS_CPAGAR,
+                STA_LANCTO_CPAGAR,
+                NOM_USUARIO,
+                DAT_ULT_ATL,
+                STA_APROVACAO,
+                USU_APROVACAO,
+                STA_GER_BORDERO,
+                CODIGO_BARRAS,
+                TPO_CODBARRAS,
+                FINALIDADE_PAGTO,
+                LINHA_DIGITAVEL
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, 0, %s, 0, %s, %s, 'AB', 'CRONUZ', GETDATE(),
+                'S', 'CRONUZ', 'N', '', 'A', '00000', ''
+            )
+            """,
+            (
+                cod_empresa,
+                cod_filial,
+                nro_cpagar,
+                cod_grp_fornecedor,
+                cod_fornecedor,
+                cod_departamento,
+                cod_centro_custo,
+                cod_grup_desp,
+                cod_despesa,
+                cod_banco,
+                cod_forma_cp,
+                nro_duplicata,
+                paid_date_iso,
+                paid_date_iso,
+                float(tarifa_val),
+                float(tarifa_val),
+                obs_cpagar,
+            ),
+        )
+
+    # Passo 2: Atualiza STA_LANCTO_CPAGAR de 'AB' para 'PG', acionando TRG_IMP_LANCTO_CPAGAR -> BLANCTOS (Débito)
+    if sta_atual != "PG":
+        sql.execute(
+            """
+            UPDATE LANCTOS_CPAGAR_GERAL
+               SET STA_LANCTO_CPAGAR = 'PG',
+                   VLR_LANCTO_PAGO = %s,
+                   DAT_PAGTO_CPAGAR = %s,
+                   COD_EMPRESA_PAGTO = %s,
+                   COD_FILIAL_PAGTO = %s,
+                   COD_BANCO_PAGTO = %s,
+                   COD_AGENCIA_PAGTO = %s,
+                   COD_CONTAC_PAGTO = %s,
+                   COD_FORMA_BAIXA = %s,
+                   DAT_ULT_ATL = GETDATE()
+             WHERE COD_EMPRESA = %s
+               AND COD_FILIAL = %s
+               AND NRO_LANCTO_CPAGAR = %s
+            """,
+            (
+                float(tarifa_val),
+                paid_date_iso,
+                cod_empresa,
+                cod_filial,
+                cod_banco,
+                cod_agencia,
+                cod_contac,
+                cod_forma_cp,
+                cod_empresa,
+                cod_filial,
+                nro_cpagar,
+            ),
+        )
+
+    msg_cp = (
+        f"Tarifa do boleto lançada e baixada no Contas a Pagar Horus: CAP #{nro_cpagar} "
+        f"(R$ {tarifa_val:.2f} em {paid_date_iso}) · Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS débito aberto)."
+    )
+    _record_settlement_event(db, charge, "horus_cpagar_tarifa_settled", msg_cp)
+    db.commit()
+    logger.info("[Cora Settlement] %s company=%s charge=%s", msg_cp, charge.company_id, charge.id)
+    return nro_cpagar
+
+
 def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> None:
     """
     Baixa automática do título no Horus ERP (`LANCTOS_CRECEBERA` + `LANCTOS_CRECEBER`)
     e geração automática do lançamento bancário em aberto (`BLANCTOS.STA_FECHADO = 'N'`)
     via trigger nativa `TRG_IMP_LANCTO_CRECEBER`.
+    Se `horus_cpagar_tarifa_enabled` estiver ativo e `horus_tarifa_boleto > 0`, também lança e baixa
+    automaticamente a despesa da tarifa em `LANCTOS_CPAGAR_GERAL` (gerando o débito em `BLANCTOS`).
 
     TRAVA DE SEGURANÇA E DEPENDÊNCIA:
     Só executa se Cora estiver ativo E Horus SQL estiver ativo E horus_baixa_enabled estiver ativo
@@ -158,7 +361,12 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
     """
     if not getattr(config, "horus_baixa_enabled", False):
         return
-    if _already_settled(db, charge.id, "horus_settled"):
+
+    creceber_already_settled = _already_settled(db, charge.id, "horus_settled")
+    cpagar_tarifa_enabled = bool(getattr(config, "horus_cpagar_tarifa_enabled", False))
+    cpagar_already_settled = _already_settled(db, charge.id, "horus_cpagar_tarifa_settled")
+
+    if creceber_already_settled and (not cpagar_tarifa_enabled or cpagar_already_settled):
         return
 
     # 1. Verifica dependência dupla (Cora ativo + Horus SQL ativo para o seller)
@@ -205,7 +413,7 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
 
     try:
         sql = HorusSQLClient(db, charge.company_id)
-        # Localiza o título aberto em LANCTOS_CRECEBERA
+        # Localiza o título em LANCTOS_CRECEBERA
         rows = sql.query(
             """
             SELECT
@@ -238,122 +446,141 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
             return
 
         open_rows = [r for r in rows if str(r.get("STA_LANCTO_CRECEBER") or "").strip().upper() == "AB"]
-        if not open_rows:
-            _record_settlement_event(
-                db,
-                charge,
-                "horus_settled",
-                f"Título #{nro_lancto} já constava como liquidado no Horus ERP.",
-            )
-            db.commit()
-            return
-
-        target = open_rows[0]
+        target = open_rows[0] if open_rows else rows[0]
         cod_empresa = int(target["COD_EMPRESA"])
         cod_filial = int(target["COD_FILIAL"])
         cod_parcela = int(target["COD_PARCELA"])
-        orig_val = Decimal(str(target.get("VLR_LANCTO_CRECEBER") or "0.00")).quantize(Decimal("0.01"))
-        correcao_val = (paid_val - orig_val) if paid_val > orig_val else Decimal("0.00")
-        eff_cod_forma = cod_forma if cod_forma is not None else int(target.get("COD_FORMA") or 1)
-        eff_carteira = (nro_carteira_str or str(target.get("NRO_CARTEIRA") or "").strip())[:10] or None
 
-        # 1) Atualiza LANCTOS_CRECEBERA (somente se STA_LANCTO_CRECEBER = 'AB')
-        # Isso aciona automaticamente a trigger TRG_IMP_LANCTO_CRECEBER que grava em BLANCTOS (STA_FECHADO = 'N')
-        sql.execute(
-            """
-            UPDATE LANCTOS_CRECEBERA
-               SET STA_LANCTO_CRECEBER = 'PG',
-                   COD_SITUACAO = 2,
-                   VLR_LANCTO_PAGO = %s,
-                   VLR_LANCTO_RECEBIDO = %s,
-                   VLR_LANCTO_CORRECAO = %s,
-                   DAT_PAGTO_CRECEBER = %s,
-                   DAT_PAGTO_CONTA = %s,
-                   DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                   COD_BANCO = %s,
-                   COD_AGENCIA = %s,
-                   COD_CONTAC = %s,
-                   NRO_CARTEIRA = %s,
-                   COD_FORMA = %s,
-                   VLR_TARIF_BOL = %s,
-                   PROC_RETORNO = 'S',
-                   BAIXA_RETORNO = 'S'
-             WHERE COD_EMPRESA = %s
-               AND COD_FILIAL = %s
-               AND NRO_LANCTO_CRECEBER = %s
-               AND COD_PARCELA = %s
-               AND STA_LANCTO_CRECEBER = 'AB'
-            """,
-            (
-                float(paid_val),
-                float(paid_val),
-                float(correcao_val),
-                paid_date_iso,
-                paid_date_iso,
-                cod_banco,
-                cod_agencia,
-                cod_contac,
-                eff_carteira,
-                eff_cod_forma,
-                float(tarifa_val),
-                cod_empresa,
-                cod_filial,
-                nro_lancto,
-                cod_parcela,
-            ),
-        )
+        if not creceber_already_settled:
+            if not open_rows:
+                _record_settlement_event(
+                    db,
+                    charge,
+                    "horus_settled",
+                    f"Título #{nro_lancto} já constava como liquidado no Horus ERP.",
+                )
+                db.commit()
+            else:
+                orig_val = Decimal(str(target.get("VLR_LANCTO_CRECEBER") or "0.00")).quantize(Decimal("0.01"))
+                correcao_val = (paid_val - orig_val) if paid_val > orig_val else Decimal("0.00")
+                eff_cod_forma = cod_forma if cod_forma is not None else int(target.get("COD_FORMA") or 1)
+                eff_carteira = (nro_carteira_str or str(target.get("NRO_CARTEIRA") or "").strip())[:10] or None
 
-        # 2) Atualiza o cabeçalho LANCTOS_CRECEBER caso não restem sub-parcelas em aberto
-        rem_rows = sql.query(
-            """
-            SELECT COUNT(1) AS CNT
-              FROM LANCTOS_CRECEBERA WITH (NOLOCK)
-             WHERE COD_EMPRESA = %s
-               AND COD_FILIAL = %s
-               AND NRO_LANCTO_CRECEBER = %s
-               AND STA_LANCTO_CRECEBER = 'AB'
-            """,
-            (cod_empresa, cod_filial, nro_lancto),
-            max_rows=1,
-        )
-        rem = rem_rows[0] if rem_rows else {}
-        if int((rem or {}).get("CNT") or 0) == 0:
-            sql.execute(
-                """
-                UPDATE LANCTOS_CRECEBER
-                   SET STA_LANCTO_CRECEBER = 'PG',
-                       VLR_LANCTO_PAGO = %s,
-                       VLR_LANCTO_RECEBIDO = %s,
-                       VLR_LANCTO_CORRECAO = %s,
-                       DAT_PAGTO_CRECEBER = %s,
-                       DAT_PAGTO_CONTA = %s,
-                       DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                       VLR_TARIF_BOL = %s
-                 WHERE COD_EMPRESA = %s
-                   AND COD_FILIAL = %s
-                   AND NRO_LANCTO_CRECEBER = %s
-                   AND STA_LANCTO_CRECEBER = 'AB'
-                """,
-                (
-                    float(paid_val),
-                    float(paid_val),
-                    float(correcao_val),
-                    paid_date_iso,
-                    paid_date_iso,
-                    float(tarifa_val),
-                    cod_empresa,
-                    cod_filial,
-                    nro_lancto,
-                ),
+                # 1) Atualiza LANCTOS_CRECEBERA (somente se STA_LANCTO_CRECEBER = 'AB')
+                # Isso aciona automaticamente a trigger TRG_IMP_LANCTO_CRECEBER que grava em BLANCTOS (STA_FECHADO = 'N')
+                sql.execute(
+                    """
+                    UPDATE LANCTOS_CRECEBERA
+                       SET STA_LANCTO_CRECEBER = 'PG',
+                           COD_SITUACAO = 2,
+                           VLR_LANCTO_PAGO = %s,
+                           VLR_LANCTO_RECEBIDO = %s,
+                           VLR_LANCTO_CORRECAO = %s,
+                           DAT_PAGTO_CRECEBER = %s,
+                           DAT_PAGTO_CONTA = %s,
+                           DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                           COD_BANCO = %s,
+                           COD_AGENCIA = %s,
+                           COD_CONTAC = %s,
+                           NRO_CARTEIRA = %s,
+                           COD_FORMA = %s,
+                           VLR_TARIF_BOL = %s,
+                           PROC_RETORNO = 'S',
+                           BAIXA_RETORNO = 'S'
+                     WHERE COD_EMPRESA = %s
+                       AND COD_FILIAL = %s
+                       AND NRO_LANCTO_CRECEBER = %s
+                       AND COD_PARCELA = %s
+                       AND STA_LANCTO_CRECEBER = 'AB'
+                    """,
+                    (
+                        float(paid_val),
+                        float(paid_val),
+                        float(correcao_val),
+                        paid_date_iso,
+                        paid_date_iso,
+                        cod_banco,
+                        cod_agencia,
+                        cod_contac,
+                        eff_carteira,
+                        eff_cod_forma,
+                        float(tarifa_val),
+                        cod_empresa,
+                        cod_filial,
+                        nro_lancto,
+                        cod_parcela,
+                    ),
+                )
+
+                # 2) Atualiza o cabeçalho LANCTOS_CRECEBER caso não restem sub-parcelas em aberto
+                rem_rows = sql.query(
+                    """
+                    SELECT COUNT(1) AS CNT
+                      FROM LANCTOS_CRECEBERA WITH (NOLOCK)
+                     WHERE COD_EMPRESA = %s
+                       AND COD_FILIAL = %s
+                       AND NRO_LANCTO_CRECEBER = %s
+                       AND STA_LANCTO_CRECEBER = 'AB'
+                    """,
+                    (cod_empresa, cod_filial, nro_lancto),
+                    max_rows=1,
+                )
+                rem = rem_rows[0] if rem_rows else {}
+                if int((rem or {}).get("CNT") or 0) == 0:
+                    sql.execute(
+                        """
+                        UPDATE LANCTOS_CRECEBER
+                           SET STA_LANCTO_CRECEBER = 'PG',
+                               VLR_LANCTO_PAGO = %s,
+                               VLR_LANCTO_RECEBIDO = %s,
+                               VLR_LANCTO_CORRECAO = %s,
+                               DAT_PAGTO_CRECEBER = %s,
+                               DAT_PAGTO_CONTA = %s,
+                               DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                               VLR_TARIF_BOL = %s
+                         WHERE COD_EMPRESA = %s
+                           AND COD_FILIAL = %s
+                           AND NRO_LANCTO_CRECEBER = %s
+                           AND STA_LANCTO_CRECEBER = 'AB'
+                        """,
+                        (
+                            float(paid_val),
+                            float(paid_val),
+                            float(correcao_val),
+                            paid_date_iso,
+                            paid_date_iso,
+                            float(tarifa_val),
+                            cod_empresa,
+                            cod_filial,
+                            nro_lancto,
+                        ),
+                    )
+
+                msg = (
+                    f"Baixa Horus ERP concluída: Lanç. #{nro_lancto}/{cod_parcela} (R$ {paid_val:.2f}) "
+                    f"no Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS aberto para fechamento)."
+                )
+                _record_settlement_event(db, charge, "horus_settled", msg)
+                db.commit()
+                logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
+
+        # 3) Lança e baixa a Tarifa do Boleto no Contas a Pagar (LANCTOS_CPAGAR_GERAL -> BLANCTOS via TRG_IMP_LANCTO_CPAGAR)
+        if cpagar_tarifa_enabled and not cpagar_already_settled and tarifa_val > Decimal("0.00"):
+            _settle_horus_cpagar_tarifa(
+                db,
+                sql,
+                charge,
+                config,
+                cod_empresa=cod_empresa,
+                cod_filial=cod_filial,
+                nro_lancto_creceber=nro_lancto,
+                cod_parcela=cod_parcela,
+                cod_banco=cod_banco,
+                cod_agencia=cod_agencia,
+                cod_contac=cod_contac,
+                tarifa_val=tarifa_val,
+                paid_date_iso=paid_date_iso,
             )
-
-        msg = (
-            f"Baixa Horus ERP concluída: Lanç. #{nro_lancto}/{cod_parcela} (R$ {paid_val:.2f}) "
-            f"no Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS aberto para fechamento)."
-        )
-        _record_settlement_event(db, charge, "horus_settled", msg)
-        db.commit()
-        logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
 
     except Exception as e:
         db.rollback()

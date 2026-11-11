@@ -59,6 +59,7 @@ interface PaidChargeItem {
     message?: string | null;
     settled_at?: string | null;
     paid_detected_by?: string | null;
+    cpagar_tarifa_settled?: boolean;
   };
 }
 
@@ -429,9 +430,16 @@ export default function CoraMonitorPage() {
                       <td className="px-4 py-3">
                         {st === 'SETTLED_HORUS' && (
                           <div className="space-y-0.5">
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
-                              <CheckCircle2 className="h-3.5 w-3.5" /> Baixado no Horus ERP + BLANCTOS
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-bold text-emerald-700 dark:text-emerald-300">
+                                <CheckCircle2 className="h-3.5 w-3.5" /> Baixado no Horus ERP + BLANCTOS
+                              </span>
+                              {item.settlement.cpagar_tarifa_settled && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-pink-500/15 px-2 py-0.5 text-[10px] font-bold text-pink-700 dark:text-pink-300">
+                                  + Taxa CAP Baixada
+                                </span>
+                              )}
+                            </div>
                             <p className="text-[11px] text-slate-500 max-w-md">{item.settlement.message}</p>
                           </div>
                         )}
@@ -476,9 +484,23 @@ export default function CoraMonitorPage() {
                             Baixar Agora
                           </button>
                         ) : (
-                          <span className="text-[11px] font-mono text-slate-400">
-                            {fmtDateTime(item.settlement.settled_at)}
-                          </span>
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="text-[11px] font-mono text-slate-400">
+                              {fmtDateTime(item.settlement.settled_at)}
+                            </span>
+                            {st === 'SETTLED_HORUS' && !item.settlement.cpagar_tarifa_settled && (
+                              <button
+                                type="button"
+                                onClick={() => handleSettleCharge(item.id)}
+                                disabled={isBusy}
+                                title="Caso você tenha ativado a Taxa no Contas a Pagar após esta baixa, clique para lançar a tarifa no Horus."
+                                className="inline-flex items-center gap-1 rounded-md border border-pink-200 dark:border-pink-800 px-2 py-0.5 text-[10px] font-semibold text-pink-600 dark:text-pink-400 hover:bg-pink-50 dark:hover:bg-pink-950/30 transition-colors disabled:opacity-50"
+                              >
+                                {isBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
+                                Lançar Taxa CAP
+                              </button>
+                            )}
+                          </div>
                         )}
                       </td>
                     </tr>
