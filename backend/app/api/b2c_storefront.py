@@ -1,6 +1,8 @@
 import re
 import uuid
 import time
+import secrets
+import string
 import logging
 import threading
 from datetime import datetime, date, timezone
@@ -6298,8 +6300,11 @@ def submit_b2c_contact_message(
         raise HTTPException(status_code=400, detail="Preencha nome, e-mail e mensagem.")
 
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    contact_recipient = None
     if settings:
         current_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        footer_cfg = current_cfg.get("footer_info") if isinstance(current_cfg.get("footer_info"), dict) else {}
+        contact_recipient = (footer_cfg.get("contact_email") or "").strip().lower() or None
         msgs = current_cfg.get("contact_messages", [])
         if not isinstance(msgs, list):
             msgs = []
@@ -6316,6 +6321,41 @@ def submit_b2c_contact_message(
         settings.b2c_showcases_config = current_cfg
         flag_modified(settings, "b2c_showcases_config")
         db.commit()
+
+    smtp_cfg = _resolve_smtp_settings(db, company.id)
+    if smtp_cfg:
+        target_to = contact_recipient or smtp_cfg.smtp_from_email or smtp_cfg.smtp_username
+        if target_to and "@" in target_to:
+            try:
+                from app.core.email import send_smtp_email
+                store_name = company.name or "Loja B2C"
+                html_contact = (
+                    f"<div style='font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;border:1px solid #e2e8f0;border-radius:16px;background:#ffffff;color:#0f172a;'>"
+                    f"<h2 style='margin-top:0;font-size:18px;color:#0f172a;'>Nova Mensagem de Atendimento • {store_name}</h2>"
+                    f"<p style='font-size:13px;color:#475569;margin-bottom:14px;'>Um visitante enviou uma mensagem pelo formulário de atendimento da loja virtual:</p>"
+                    f"<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px;font-size:13px;line-height:1.6;'>"
+                    f"<div><strong>Nome:</strong> {data.name.strip()}</div>"
+                    f"<div><strong>E-mail:</strong> {data.email.strip()}</div>"
+                    f"<div><strong>Telefone / WhatsApp:</strong> {(data.phone or 'Não informado').strip()}</div>"
+                    f"<div><strong>Assunto:</strong> {(data.subject or 'Atendimento Loja Virtual').strip()}</div>"
+                    f"<hr style='border:0;border-top:1px solid #e2e8f0;margin:10px 0;'/>"
+                    f"<div style='white-space:pre-wrap;color:#1e293b;'>{data.message.strip()}</div>"
+                    f"</div></div>"
+                )
+                send_smtp_email(
+                    smtp_host=smtp_cfg.smtp_host,
+                    smtp_port=int(smtp_cfg.smtp_port or 587),
+                    smtp_username=smtp_cfg.smtp_username or "",
+                    smtp_password=smtp_cfg.smtp_password or "",
+                    smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username,
+                    to_email=target_to,
+                    subject=f"[Fale Conosco B2C] {(data.subject or 'Atendimento').strip()} - {data.name.strip()}",
+                    html_content=html_contact,
+                    use_ssl=bool(smtp_cfg.smtp_use_ssl),
+                    bcc_email=smtp_cfg.smtp_bcc_email,
+                )
+            except Exception as exc:
+                logger.warning(f"[B2C Contact] Falha ao enviar e-mail de contato: {exc}")
 
     return {
         "status": "OK",
@@ -7335,36 +7375,55 @@ def update_b2c_stock_notify_status(
     flag_modified(settings, "b2c_showcases_config")
     db.commit()
 
-    # Optional automatic email notification if status == NOTIFIED
-    if status.upper() == "NOTIFIED" and target_alert.get("email") and settings.smtp_host and settings.smtp_username and settings.smtp_password:
+    # Automatic email notification if status == NOTIFIED
+    if status.upper() == "NOTIFIED" and target_alert.get("email"):
+        smtp_cfg = _resolve_smtp_settings(db, cid)
+        if not smtp_cfg:
+            raise HTTPException(
+                status_code=400,
+                detail="Nenhum servidor SMTP configurado para enviar o e-mail de aviso ao cliente.",
+            )
         try:
             from app.core.email import send_smtp_email
             store_name = company.name if company else "Nossa Loja"
             prod_title = target_alert.get("product_name") or "Produto"
+            b2c_dom = (getattr(company, "b2c_custom_domain", None) or "").strip() if company else ""
+            if not b2c_dom:
+                slug = _slugify_store_name(store_name, cid)
+                b2c_dom = f"https://app.horusb2b.com.br/loja/{slug}"
+            elif not b2c_dom.startswith("http"):
+                b2c_dom = f"https://{b2c_dom}"
             html_body = f"""
             <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 16px;">
                 <h2 style="color: #0f172a; margin-top: 0;">Boas notícias! O item que você queria voltou ao estoque 🎉</h2>
                 <p style="color: #475569; font-size: 14px;">Olá, <strong>{target_alert.get('customer_name') or 'Cliente'}</strong>!</p>
-                <p style="color: #475569; font-size: 14px;">O livro <strong>{prod_title}</strong> (Cód: {target_alert.get('sku')}) já está disponível novamente em <strong>{store_name}</strong>.</p>
+                <p style="color: #475569; font-size: 14px;">O livro <strong>{prod_title}</strong> (ISBN/Cód: {target_alert.get('ean_gtin') or target_alert.get('sku')}) já está disponível novamente em <strong>{store_name}</strong>.</p>
+                <div style="margin: 22px 0; text-align: center;">
+                    <a href="{b2c_dom}" style="display: inline-block; background: #4f46e5; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 10px; font-weight: bold; font-size: 13px;">Acessar a Loja Agora</a>
+                </div>
                 <p style="color: #64748b; font-size: 12px; margin-top: 16px;">Acesse nossa loja virtual para garantir o seu exemplar antes que acabe!</p>
             </div>
             """
             send_smtp_email(
-                smtp_host=settings.smtp_host,
-                smtp_port=int(settings.smtp_port or 587),
-                smtp_username=settings.smtp_username,
-                smtp_password=settings.smtp_password,
-                smtp_from=settings.smtp_from_email or settings.smtp_username,
+                smtp_host=smtp_cfg.smtp_host,
+                smtp_port=int(smtp_cfg.smtp_port or 587),
+                smtp_username=smtp_cfg.smtp_username or "",
+                smtp_password=smtp_cfg.smtp_password or "",
+                smtp_from=smtp_cfg.smtp_from_email or smtp_cfg.smtp_username,
                 to_email=target_alert["email"],
                 subject=f"[{store_name}] {prod_title} voltou ao estoque!",
                 html_content=html_body,
-                use_ssl=bool(settings.smtp_use_ssl),
-                bcc_email=settings.smtp_bcc_email,
+                use_ssl=bool(smtp_cfg.smtp_use_ssl),
+                bcc_email=smtp_cfg.smtp_bcc_email,
             )
         except Exception as e:
             logger.warning(f"[B2C Stock Notify] Falha no disparo de e-mail Avise-me: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"O status foi salvo, mas o servidor SMTP recusou o envio para {target_alert.get('email')}: {e}",
+            )
 
-    return {"message": "Status do alerta Avise-me atualizado com sucesso!", "alert": target_alert}
+    return {"message": f"Cliente {target_alert.get('email')} notificado por e-mail com sucesso!", "alert": target_alert}
 
 
 def _uf_from_cep(cep_digits: str) -> str:
@@ -7906,10 +7965,10 @@ def forgot_b2c_customer_password(
     if not b2c_domain:
         slug = _slugify_store_name(store_name, data.company_id)
         tenant_base = "horusb2b.com.br" if getattr(company, "tenant_id", "") == "horus" else "cronuzb2b.com.br"
-        b2c_domain = f"b2c-{slug}.{tenant_base}"
-    if not b2c_domain.startswith("http"):
+        b2c_domain = f"https://app.{tenant_base}/loja/{slug}"
+    elif not b2c_domain.startswith("http"):
         b2c_domain = f"https://{b2c_domain}"
-    recovery_link = f"{b2c_domain.rstrip('/')}/recuperar-senha?id={raw_identifier}&token={recovery_code}"
+    recovery_link = f"{b2c_domain.rstrip('/')}/login?tab=recovery&id={raw_identifier}&token={recovery_code}"
 
     u_part, d_part = cust.email.split("@", 1) if "@" in cust.email else (cust.email, "")
     masked_email = f"{u_part[:2]}***@{d_part}" if d_part else cust.email
@@ -7954,6 +8013,10 @@ def forgot_b2c_customer_password(
             sent_via_smtp = True
         except Exception as e:
             logger.warning(f"[B2C Forgot Password] Erro ao enviar SMTP: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Não foi possível enviar o e-mail de recuperação de senha via SMTP ({smtp_cfg.smtp_host}): {e}",
+            )
 
     return {
         "status": "OK",

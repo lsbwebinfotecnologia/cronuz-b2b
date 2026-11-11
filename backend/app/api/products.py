@@ -257,13 +257,26 @@ def list_products(
     query = db.query(Product).filter(Product.company_id == target_company_id)
     
     if search:
+        import unicodedata
         from sqlalchemy import func, cast, String
         search_clean = search.strip()
         search_filter = f"%{search_clean}%"
+        search_norm = (
+            unicodedata.normalize("NFKD", search_clean)
+            .encode("ASCII", "ignore")
+            .decode("ASCII")
+            .lower()
+        )
+        search_norm_filter = f"%{search_norm}%" if search_norm else search_filter
+        accent_src = "áàâãäéèêëíìîïóòôõöúùûüçñýÿÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑÝ"
+        accent_dst = "aaaaaeeeeiiiiooooouuuucnyyaaaaaeeeeiiiiooooouuuucny"
         search_digits = "".join(ch for ch in search_clean if ch.isdigit() or ch.upper() == "X")
         digits_filter = f"%{search_digits}%" if len(search_digits) >= 4 else search_filter
         query = query.filter(
-            (func.unaccent(Product.name).ilike(func.unaccent(search_filter))) |
+            (Product.name.ilike(search_filter)) |
+            (func.translate(func.lower(Product.name), accent_src, accent_dst).like(search_norm_filter)) |
+            (Product.brand.ilike(search_filter)) |
+            (Product.model.ilike(search_filter)) |
             (Product.sku.ilike(search_filter)) |
             (Product.ean_gtin.ilike(search_filter)) |
             (Product.ean_gtin.ilike(digits_filter)) |

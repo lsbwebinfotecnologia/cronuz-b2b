@@ -114,7 +114,8 @@ class POSSale(Base):
     client_sale_uuid = Column(String(64), unique=True, index=True, nullable=False)  # Chave de idempotência gerada no frontend
     sale_number = Column(String(50), nullable=False, index=True)
 
-    # Identificação do consumidor / cliente
+    # Identificação do consumidor / cliente e tipo de venda (CUPOM ou NFE)
+    sale_type = Column(String(20), default="CUPOM", nullable=False)
     customer_name = Column(String(255), default="Consumidor Final", nullable=False)
     customer_document = Column(String(50), nullable=True)
     customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True)

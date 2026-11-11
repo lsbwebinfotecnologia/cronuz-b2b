@@ -173,6 +173,7 @@ export default function POSSalesHistoryModal({
                     session_id: srv.session_id,
                     customer_name: srv.customer_name || 'Consumidor Final',
                     customer_document: srv.customer_document || '',
+                    sale_type: ((srv.sale_type || 'CUPOM').toUpperCase() === 'NFE' ? 'NFE' : 'CUPOM') as PDVPendingSaleRecord['sale_type'],
                     payment_method: (srv.payment_method || 'DINHEIRO') as PDVPendingSaleRecord['payment_method'],
                     payment_details: srv.payment_details || undefined,
                     subtotal: Number(srv.subtotal || srv.total_amount || 0),
@@ -600,6 +601,13 @@ export default function POSSalesHistoryModal({
                           </span>
                           <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-0.5 rounded-full font-medium text-slate-600 dark:text-slate-300">
                             {s.payment_method}
+                          </span>
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${
+                            (s.sale_type || 'CUPOM') === 'NFE'
+                              ? 'bg-indigo-100 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300'
+                              : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                          }`}>
+                            {(s.sale_type || 'CUPOM') === 'NFE' ? 'NF-e' : 'Cupom'}
                           </span>
                         </div>
 

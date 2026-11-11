@@ -40,7 +40,7 @@ export default function POSReceiptModal({
           </div>
           <h2 className="text-xl font-black">Venda Finalizada!</h2>
           <p className="text-xs text-emerald-100 font-medium mt-0.5">
-            {sale.sale_number} • {sale.payment_method}
+            {sale.sale_number} • {sale.sale_type === 'NFE' ? 'NF-e' : 'Cupom'} • {sale.payment_method}
           </p>
           {isCustomerPinned && (
             <span className="mt-2 text-[10px] font-bold uppercase tracking-wider bg-white/20 px-2.5 py-0.5 rounded-full text-white">
@@ -54,7 +54,7 @@ export default function POSReceiptModal({
           <div className="text-center border-b border-dashed border-slate-300 dark:border-slate-700 pb-3">
             <p className="font-bold text-sm">CRONUZ B2B — COMPROVANTE PDV</p>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
-              Data: {new Date(sale.sold_at).toLocaleString('pt-BR')}
+              Data: {new Date(sale.sold_at).toLocaleString('pt-BR')} • Tipo: {sale.sale_type === 'NFE' ? 'NF-e' : 'Cupom'}
             </p>
             <p className="text-[11px] text-slate-500 dark:text-slate-400">
               Cliente: {sale.customer_name} {sale.customer_document ? `(${sale.customer_document})` : ''}

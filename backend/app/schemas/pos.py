@@ -33,6 +33,7 @@ class POSSaleCancelRequest(BaseModel):
 
 class POSSessionResponse(BaseModel):
     id: int
+    company_id: int
     code: str
     title: str
     status: str
@@ -142,6 +143,7 @@ class POSSaleCreate(BaseModel):
     client_sale_uuid: str
     sale_number: Optional[str] = None
     session_id: Optional[int] = None
+    sale_type: Optional[str] = "CUPOM"
     customer_name: Optional[str] = "Consumidor Final"
     customer_document: Optional[str] = None
     customer_id: Optional[int] = None
@@ -163,6 +165,11 @@ class POSSaleCreate(BaseModel):
         if not isinstance(data, dict):
             return data
         d = dict(data)
+        raw_sale_type = str(d.get("sale_type") or "CUPOM").strip().upper()
+        if raw_sale_type in ("NFE", "NF-E", "NF", "NOTA FISCAL"):
+            d["sale_type"] = "NFE"
+        else:
+            d["sale_type"] = "CUPOM"
         raw_st = str(d.get("sale_status") or d.get("status") or "").strip().upper()
         if raw_st in ("CANCELLED", "CANCELED", "CANCELADA"):
             d["sale_status"] = "CANCELLED"

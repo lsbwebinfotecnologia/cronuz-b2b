@@ -19,6 +19,8 @@ export interface PDVCatalogItem {
   product_id?: number;
   cover_url?: string;
   source?: string;
+  company_id?: number;
+  session_id?: number;
 }
 
 export interface PDVSaleItemRecord {
@@ -37,7 +39,9 @@ export interface PDVSaleItemRecord {
 export interface PDVPendingSaleRecord {
   client_sale_uuid: string;
   sale_number: string;
+  company_id?: number;
   session_id?: number;
+  sale_type?: 'CUPOM' | 'NFE';
   customer_name: string;
   customer_document?: string;
   customer_id?: number;
@@ -112,11 +116,22 @@ export interface SaveCatalogResult {
   zeroPriceCount: number;
 }
 
-export async function saveCatalogItems(items: PDVCatalogItem[]): Promise<SaveCatalogResult> {
+export async function saveCatalogItems(
+  items: PDVCatalogItem[],
+  context?: { company_id?: number; session_id?: number }
+): Promise<SaveCatalogResult> {
   const db = await openPdvDb();
   return new Promise((resolve, reject) => {
-    const tx = db.transaction('pdv_catalog', 'readwrite');
+    const tx = db.transaction(['pdv_catalog', 'pdv_settings'], 'readwrite');
     const store = tx.objectStore('pdv_catalog');
+    const settingsStore = tx.objectStore('pdv_settings');
+
+    if (context?.company_id) {
+      settingsStore.put({ key: 'catalog_company_id', value: Number(context.company_id) });
+    }
+    if (context?.session_id !== undefined) {
+      settingsStore.put({ key: 'catalog_session_id', value: Number(context.session_id) });
+    }
 
     const seen = new Set<string>();
     let savedCount = 0;
@@ -151,6 +166,8 @@ export async function saveCatalogItems(items: PDVCatalogItem[]): Promise<SaveCat
         horus_item_code: it.horus_item_code ? String(it.horus_item_code) : '',
         product_id: it.product_id,
         source: it.source || 'GENERAL',
+        company_id: context?.company_id ?? it.company_id,
+        session_id: context?.session_id ?? it.session_id,
       });
       savedCount++;
     }
@@ -158,6 +175,79 @@ export async function saveCatalogItems(items: PDVCatalogItem[]): Promise<SaveCat
     tx.oncomplete = () => resolve({ savedCount, duplicateCount, zeroPriceCount });
     tx.onerror = () => reject(tx.error);
   });
+}
+
+export async function enforceSellerSessionAndCatalogIsolation(
+  currentCompanyId: number,
+  validSellerSessionIds?: number[]
+): Promise<{ purgedSession: boolean; purgedCatalog: boolean }> {
+  let purgedSession = false;
+  let purgedCatalog = false;
+  if (!currentCompanyId || Number(currentCompanyId) <= 0) {
+    return { purgedSession, purgedCatalog };
+  }
+
+  try {
+    const activeSession = await getPdvSetting<any>('activeSession');
+    const catalogCompanyId = await getPdvSetting<number>('catalog_company_id');
+
+    let isForeignSession = false;
+    if (activeSession) {
+      if (activeSession.company_id && Number(activeSession.company_id) !== Number(currentCompanyId)) {
+        isForeignSession = true;
+      } else if (
+        Array.isArray(validSellerSessionIds) &&
+        activeSession.id &&
+        !validSellerSessionIds.includes(Number(activeSession.id))
+      ) {
+        isForeignSession = true;
+      }
+    }
+
+    const isForeignCatalogOwner =
+      catalogCompanyId !== null &&
+      catalogCompanyId !== undefined &&
+      Number(catalogCompanyId) !== Number(currentCompanyId);
+
+    if (isForeignSession) {
+      await setPdvSetting('activeSession', null);
+      purgedSession = true;
+    }
+
+    if (isForeignSession || isForeignCatalogOwner) {
+      await clearCatalog();
+      await setPdvSetting('catalog_company_id', Number(currentCompanyId));
+      await setPdvSetting('catalog_session_id', null);
+      purgedCatalog = true;
+      return { purgedSession, purgedCatalog };
+    }
+
+    // Verifica também se há itens órfãos ou de outro seller dentro de pdv_catalog
+    const db = await openPdvDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction('pdv_catalog', 'readwrite');
+      const store = tx.objectStore('pdv_catalog');
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const allItems: PDVCatalogItem[] = req.result || [];
+        const hasForeignItems = allItems.some(
+          (it) => it.company_id !== undefined && Number(it.company_id) !== Number(currentCompanyId)
+        );
+        if (hasForeignItems) {
+          store.clear();
+          purgedCatalog = true;
+        }
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+
+    await setPdvSetting('catalog_company_id', Number(currentCompanyId));
+  } catch {
+    // Ignora falhas de IndexedDB em modo privado
+  }
+
+  return { purgedSession, purgedCatalog };
 }
 
 export async function clearCatalog(): Promise<void> {

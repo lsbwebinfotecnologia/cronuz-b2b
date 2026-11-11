@@ -1533,9 +1533,20 @@ async def search_cafeteria_products(
         (Product.status == "ACTIVE") | (Product.status == None)
     )
     if q.strip():
+        import unicodedata
         term = f"%{q.strip()}%"
+        q_norm = (
+            unicodedata.normalize("NFKD", q.strip())
+            .encode("ASCII", "ignore")
+            .decode("ASCII")
+            .lower()
+        )
+        term_norm = f"%{q_norm}%" if q_norm else term
+        accent_src = "áàâãäéèêëíìîïóòôõöúùûüçñýÿÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇÑÝ"
+        accent_dst = "aaaaaeeeeiiiiooooouuuucnyyaaaaaeeeeiiiiooooouuuucny"
         cronuz_query = cronuz_query.filter(
-            (func.unaccent(Product.name).ilike(func.unaccent(term))) |
+            (Product.name.ilike(term)) |
+            (func.translate(func.lower(Product.name), accent_src, accent_dst).like(term_norm)) |
             (Product.ean_gtin.ilike(term)) |
             (Product.sku.ilike(term))
         )

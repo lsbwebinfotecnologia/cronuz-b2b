@@ -49,6 +49,8 @@ import { toast } from 'sonner';
 import { 
   openPdvDb, 
   saveCatalogItems, 
+  clearCatalog,
+  enforceSellerSessionAndCatalogIsolation,
   searchCatalogItems, 
   getSampleCatalogItems,
   getCatalogItemByBarcode, 
@@ -77,6 +79,96 @@ import POSSalesReportModal from '@/components/pdv/POSSalesReportModal';
 import POSCafeteriaModal, { CafeteriaTab } from '@/components/pdv/POSCafeteriaModal';
 import { CurrencyInput } from '@/components/CurrencyInput';
 import { maskCPF } from '@/lib/validators';
+
+function maskCpfOrCnpj(val: string): string {
+  const digits = (val || '').replace(/\D/g, '').slice(0, 14);
+  if (digits.length <= 11) {
+    return maskCPF(digits);
+  }
+  if (digits.length <= 12) {
+    return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  }
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12)}`;
+}
+
+function validatePdvCpfCnpj(rawDoc: string): {
+  valid: boolean;
+  empty: boolean;
+  type?: 'CPF' | 'CNPJ';
+  error?: string;
+} {
+  const digits = (rawDoc || '').replace(/\D/g, '');
+  if (!digits) {
+    return { valid: true, empty: true };
+  }
+  // Exceções explícitas permitidas para o PDV: 99999999999 e 00000000000
+  if (digits === '99999999999' || digits === '00000000000') {
+    return { valid: true, empty: false, type: 'CPF' };
+  }
+  if (digits === '99999999999999' || digits === '00000000000000') {
+    return { valid: true, empty: false, type: 'CNPJ' };
+  }
+
+  if (digits.length === 11) {
+    if (/^(\d)\1+$/.test(digits)) {
+      return {
+        valid: false,
+        empty: false,
+        type: 'CPF',
+        error: 'CPF inválido. Sequências repetidas só são aceitas com 00000000000 ou 99999999999.',
+      };
+    }
+    let sum = 0;
+    for (let i = 0; i < 9; i++) sum += parseInt(digits.charAt(i), 10) * (10 - i);
+    let rev = (sum * 10) % 11;
+    if (rev === 10 || rev === 11) rev = 0;
+    if (rev !== parseInt(digits.charAt(9), 10)) {
+      return { valid: false, empty: false, type: 'CPF', error: 'CPF inválido (dígito verificador incorreto).' };
+    }
+    sum = 0;
+    for (let i = 0; i < 10; i++) sum += parseInt(digits.charAt(i), 10) * (11 - i);
+    rev = (sum * 10) % 11;
+    if (rev === 10 || rev === 11) rev = 0;
+    if (rev !== parseInt(digits.charAt(10), 10)) {
+      return { valid: false, empty: false, type: 'CPF', error: 'CPF inválido (dígito verificador incorreto).' };
+    }
+    return { valid: true, empty: false, type: 'CPF' };
+  }
+
+  if (digits.length === 14) {
+    if (/^(\d)\1+$/.test(digits)) {
+      return {
+        valid: false,
+        empty: false,
+        type: 'CNPJ',
+        error: 'CNPJ inválido. Sequências repetidas só são aceitas com 00000000000 ou 99999999999.',
+      };
+    }
+    const w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    let s1 = 0;
+    for (let i = 0; i < 12; i++) s1 += parseInt(digits.charAt(i), 10) * w1[i];
+    const r1 = s1 % 11;
+    const d1 = r1 < 2 ? 0 : 11 - r1;
+    if (d1 !== parseInt(digits.charAt(12), 10)) {
+      return { valid: false, empty: false, type: 'CNPJ', error: 'CNPJ inválido (dígito verificador incorreto).' };
+    }
+    const w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    let s2 = 0;
+    for (let i = 0; i < 13; i++) s2 += parseInt(digits.charAt(i), 10) * w2[i];
+    const r2 = s2 % 11;
+    const d2 = r2 < 2 ? 0 : 11 - r2;
+    if (d2 !== parseInt(digits.charAt(13), 10)) {
+      return { valid: false, empty: false, type: 'CNPJ', error: 'CNPJ inválido (dígito verificador incorreto).' };
+    }
+    return { valid: true, empty: false, type: 'CNPJ' };
+  }
+
+  return {
+    valid: false,
+    empty: false,
+    error: 'Informe um CPF (11 dígitos), CNPJ (14 dígitos), 00000000000 ou 99999999999.',
+  };
+}
 
 interface CartItem extends PDVCatalogItem {
   cart_item_id?: string;
@@ -210,7 +302,8 @@ export default function PDVPage() {
   const [activeProratedDiscount, setActiveProratedDiscount] = useState<{ mode: 'BRL' | 'PCT'; val: number } | null>(null);
   const [discountStatusText, setDiscountStatusText] = useState<string>('');
 
-  // Consumidor & Fixação 📌
+  // Consumidor, Tipo de Venda (Cupom / NF-e) & Fixação 📌
+  const [saleType, setSaleType] = useState<'CUPOM' | 'NFE'>('CUPOM');
   const [customerMode, setCustomerMode] = useState<'final' | 'manual' | 'registered'>('final');
   const [customerName, setCustomerName] = useState('Consumidor Final');
   const [customerDoc, setCustomerDoc] = useState('');
@@ -273,6 +366,18 @@ export default function PDVPage() {
   // ─── Sincronizar catálogo da sessão selecionada para o IndexedDB ──────────
   const syncSessionProducts = useCallback(async (session: POSSessionData, silent = false) => {
     if (!companyId || !navigator.onLine) return;
+
+    // Trava estrita: impede selecionar ou sincronizar sessão pertencente a outro seller
+    if (session.company_id && Number(session.company_id) !== Number(companyId)) {
+      await setPdvSetting('activeSession', null);
+      await clearCatalog();
+      setActiveSession(null);
+      setCatalogCount(0);
+      setSampleProducts([]);
+      toast.warning('Sessão de outro seller detectada e removida. Os itens offline guardados foram limpos.');
+      return;
+    }
+
     // Sessões de Consulta em Tempo Real no Horus buscam online diretamente sob demanda
     if (session.catalog_source === 'HORUS_REALTIME') {
       return;
@@ -284,9 +389,20 @@ export default function PDVPage() {
         `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions/${session.id}/products`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
+      if (res.status === 404 || res.status === 403) {
+        // A sessão não pertence a este seller ou foi removida -> limpa sessão e itens offline guardados
+        await setPdvSetting('activeSession', null);
+        await clearCatalog();
+        setActiveSession(null);
+        setCatalogCount(0);
+        setSampleProducts([]);
+        toast.warning('Sessão inválida para este seller foi desvinculada e os itens offline guardados foram removidos.');
+        return;
+      }
       if (res.ok) {
         const data = await res.json();
         const rawItems = data.items || [];
+        await clearCatalog();
         if (rawItems.length > 0) {
           const formatted: PDVCatalogItem[] = rawItems.map((p: any) => ({
             barcode: p.barcode,
@@ -298,21 +414,30 @@ export default function PDVPage() {
             horus_item_code: p.horus_item_code || '',
             product_id: p.product_id,
             source: session.catalog_source || 'SESSION',
+            company_id: Number(companyId),
+            session_id: session.id,
           }));
 
-          const saveRes = await saveCatalogItems(formatted);
+          const saveRes = await saveCatalogItems(formatted, {
+            company_id: Number(companyId),
+            session_id: session.id,
+          });
           const cCount = await getCatalogCount();
           setCatalogCount(cCount);
           await loadSampleCatalog();
 
-          setActiveSession(prev => prev?.id === session.id ? { ...prev, products_count: saveRes.savedCount } : prev);
+          setActiveSession(prev => prev?.id === session.id ? { ...prev, company_id: Number(companyId), products_count: saveRes.savedCount } : prev);
 
           if (!silent) {
             triggerFeedback('success', `Sessão "${session.title}" pronta!`, `${saveRes.savedCount} produtos carregados para uso offline.`);
             toast.success(`Sessão "${session.title}": ${saveRes.savedCount} produtos offline.`);
           }
-        } else if (!silent) {
-          toast.info(`Sessão "${session.title}" ativada. Utilize a Carga de Produtos para carregar itens da planilha ou contrato.`);
+        } else {
+          setCatalogCount(0);
+          setSampleProducts([]);
+          if (!silent) {
+            toast.info(`Sessão "${session.title}" ativada. Utilize a Carga de Produtos para carregar itens da planilha ou contrato.`);
+          }
         }
       }
     } catch (err) {
@@ -332,14 +457,24 @@ export default function PDVPage() {
 
   // ─── Manipulador de Seleção de Sessão ──────────────────────────────────────
   const handleSelectSession = useCallback(async (session: POSSessionData | null) => {
-    setActiveSession(session);
-    await setPdvSetting('activeSession', session);
-    if (session) {
-      await syncSessionProducts(session, false);
+    if (session && session.company_id && companyId && Number(session.company_id) !== Number(companyId)) {
+      await setPdvSetting('activeSession', null);
+      await clearCatalog();
+      setActiveSession(null);
+      setCatalogCount(0);
+      setSampleProducts([]);
+      toast.error('Não é permitido selecionar sessão de outro seller. Os itens offline guardados foram limpos.');
+      return;
+    }
+    const taggedSession = session && companyId ? { ...session, company_id: Number(companyId) } : session;
+    setActiveSession(taggedSession);
+    await setPdvSetting('activeSession', taggedSession);
+    if (taggedSession) {
+      await syncSessionProducts(taggedSession, false);
     } else {
       toast.info('Sessão desvinculada. PDV operando em modo de vendas gerais.');
     }
-  }, [syncSessionProducts]);
+  }, [companyId, syncSessionProducts]);
 
   // ─── 1. Sincronizador de Vendas Offline ─────────────────────────────────────
   const triggerSync = useCallback(async () => {
@@ -358,6 +493,7 @@ export default function PDVPage() {
           client_sale_uuid: s.client_sale_uuid,
           sale_number: s.sale_number,
           session_id: s.session_id,
+          sale_type: s.sale_type || 'CUPOM',
           customer_name: s.customer_name,
           customer_document: s.customer_document,
           customer_id: s.customer_id,
@@ -462,6 +598,37 @@ export default function PDVPage() {
 
     // Carregar contadores do IndexedDB e permissões
     openPdvDb().then(async () => {
+      // 0. Valida isolamento por seller (remove imediatamente sessão ou itens offline de outro seller)
+      if (companyId) {
+        let validSellerSessionIds: number[] | undefined = undefined;
+        if (navigator.onLine) {
+          try {
+            const token = getToken();
+            const sessRes = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/sessions`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (sessRes.ok) {
+              const sessData = await sessRes.json();
+              if (Array.isArray(sessData)) {
+                validSellerSessionIds = sessData
+                  .filter((s: any) => !s.company_id || Number(s.company_id) === Number(companyId))
+                  .map((s: any) => Number(s.id));
+              }
+            }
+          } catch {
+            // Segue com validação offline
+          }
+        }
+        const isoRes = await enforceSellerSessionAndCatalogIsolation(Number(companyId), validSellerSessionIds);
+        if (isoRes.purgedSession) {
+          setActiveSession(null);
+          toast.warning('Uma sessão de outro seller estava ativa neste navegador e foi removida junto com os itens offline guardados.');
+        } else if (isoRes.purgedCatalog) {
+          toast.info('Itens offline pertencentes a outro seller foram removidos do cache local.');
+        }
+      }
+
       const cCount = await getCatalogCount();
       setCatalogCount(cCount);
       const uCount = await getUnsyncedSalesCount();
@@ -490,7 +657,7 @@ export default function PDVPage() {
         setCustomerMode('manual');
       }
 
-      // Carregar sessão ativa em cache
+      // Carregar sessão ativa em cache (já validada contra o companyId atual)
       const cachedActiveSession = await getPdvSetting<POSSessionData>('activeSession');
       if (cachedActiveSession) {
         setActiveSession(cachedActiveSession);
@@ -1143,6 +1310,19 @@ export default function PDVPage() {
       return;
     }
 
+    // Validação do CPF / CNPJ informado (permitindo CPF/CNPJ válido ou 99999999999 / 00000000000)
+    const docValidation = validatePdvCpfCnpj(customerDoc);
+    if (!docValidation.empty && !docValidation.valid) {
+      playWarningBeep();
+      toast.error(docValidation.error || 'CPF/CNPJ inválido.');
+      return;
+    }
+    if (saleType === 'NFE' && docValidation.empty) {
+      playWarningBeep();
+      toast.error('Para venda do tipo NF-e, informe um CPF/CNPJ válido ou utilize 00000000000 / 99999999999.');
+      return;
+    }
+
     // Validação de pagamento misto
     if (paymentMethod === 'MISTO') {
       if (splitRemaining > 0.01) {
@@ -1216,7 +1396,9 @@ export default function PDVPage() {
     const saleRecord: PDVPendingSaleRecord = {
       client_sale_uuid: saleUuid,
       sale_number: saleNumber,
+      company_id: companyId ? Number(companyId) : undefined,
       session_id: activeSession?.id,
+      sale_type: saleType,
       customer_name: customerName.trim() || 'Consumidor Final',
       customer_document: customerDoc.trim() || undefined,
       customer_id: selectedCustomerId || undefined,
@@ -1251,6 +1433,7 @@ export default function PDVPage() {
       // Limpeza ou Manutenção do Consumidor Fixado 📌
       clearCart();
       if (!isCustomerPinned) {
+        setSaleType('CUPOM');
         setCustomerMode('final');
         setCustomerName('Consumidor Final');
         setCustomerDoc('');
@@ -1494,11 +1677,42 @@ export default function PDVPage() {
 
       </header>
 
-      {/* ── 2. SUB-HEADER: CONSUMIDOR & FIXAÇÃO ─────────────────────────────── */}
-      <div className="h-10.5 bg-slate-50 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-5 flex items-center justify-between gap-2 text-xs shrink-0 z-10">
+      {/* ── 2. SUB-HEADER: TIPO DE VENDA (CUPOM / NF-E), CPF/CNPJ & CLIENTE ───── */}
+      <div className="min-h-10.5 py-1.5 bg-slate-50 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-5 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0 z-10">
         
-        {/* Esquerda: Pills de Modo de Consumidor */}
-        <div className="flex items-center gap-2 min-w-0 flex-1">
+        {/* Esquerda: Seletor de Tipo de Venda (Cupom | NF-e) + Modo de Consumidor + CPF/CNPJ */}
+        <div className="flex flex-wrap items-center gap-2 min-w-0 flex-1">
+          {/* Tipo de Venda do PDV (Cupom ou NF-e) */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-slate-400 font-semibold hidden md:inline">Tipo Venda:</span>
+            <div className="flex rounded-lg bg-slate-200/70 dark:bg-slate-800 p-0.5 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setSaleType('CUPOM')}
+                className={`px-2.5 py-0.5 rounded-md font-bold transition ${
+                  saleType === 'CUPOM'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
+                }`}
+              >
+                Cupom
+              </button>
+              <button
+                type="button"
+                onClick={() => setSaleType('NFE')}
+                className={`px-2.5 py-0.5 rounded-md font-bold transition ${
+                  saleType === 'NFE'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-300'
+                }`}
+              >
+                NF-e
+              </button>
+            </div>
+          </div>
+
+          <span className="text-slate-300 dark:text-slate-700 hidden sm:inline">|</span>
+
           <span className="text-slate-400 font-semibold flex items-center gap-1 shrink-0">
             <User className="w-3.5 h-3.5 text-indigo-500" />
             <span className="hidden sm:inline">Cliente:</span>
@@ -1509,7 +1723,6 @@ export default function PDVPage() {
               onClick={() => {
                 setCustomerMode('final');
                 setCustomerName('Consumidor Final');
-                setCustomerDoc('');
                 setSelectedCustomerId(null);
               }}
               className={`px-2 py-0.5 rounded-md font-semibold transition ${
@@ -1542,30 +1755,20 @@ export default function PDVPage() {
             </button>
           </div>
 
-          {/* Campos Inline para Modo Manual */}
+          {/* Nome do Cliente quando Avulso */}
           {customerMode === 'manual' && (
-            <div className="flex items-center gap-1.5 min-w-0 max-w-sm flex-1">
-              <input
-                type="text"
-                placeholder="Nome do cliente *"
-                value={customerName === 'Consumidor Final' ? '' : customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                className="px-2 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 flex-1 min-w-[100px] outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <input
-                type="text"
-                placeholder="CPF (opcional)"
-                value={customerDoc}
-                onChange={(e) => setCustomerDoc(maskCPF(e.target.value))}
-                maxLength={14}
-                className="px-2 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 w-24 sm:w-28 outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
-              />
-            </div>
+            <input
+              type="text"
+              placeholder="Nome do cliente *"
+              value={customerName === 'Consumidor Final' ? '' : customerName}
+              onChange={(e) => setCustomerName(e.target.value)}
+              className="px-2 py-0.5 text-xs rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 w-32 sm:w-40 outline-none focus:ring-1 focus:ring-indigo-500"
+            />
           )}
 
           {/* Campo Autocomplete para Modo Cadastrado */}
           {customerMode === 'registered' && (
-            <div className="relative min-w-0 max-w-sm flex-1">
+            <div className="relative min-w-0 max-w-xs flex-1">
               <input
                 type="text"
                 placeholder="Buscar cliente cadastrado..."
@@ -1583,7 +1786,7 @@ export default function PDVPage() {
                       key={c.id}
                       onClick={() => {
                         setCustomerName(c.name);
-                        setCustomerDoc(c.document || '');
+                        setCustomerDoc(maskCpfOrCnpj(c.document || ''));
                         setSelectedCustomerId(c.id);
                         setCustomerList([]);
                         setCustomerQuery('');
@@ -1601,10 +1804,46 @@ export default function PDVPage() {
 
           {/* Nome do Consumidor Final */}
           {customerMode === 'final' && (
-            <span className="font-bold text-slate-700 dark:text-slate-300 truncate">
+            <span className="font-bold text-slate-700 dark:text-slate-300 truncate hidden lg:inline">
               {customerName}
             </span>
           )}
+
+          {/* Campo de CPF ou CNPJ sempre disponível no momento da venda */}
+          {(() => {
+            const docStatus = validatePdvCpfCnpj(customerDoc);
+            return (
+              <div className="flex items-center gap-1 shrink-0">
+                <input
+                  type="text"
+                  placeholder={saleType === 'NFE' ? 'CPF ou CNPJ *' : 'CPF / CNPJ na venda'}
+                  value={customerDoc}
+                  onChange={(e) => setCustomerDoc(maskCpfOrCnpj(e.target.value))}
+                  maxLength={18}
+                  className={`px-2 py-0.5 text-xs rounded-lg border bg-white dark:bg-slate-800 w-36 sm:w-40 outline-none font-mono transition ${
+                    !docStatus.empty && !docStatus.valid
+                      ? 'border-rose-500 text-rose-600 dark:text-rose-400 focus:ring-1 focus:ring-rose-500'
+                      : !docStatus.empty && docStatus.valid
+                      ? 'border-emerald-500 text-emerald-700 dark:text-emerald-300 focus:ring-1 focus:ring-emerald-500'
+                      : 'border-slate-300 dark:border-slate-700 focus:ring-1 focus:ring-indigo-500'
+                  }`}
+                  title="Informe um CPF ou CNPJ válido, ou utilize 00000000000 / 99999999999"
+                />
+                {!docStatus.empty && (
+                  <span
+                    className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                      docStatus.valid
+                        ? 'bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300'
+                    }`}
+                    title={docStatus.error || `${docStatus.type} válido`}
+                  >
+                    {docStatus.valid ? `✓ ${docStatus.type}` : '✕ Inválido'}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* Direita: Botão de Fixação do Cliente 📌 */}
@@ -2385,8 +2624,102 @@ export default function PDVPage() {
               </span>
             </div>
 
-            {/* Payment Methods */}
+            {/* Payment Methods & Tipo Venda */}
             <div className="p-5 sm:p-6 overflow-y-auto space-y-4">
+              {/* Bloco Tipo de Venda (Cupom | NF-e) e CPF / CNPJ no momento da venda */}
+              {(() => {
+                const docCheck = validatePdvCpfCnpj(customerDoc);
+                return (
+                  <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <label className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block">
+                          Tipo de Venda do PDV
+                        </label>
+                        <p className="text-[11px] text-slate-400">
+                          Escolha entre Cupom ou NF-e e informe o CPF/CNPJ
+                        </p>
+                      </div>
+                      <div className="inline-flex rounded-xl bg-slate-200/80 dark:bg-slate-900 p-1 gap-1 self-start sm:self-auto">
+                        <button
+                          type="button"
+                          onClick={() => setSaleType('CUPOM')}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                            saleType === 'CUPOM'
+                              ? 'bg-emerald-600 text-white shadow-xs'
+                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                          }`}
+                        >
+                          🧾 Cupom
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSaleType('NFE')}
+                          className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition ${
+                            saleType === 'NFE'
+                              ? 'bg-indigo-600 text-white shadow-xs'
+                              : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                          }`}
+                        >
+                          📄 NF-e
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                          CPF ou CNPJ {saleType === 'NFE' ? '*' : '(Opcional)'}
+                        </label>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-slate-400">Padrão rápido:</span>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerDoc(maskCpfOrCnpj('00000000000'))}
+                            className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-[10px] font-mono font-semibold text-slate-700 dark:text-slate-200 transition"
+                          >
+                            00000000000
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCustomerDoc(maskCpfOrCnpj('99999999999'))}
+                            className="px-1.5 py-0.5 rounded bg-slate-200/70 dark:bg-slate-700 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-[10px] font-mono font-semibold text-slate-700 dark:text-slate-200 transition"
+                          >
+                            99999999999
+                          </button>
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Digite o CPF ou CNPJ (ou 00000000000 / 99999999999)"
+                        value={customerDoc}
+                        onChange={(e) => setCustomerDoc(maskCpfOrCnpj(e.target.value))}
+                        maxLength={18}
+                        className={`w-full px-3 py-2 text-xs font-mono font-bold rounded-xl border bg-white dark:bg-slate-900 outline-none transition ${
+                          !docCheck.empty && !docCheck.valid
+                            ? 'border-rose-500 text-rose-600 dark:text-rose-400 focus:ring-2 focus:ring-rose-500'
+                            : !docCheck.empty && docCheck.valid
+                            ? 'border-emerald-500 text-emerald-700 dark:text-emerald-300 focus:ring-2 focus:ring-emerald-500'
+                            : 'border-slate-300 dark:border-slate-700 text-slate-900 dark:text-white focus:ring-2 focus:ring-emerald-500'
+                        }`}
+                      />
+                      {!docCheck.empty && !docCheck.valid && (
+                        <p className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1">
+                          <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                          <span>{docCheck.error}</span>
+                        </p>
+                      )}
+                      {!docCheck.empty && docCheck.valid && (
+                        <p className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          <span>{docCheck.type} validado com sucesso para a venda ({saleType === 'NFE' ? 'NF-e' : 'Cupom'}).</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
                 Forma de Pagamento
               </label>

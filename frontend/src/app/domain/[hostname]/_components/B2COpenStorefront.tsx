@@ -1732,7 +1732,20 @@ export default function B2COpenStorefront({
       }
 
       if (first === 'login' || first === 'entrar') {
-        openAccountScreen('login', false);
+        const urlParams = new URLSearchParams(window.location.search);
+        const tabParam = urlParams.get('tab') || '';
+        const idParam = urlParams.get('id') || '';
+        const tokenParam = urlParams.get('token') || '';
+        if (idParam) setIdentityInput(idParam);
+        if (tokenParam) {
+          setRecoveryCode(tokenParam);
+          setRecoverySent(true);
+        }
+        if (tabParam === 'recovery' || tokenParam) {
+          openAccountScreen('recovery', false);
+        } else {
+          openAccountScreen('login', false);
+        }
         return;
       }
 

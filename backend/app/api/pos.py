@@ -959,11 +959,245 @@ def _persist_session_products(
     db.commit()
 
 
+def _validate_pdv_cpf_cnpj(raw_doc: Optional[str]) -> tuple[bool, Optional[str], Optional[str]]:
+    """
+    Valida CPF (11 dígitos) ou CNPJ (14 dígitos) informado na venda do PDV.
+    Regra especial solicitada: permite explicitamente '99999999999' e '00000000000'
+    (bem como '99999999999999' e '00000000000000'), além de CPFs e CNPJs matematicamente válidos.
+    Retorna (is_valid, doc_type, error_message).
+    """
+    if not raw_doc or not str(raw_doc).strip():
+        return True, None, None
+
+    digits = "".join(ch for ch in str(raw_doc) if ch.isdigit())
+    if not digits:
+        return False, None, "Documento inválido. Informe apenas números de CPF ou CNPJ."
+
+    # Exceções explícitas permitidas na operação de PDV
+    if digits in ("99999999999", "00000000000"):
+        return True, "CPF", None
+    if digits in ("99999999999999", "00000000000000"):
+        return True, "CNPJ", None
+
+    if len(digits) == 11:
+        # Rejeita outras sequências repetidas (111..., 222..., etc.)
+        if len(set(digits)) == 1:
+            return False, "CPF", "CPF inválido. Sequências repetidas só são permitidas para 00000000000 ou 99999999999."
+        # Cálculo do 1º dígito verificador do CPF
+        s1 = sum(int(digits[i]) * (10 - i) for i in range(9))
+        r1 = (s1 * 10) % 11
+        if r1 in (10, 11):
+            r1 = 0
+        if r1 != int(digits[9]):
+            return False, "CPF", "CPF inválido (dígito verificador incorreto)."
+        # Cálculo do 2º dígito verificador do CPF
+        s2 = sum(int(digits[i]) * (11 - i) for i in range(10))
+        r2 = (s2 * 10) % 11
+        if r2 in (10, 11):
+            r2 = 0
+        if r2 != int(digits[10]):
+            return False, "CPF", "CPF inválido (dígito verificador incorreto)."
+        return True, "CPF", None
+
+    if len(digits) == 14:
+        if len(set(digits)) == 1:
+            return False, "CNPJ", "CNPJ inválido. Sequências repetidas só são permitidas para 00000000000 ou 99999999999."
+        w1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        s1 = sum(int(digits[i]) * w1[i] for i in range(12))
+        r1 = s1 % 11
+        d1 = 0 if r1 < 2 else 11 - r1
+        if d1 != int(digits[12]):
+            return False, "CNPJ", "CNPJ inválido (dígito verificador incorreto)."
+        w2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+        s2 = sum(int(digits[i]) * w2[i] for i in range(13))
+        r2 = s2 % 11
+        d2 = 0 if r2 < 2 else 11 - r2
+        if d2 != int(digits[13]):
+            return False, "CNPJ", "CNPJ inválido (dígito verificador incorreto)."
+        return True, "CNPJ", None
+
+    return False, None, "Documento deve conter 11 dígitos (CPF) ou 14 dígitos (CNPJ)."
+
+
+async def _resolve_consignment_customer_and_guid(
+    db: Session,
+    company: Company,
+    customer_id: Optional[int] = None,
+    customer_doc: Optional[str] = None,
+    session_id: Optional[int] = None,
+) -> tuple[Optional[Customer], str, str, str]:
+    """
+    Resolve o cliente, documento (CPF/CNPJ limpo) e ID_GUID para consulta de contrato de consignação no Horus.
+    Aceita customer_id (ID local ou COD_CLI Horus), customer_doc (CPF/CNPJ) ou herda da sessão ativa.
+    Se o cliente não possuir ID_GUID salvo localmente, consulta o Horus (Busca_Cliente) para obtê-lo.
+    Retorna (customer_obj, cnpj_cliente_digits, id_guid, customer_display_name).
+    """
+    from app.integrators.horus_clients import HorusClients
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company.id).first()
+    default_guid = (settings.horus_default_b2b_guid or "").strip() if settings else ""
+
+    customer: Optional[Customer] = None
+    clean_doc = re.sub(r"\D", "", str(customer_doc or ""))
+
+    if customer_id:
+        customer = db.query(Customer).filter(
+            Customer.id == customer_id,
+            Customer.company_id == company.id
+        ).first()
+        if not customer:
+            customer = db.query(Customer).filter(
+                Customer.company_id == company.id,
+                Customer.id_horus == str(customer_id)
+            ).first()
+
+    if not customer and clean_doc:
+        # Tenta localizar pelo documento (com ou sem máscara)
+        candidates = db.query(Customer).filter(Customer.company_id == company.id).all()
+        for cand in candidates:
+            if re.sub(r"\D", "", str(cand.document or "")) == clean_doc:
+                customer = cand
+                break
+
+    if not customer and session_id:
+        sess = db.query(POSSession).filter(
+            POSSession.id == session_id,
+            POSSession.company_id == company.id
+        ).first()
+        if sess:
+            if sess.customer_id:
+                customer = db.query(Customer).filter(
+                    Customer.id == sess.customer_id,
+                    Customer.company_id == company.id
+                ).first()
+            if not clean_doc and sess.customer_document:
+                clean_doc = re.sub(r"\D", "", str(sess.customer_document))
+
+    target_doc = re.sub(r"\D", "", str(customer.document or "")) if (customer and customer.document) else clean_doc
+    id_guid = (customer.id_guid or "").strip() if customer else ""
+    display_name = (customer.name or customer.corporate_name or "") if customer else ""
+
+    # Se não temos o documento ou o ID_GUID do cliente, consultamos Busca_Cliente no Horus
+    if not target_doc or not id_guid:
+        client = HorusClients(db, company.id)
+        try:
+            horus_cli = await client.get_client(
+                cnpj_destino=company.document,
+                cnpj_cliente=target_doc if target_doc else None,
+                codigo=str(customer_id) if (customer_id and not target_doc) else (customer.id_horus if customer and customer.id_horus else None),
+            )
+            if isinstance(horus_cli, dict) and not horus_cli.get("Falha"):
+                fetched_doc = re.sub(r"\D", "", str(horus_cli.get("CNPJ_CPF") or horus_cli.get("CPF_CNPJ") or ""))
+                fetched_guid = str(horus_cli.get("ID_GUID") or "").strip()
+                fetched_name = str(horus_cli.get("NOM_CLI") or horus_cli.get("RAZAO_SOCIAL") or "").strip()
+                if fetched_doc and not target_doc:
+                    target_doc = fetched_doc
+                if fetched_guid and not id_guid:
+                    id_guid = fetched_guid
+                if fetched_name and not display_name:
+                    display_name = fetched_name
+                if customer and fetched_guid and not customer.id_guid:
+                    customer.id_guid = fetched_guid
+                    db.commit()
+        except Exception as lookup_err:
+            logger.warning("Aviso ao resolver cliente no Horus para consignação: %s", str(lookup_err))
+        finally:
+            await client.close()
+
+    if not id_guid:
+        id_guid = default_guid
+
+    if not target_doc:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente inválido ou sem CPF/CNPJ para consulta de contrato no Horus. Selecione um cliente com documento ou informe o CPF/CNPJ diretamente."
+        )
+    if not id_guid:
+        raise HTTPException(
+            status_code=400,
+            detail="O cliente selecionado não possui ID_GUID de acesso B2B no Horus e não há GUID padrão configurado na empresa."
+        )
+
+    return customer, target_doc, id_guid, display_name
+
+
+@router.get("/consignment-validate")
+async def validate_pos_consignment(
+    company_id: int,
+    customer_id: Optional[int] = Query(None),
+    customer_doc: Optional[str] = Query(None),
+    cod_ctr: Optional[str] = Query(None),
+    session_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Valida no Horus ERP os contratos de consignação sintéticos e analíticos do cliente
+    antes ou durante a sincronização de produtos no PDV.
+    """
+    from app.integrators.horus_clients import HorusClients
+
+    company = _assert_pos_access(current_user, company_id, db)
+    customer, target_doc, id_guid, display_name = await _resolve_consignment_customer_and_guid(
+        db, company, customer_id=customer_id, customer_doc=customer_doc, session_id=session_id
+    )
+
+    client = HorusClients(db, company_id)
+    try:
+        summary_res = await client.get_consignment_summary(
+            cnpj_destino=company.document,
+            cnpj_cliente=target_doc,
+            id_guid=id_guid,
+            cod_ctr=cod_ctr,
+            limit=100,
+        )
+    finally:
+        await client.close()
+
+    raw_summary = summary_res if isinstance(summary_res, list) else ([summary_res] if isinstance(summary_res, dict) else [])
+    contracts = []
+    for row in raw_summary:
+        if not isinstance(row, dict):
+            continue
+        if row.get("Falha") or str(row.get("FALHA") or "").upper() == "S":
+            msg = row.get("Mensagem") or row.get("MENSAGEM") or "Nenhum contrato ativo encontrado para este cliente."
+            if len(raw_summary) == 1:
+                return {
+                    "valid": False,
+                    "message": str(msg),
+                    "customer_name": display_name,
+                    "customer_document": target_doc,
+                    "contracts": [],
+                }
+            continue
+        ctr_code = str(row.get("COD_CTR") or "").strip()
+        saldo_itens = float(str(row.get("SALDO_ITENS") or row.get("QTD_ATENDIDA") or 0).replace(",", "."))
+        vlr_total = parse_horus_price(row.get("VLR_TOTAL_LIQUIDO") or row.get("VLR_TOTAL_TABELA") or 0)
+        contracts.append({
+            "cod_ctr": ctr_code,
+            "dat_emissao": row.get("DAT_EMISSAO") or row.get("DATA_CONTRATO") or "",
+            "sta_contrato": row.get("STA_CONTRATO") or "A",
+            "saldo_itens": saldo_itens,
+            "vlr_total_liquido": vlr_total,
+            "nom_cli": row.get("NOM_CLI") or display_name,
+        })
+
+    return {
+        "valid": len(contracts) > 0,
+        "message": f"{len(contracts)} contrato(s) encontrado(s) no Horus." if contracts else "Nenhum contrato ativo retornado pelo Horus para este documento.",
+        "customer_id": customer.id if customer else None,
+        "customer_name": display_name or (contracts[0]["nom_cli"] if contracts else ""),
+        "customer_document": target_doc,
+        "contracts": contracts,
+    }
+
+
 @router.get("/catalog-load")
 async def load_pos_catalog(
     company_id: int,
     source: str = Query("GENERAL", description="GENERAL, CONSIGNMENT, CRONUZ_CATALOG, HORUS_CATALOG"),
     customer_id: Optional[int] = Query(None),
+    customer_doc: Optional[str] = Query(None),
     cod_ctr: Optional[str] = Query(None),
     session_id: Optional[int] = Query(None),
     limit: int = Query(5000, le=10000),
@@ -984,47 +1218,107 @@ async def load_pos_catalog(
     seen_barcodes = set()
     duplicate_items = []
     zero_price_items = []
+    zero_stock_items = []
 
     # 1. Carga via Contrato de Consignação Horus
-    if source == "CONSIGNMENT" and customer_id:
-        customer = db.query(Customer).filter(
-            Customer.id == customer_id,
-            Customer.company_id == company_id
-        ).first()
-        if not customer or not customer.document:
-            raise HTTPException(status_code=400, detail="Cliente inválido ou sem documento para consulta Horus.")
+    if source == "CONSIGNMENT":
+        customer, target_doc, id_guid, display_name = await _resolve_consignment_customer_and_guid(
+            db, company, customer_id=customer_id, customer_doc=customer_doc, session_id=session_id
+        )
 
         try:
             from app.integrators.horus_clients import HorusClients
-            from app.models.company_settings import CompanySettings
-
-            settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-            id_guid = customer.id_guid or (settings.horus_default_b2b_guid if settings else "")
 
             client = HorusClients(db, company_id)
-            res = await client.get_consignment_details(
-                cnpj_destino=company.document,
-                cnpj_cliente=customer.document,
-                id_guid=id_guid,
-                cod_ctr=cod_ctr,
-                limit=limit
-            )
-            await client.close()
+            try:
+                # 1.1. Valida resumo sintético do contrato (para confirmar existência e pegar COD_CTR se aplicável)
+                summary_res = await client.get_consignment_summary(
+                    cnpj_destino=company.document,
+                    cnpj_cliente=target_doc,
+                    id_guid=id_guid,
+                    cod_ctr=cod_ctr,
+                    limit=50,
+                )
+                raw_summary = summary_res if isinstance(summary_res, list) else ([summary_res] if isinstance(summary_res, dict) else [])
+                valid_contracts = [
+                    r for r in raw_summary
+                    if isinstance(r, dict) and not (r.get("Falha") or str(r.get("FALHA") or "").upper() == "S")
+                ]
+
+                # 1.2. Busca os itens analíticos do contrato no Horus
+                res = await client.get_consignment_details(
+                    cnpj_destino=company.document,
+                    cnpj_cliente=target_doc,
+                    id_guid=id_guid,
+                    cod_ctr=cod_ctr,
+                    limit=limit
+                )
+            finally:
+                await client.close()
 
             raw_list = res if isinstance(res, list) else ([res] if isinstance(res, dict) else [])
+            if not raw_list:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"O Horus não retornou itens de consignação para o cliente ({target_doc})."
+                )
+
+            # Se o Horus retornou erro/falha explícita no analítico, informa o motivo real
+            if len(raw_list) == 1 and isinstance(raw_list[0], dict) and (raw_list[0].get("Falha") or str(raw_list[0].get("FALHA") or "").upper() == "S"):
+                err_msg = raw_list[0].get("Mensagem") or raw_list[0].get("MENSAGEM") or "Contrato de consignação não encontrado ou sem itens abertos no Horus."
+                raise HTTPException(status_code=400, detail=f"Horus ERP: {err_msg}")
+
+            clean_cod_ctr = str(cod_ctr).strip() if cod_ctr else ""
+
             for row in raw_list:
-                if row.get("Falha"):
+                if not isinstance(row, dict):
                     continue
-                raw_code = row.get("COD_BARRA_ITEM") or row.get("COD_ITEM") or ""
+                if row.get("Falha") or str(row.get("FALHA") or "").upper() == "S":
+                    continue
+
+                # Se o operador filtrou por um COD_CTR específico e o retorno analítico traz COD_CTR, filtra
+                row_ctr = str(row.get("COD_CTR") or "").strip()
+                if clean_cod_ctr and row_ctr and row_ctr != clean_cod_ctr:
+                    continue
+
+                raw_code = (
+                    row.get("BARRAS_ISBN")
+                    or row.get("COD_BARRA_ITEM")
+                    or row.get("COD_ISBN_ITEM")
+                    or row.get("ISBN")
+                    or row.get("COD_ITEM")
+                    or ""
+                )
                 barcode = _clean_barcode(raw_code)
                 if not barcode:
                     continue
 
-                vlr_str = str(row.get("VLR_PRECO") or row.get("VLR_LIQUIDO") or "0").replace(",", ".")
-                try:
-                    price = float(vlr_str)
-                except Exception:
-                    price = 0.0
+                # Calcula o saldo líquido real do item no contrato
+                if row.get("SALDO_ITENS") is not None:
+                    try:
+                        saldo = float(str(row.get("SALDO_ITENS")).replace(",", "."))
+                    except Exception:
+                        saldo = 0.0
+                else:
+                    try:
+                        q_atend = float(str(row.get("QTD_ATENDIDA") or 0).replace(",", "."))
+                        q_fat = float(str(row.get("QTD_FATURADA") or 0).replace(",", "."))
+                        q_dev = float(str(row.get("QTD_DEV_FAT") or 0).replace(",", "."))
+                        saldo = max(0.0, q_atend - q_fat - q_dev)
+                    except Exception:
+                        saldo = 0.0
+
+                if saldo <= 0:
+                    zero_stock_items.append(barcode)
+                    continue
+
+                price = parse_horus_price(
+                    row.get("VLR_PRECO")
+                    or row.get("VLR_CAPA")
+                    or row.get("PRECO")
+                    or row.get("VLR_LIQUIDO")
+                    or 0.0
+                )
 
                 # [REQUISITO] Não possibilitar item com preço zerado
                 if price <= 0:
@@ -1037,34 +1331,41 @@ async def load_pos_catalog(
                     continue
 
                 seen_barcodes.add(barcode)
-                saldo = float(row.get("SALDO_ITENS") or row.get("QTD_ATENDIDA") or 0)
 
                 items.append({
                     "barcode": barcode,
-                    "sku": str(row.get("COD_ITEM") or ""),
-                    "title": row.get("NOM_ITEM") or "Item Consignado",
-                    "publisher": row.get("NOM_EDITORA") or "",
+                    "sku": str(row.get("COD_ITEM") or barcode),
+                    "title": str(row.get("NOM_ITEM") or "Item Consignado").strip(),
+                    "publisher": str(row.get("NOM_EDITORA") or row.get("EDITORA") or "").strip(),
                     "price": price,
                     "stock": saldo,
                     "horus_item_code": str(row.get("COD_ITEM") or ""),
                     "source": "CONSIGNMENT",
                 })
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error("Erro ao carregar consignação Horus: %s", str(e))
             raise HTTPException(status_code=400, detail=f"Erro ao buscar consignação no Horus: {str(e)}")
 
+        effective_ctr = clean_cod_ctr or (str(valid_contracts[0].get("COD_CTR") or "").strip() if valid_contracts else "")
         if session_id:
             _persist_session_products(
                 db, session_id, company_id, items,
                 source="CONSIGNMENT",
-                source_ref=f"Contrato {cod_ctr or ''}".strip()
+                source_ref=f"Contrato {effective_ctr or target_doc}".strip()
             )
 
         return {
             "source": "CONSIGNMENT",
+            "customer_name": display_name,
+            "customer_document": target_doc,
+            "cod_ctr": effective_ctr,
+            "contracts_found": len(valid_contracts),
             "count": len(items),
             "duplicate_count": len(duplicate_items),
             "zero_price_count": len(zero_price_items),
+            "zero_stock_count": len(zero_stock_items),
             "duplicate_sample": duplicate_items[:10],
             "zero_price_sample": zero_price_items[:10],
             "items": items,
@@ -1152,6 +1453,54 @@ def _cleanup_old_imports(import_dir: str, max_age_seconds: int = 3600):
         pass
 
 
+@router.get("/spreadsheet-template")
+def download_pos_spreadsheet_template(
+    company_id: int,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    """
+    Gera e retorna a Planilha Modelo (.xlsx) para carga de catálogo do PDV,
+    contendo as colunas: ISBN, Título, Editora, Preço e Estoque.
+    """
+    _assert_pos_access(current_user, company_id, db)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Modelo Carga PDV"
+
+    headers = ["ISBN", "Título", "Editora", "Preço", "Estoque"]
+    ws.append(headers)
+
+    header_font = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="059669", end_color="059669", fill_type="solid")
+    for col_num in range(1, len(headers) + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # Exemplos de preenchimento
+    ws.append(["9788535914849", "1984", "Companhia das Letras", 59.90, 25])
+    ws.append(["9788595081512", "Sapiens: Uma Breve História da Humanidade", "HarperCollins", 69.90, 15])
+
+    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["B"].width = 42
+    ws.column_dimensions["C"].width = 28
+    ws.column_dimensions["D"].width = 14
+    ws.column_dimensions["E"].width = 14
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="modelo_carga_pdv.xlsx"'},
+    )
+
+
 @router.post("/upload-spreadsheet")
 async def upload_pos_spreadsheet(
     company_id: int,
@@ -1161,7 +1510,7 @@ async def upload_pos_spreadsheet(
     current_user: user_models.User = Depends(dependencies.get_current_user),
 ):
     """
-    Recebe um arquivo Excel (.xlsx) ou CSV com colunas de ISBN/Código de Barras, Título, Preço e Estoque.
+    Recebe um arquivo Excel (.xlsx) ou CSV com colunas de ISBN/Código de Barras, Título, Editora, Preço e Estoque.
     Processa arquivos gigantes (ex: >250 mil linhas / >30MB) com alta performance em streaming
     sem causar estouro de memória (openpyxl read_only=True).
     Suporta paginação por lotes (chunks) para salvar no IndexedDB local do PDV.
@@ -1200,9 +1549,10 @@ async def upload_pos_spreadsheet(
             if header_row:
                 header = [str(col).strip().upper() if col is not None else "" for col in header_row]
 
-                isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO"])), 0)
-                title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "NOME", "DESCRICAO", "LIVRO"])), 1)
-                price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "VALOR", "VLR", "PRICE"])), 2)
+                isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO", "CÓDIGO"])), 0)
+                title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "TÍTULO", "NOME", "DESCRICAO", "DESCRIÇÃO", "LIVRO"]) and "EDITORA" not in h), 1)
+                publisher_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["EDITORA", "MARCA", "PUBLISHER", "SELO", "FORNECEDOR"])), -1)
+                price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "PREÇO", "VALOR", "VLR", "PRICE"])), 3 if publisher_idx == 2 else 2)
                 stock_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ESTOQUE", "QTD", "QUANTIDADE", "SALDO"])), -1)
 
                 for r in rows_iter:
@@ -1213,11 +1563,16 @@ async def upload_pos_spreadsheet(
                         continue
 
                     title = str(r[title_idx]).strip() if len(r) > title_idx and r[title_idx] is not None else "Item Importado"
+                    publisher_val = (
+                        str(r[publisher_idx]).strip()
+                        if (publisher_idx >= 0 and len(r) > publisher_idx and r[publisher_idx] is not None and str(r[publisher_idx]).strip())
+                        else "Planilha"
+                    )
 
                     price = 0.0
                     if len(r) > price_idx and r[price_idx] is not None:
                         try:
-                            price = float(str(r[price_idx]).replace(",", "."))
+                            price = float(str(r[price_idx]).replace("R$", "").strip().replace(",", "."))
                         except Exception:
                             price = 0.0
 
@@ -1242,7 +1597,7 @@ async def upload_pos_spreadsheet(
                         "barcode": barcode,
                         "sku": barcode,
                         "title": title,
-                        "publisher": "Planilha",
+                        "publisher": publisher_val,
                         "price": price,
                         "stock": stock,
                         "source": "SPREADSHEET",
@@ -1260,10 +1615,11 @@ async def upload_pos_spreadsheet(
                 header_row = next(reader, None)
                 if header_row:
                     header = [c.strip().upper() for c in header_row]
-                    isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO"])), 0)
-                    title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "NOME", "DESCRICAO"])), 1)
-                    price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "VALOR", "VLR"])), 2)
-                    stock_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ESTOQUE", "QTD", "QUANTIDADE"])), -1)
+                    isbn_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ISBN", "BARRAS", "EAN", "CODIGO", "CÓDIGO"])), 0)
+                    title_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["TITULO", "TÍTULO", "NOME", "DESCRICAO", "DESCRIÇÃO", "LIVRO"]) and "EDITORA" not in h), 1)
+                    publisher_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["EDITORA", "MARCA", "PUBLISHER", "SELO", "FORNECEDOR"])), -1)
+                    price_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["PRECO", "PREÇO", "VALOR", "VLR", "PRICE"])), 3 if publisher_idx == 2 else 2)
+                    stock_idx = next((i for i, h in enumerate(header) if any(k in h for k in ["ESTOQUE", "QTD", "QUANTIDADE", "SALDO"])), -1)
 
                     for r in reader:
                         if not r or len(r) <= isbn_idx or not r[isbn_idx].strip():
@@ -1273,10 +1629,15 @@ async def upload_pos_spreadsheet(
                             continue
 
                         title = r[title_idx].strip() if len(r) > title_idx and r[title_idx] else "Item Importado"
+                        publisher_val = (
+                            r[publisher_idx].strip()
+                            if (publisher_idx >= 0 and len(r) > publisher_idx and r[publisher_idx] and r[publisher_idx].strip())
+                            else "Planilha"
+                        )
                         price = 0.0
                         if len(r) > price_idx and r[price_idx]:
                             try:
-                                price = float(r[price_idx].replace(",", "."))
+                                price = float(r[price_idx].replace("R$", "").strip().replace(",", "."))
                             except Exception:
                                 price = 0.0
 
@@ -1301,7 +1662,7 @@ async def upload_pos_spreadsheet(
                             "barcode": barcode,
                             "sku": barcode,
                             "title": title,
-                            "publisher": "Planilha",
+                            "publisher": publisher_val,
                             "price": price,
                             "stock": stock,
                             "source": "SPREADSHEET",
@@ -1698,6 +2059,15 @@ def sync_pos_sales(
             # Resolução e Auto-cadastro de Cliente para relatórios gerenciais:
             cust_name = (s_in.customer_name or "").strip() or "Consumidor Final"
             cust_doc = (s_in.customer_document or "").strip()
+            raw_sale_type = str(getattr(s_in, "sale_type", "CUPOM") or "CUPOM").strip().upper()
+            sale_type_val = "NFE" if raw_sale_type in ("NFE", "NF-E", "NF") else "CUPOM"
+
+            if cust_doc:
+                is_valid_doc, _, doc_err = _validate_pdv_cpf_cnpj(cust_doc)
+                if not is_valid_doc:
+                    failed_count += 1
+                    errors.append({"uuid": uuid_key, "error": doc_err or "CPF/CNPJ inválido."})
+                    continue
 
             target_customer_id = None
             if s_in.customer_id and int(s_in.customer_id) > 0:
@@ -1750,13 +2120,29 @@ def sync_pos_sales(
                     db.flush()
                     target_customer_id = new_customer.id
 
-            target_sess_id = payload.session_id or s_in.session_id
+            # Garante que a sessão vinculada pertence obrigatoriamente ao seller atual (company_id)
+            raw_sess_id = payload.session_id or s_in.session_id
+            target_sess_id = None
+            target_sess_obj = None
+            if raw_sess_id:
+                if session and session.id == raw_sess_id and session.company_id == company_id:
+                    target_sess_obj = session
+                    target_sess_id = session.id
+                else:
+                    target_sess_obj = db.query(POSSession).filter(
+                        POSSession.id == raw_sess_id,
+                        POSSession.company_id == company_id
+                    ).first()
+                    if target_sess_obj:
+                        target_sess_id = target_sess_obj.id
+
             new_sale = POSSale(
                 company_id=company_id,
                 session_id=target_sess_id,
                 user_id=current_user.id,
                 client_sale_uuid=uuid_key,
                 sale_number=sale_num,
+                sale_type=sale_type_val,
                 customer_name=cust_name,
                 customer_document=cust_doc or None,
                 customer_id=target_customer_id,
@@ -2053,6 +2439,7 @@ def list_pos_sales(
             "id": s.id,
             "client_sale_uuid": s.client_sale_uuid,
             "sale_number": s.sale_number,
+            "sale_type": getattr(s, "sale_type", None) or "CUPOM",
             "session_id": s.session_id,
             "customer_name": s.customer_name,
             "customer_document": s.customer_document,
@@ -2262,6 +2649,7 @@ def get_pos_sales_report(
             "id": item.id,
             "sale_id": sale.id,
             "sale_number": sale.sale_number,
+            "sale_type": getattr(sale, "sale_type", None) or "CUPOM",
             "sale_status": sale.status or "COMPLETED",
             "sold_at": sold_brt.strftime("%d/%m/%Y %H:%M") if sold_brt else "-",
             "sold_at_iso": sold_brt.isoformat() if sold_brt else None,

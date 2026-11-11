@@ -235,6 +235,8 @@ class HorusClients(HorusClient):
         return result
 
     async def get_consignment_details(self, cnpj_destino: str, cnpj_cliente: str, id_guid: str, cod_ctr: Optional[str] = None, limit: int = 500) -> Any:
+        cnpj_destino = re.sub(r'\D', '', str(cnpj_destino or ''))
+        cnpj_cliente = re.sub(r'\D', '', str(cnpj_cliente or ''))
         params = {
             "ID_GUID": id_guid,
             "CNPJ_DESTINO": cnpj_destino,

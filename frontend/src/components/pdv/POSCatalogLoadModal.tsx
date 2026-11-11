@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Database, 
   Upload, 
@@ -14,7 +14,9 @@ import {
   X,
   FileCheck,
   ArrowRight,
-  ShieldAlert
+  ShieldAlert,
+  Download,
+  Search
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
@@ -44,12 +46,15 @@ export default function POSCatalogLoadModal({
 }: POSCatalogLoadModalProps) {
   const [activeTab, setActiveTab] = useState<'consignment' | 'cronuz' | 'spreadsheet'>('consignment');
   const [loading, setLoading] = useState(false);
+  const [validatingContract, setValidatingContract] = useState(false);
+  const [downloadingTemplate, setDownloadingTemplate] = useState(false);
   const [progressMsg, setProgressMsg] = useState('');
   const [loadReport, setLoadReport] = useState<{
     sourceName: string;
     validCount: number;
     duplicateCount: number;
     zeroPriceCount: number;
+    zeroStockCount?: number;
     duplicateSample?: string[];
     zeroPriceSample?: string[];
   } | null>(null);
@@ -58,15 +63,59 @@ export default function POSCatalogLoadModal({
   const [consignmentCustomerId, setConsignmentCustomerId] = useState('');
   const [consignmentDoc, setConsignmentDoc] = useState('');
   const [consignmentCodCtr, setConsignmentCodCtr] = useState('');
+  const [customerSearchTerm, setCustomerSearchTerm] = useState('');
+  const [customerResults, setCustomerResults] = useState<any[]>([]);
+  const [searchingCustomers, setSearchingCustomers] = useState(false);
+  const [validatedContracts, setValidatedContracts] = useState<{
+    valid: boolean;
+    message: string;
+    customer_name?: string;
+    customer_document?: string;
+    contracts: {
+      cod_ctr: string;
+      dat_emissao?: string;
+      sta_contrato?: string;
+      saldo_itens?: number;
+      vlr_total_liquido?: number;
+      nom_cli?: string;
+    }[];
+  } | null>(null);
 
   // Spreadsheet state
   const [file, setFile] = useState<File | null>(null);
 
-  if (!isOpen) return null;
-
   const userStr = getUser();
   const currentUser = typeof userStr === 'string' ? JSON.parse(userStr) : userStr;
   const companyId = currentUser?.company_id;
+
+  useEffect(() => {
+    if (!isOpen || !customerSearchTerm || customerSearchTerm.trim().length < 2) {
+      setCustomerResults([]);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        setSearchingCustomers(true);
+        const token = getToken();
+        const res = await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/customers?search=${encodeURIComponent(customerSearchTerm.trim())}&limit=8`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          const list = Array.isArray(data) ? data : (data.items || []);
+          setCustomerResults(list);
+        }
+      } catch {
+        // Silencioso
+      } finally {
+        setSearchingCustomers(false);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [customerSearchTerm, isOpen]);
+
+  if (!isOpen) return null;
 
   function processLoadOutcome(
     sourceName: string,
@@ -75,6 +124,7 @@ export default function POSCatalogLoadModal({
   ) {
     const totalDuplicates = (serverData.duplicate_count || 0) + (localSaveRes.duplicateCount || 0);
     const totalZeroPrice = (serverData.zero_price_count || 0) + (localSaveRes.zeroPriceCount || 0);
+    const totalZeroStock = serverData.zero_stock_count || 0;
     const validCount = localSaveRes.savedCount;
 
     const report = {
@@ -82,14 +132,15 @@ export default function POSCatalogLoadModal({
       validCount,
       duplicateCount: totalDuplicates,
       zeroPriceCount: totalZeroPrice,
+      zeroStockCount: totalZeroStock,
       duplicateSample: serverData.duplicate_sample || [],
       zeroPriceSample: serverData.zero_price_sample || [],
     };
 
     setLoadReport(report);
 
-    if (validCount === 0 && (totalDuplicates > 0 || totalZeroPrice > 0)) {
-      toast.error(`Nenhum item válido importado de ${sourceName}. Verifique se há produtos com preço preenchido.`);
+    if (validCount === 0 && (totalDuplicates > 0 || totalZeroPrice > 0 || totalZeroStock > 0)) {
+      toast.error(`Nenhum item válido importado de ${sourceName}. Verifique se há produtos com saldo e preço preenchido.`);
       return;
     }
 
@@ -107,6 +158,89 @@ export default function POSCatalogLoadModal({
       );
     } else {
       toast.success(`${validCount} produtos carregados com sucesso no PDV offline!`);
+    }
+  }
+
+  async function handleValidateConsignment() {
+    if (!companyId) return;
+    if (!consignmentCustomerId.trim() && !consignmentDoc.trim()) {
+      toast.error('Informe o ID/Código do cliente ou o CPF/CNPJ para validar os contratos no Horus.');
+      return;
+    }
+    try {
+      setValidatingContract(true);
+      setValidatedContracts(null);
+      const token = getToken();
+      const params = new URLSearchParams();
+      if (consignmentCustomerId.trim()) params.set('customer_id', consignmentCustomerId.trim());
+      if (consignmentDoc.trim()) params.set('customer_doc', consignmentDoc.trim());
+      if (consignmentCodCtr.trim()) params.set('cod_ctr', consignmentCodCtr.trim());
+      if (activeSessionId) params.set('session_id', String(activeSessionId));
+
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/consignment-validate?${params.toString()}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Não foi possível validar o contrato no Horus.');
+      }
+      setValidatedContracts(data);
+      if (data.customer_document && !consignmentDoc) {
+        setConsignmentDoc(data.customer_document);
+      }
+      if (data.valid && data.contracts?.length > 0) {
+        if (!consignmentCodCtr && data.contracts.length === 1 && data.contracts[0].cod_ctr) {
+          setConsignmentCodCtr(String(data.contracts[0].cod_ctr));
+        }
+        toast.success(data.message || 'Contrato validado com sucesso no Horus!');
+      } else {
+        toast.warning(data.message || 'Nenhum contrato ativo encontrado para este cliente no Horus.');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Erro ao validar contrato no Horus');
+    } finally {
+      setValidatingContract(false);
+    }
+  }
+
+  async function handleDownloadTemplate() {
+    if (!companyId) return;
+    try {
+      setDownloadingTemplate(true);
+      const token = getToken();
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/spreadsheet-template`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) {
+        throw new Error('Falha ao baixar planilha modelo');
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'modelo_carga_pdv.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Planilha modelo (com coluna Editora) baixada com sucesso!');
+    } catch {
+      // Fallback local em CSV caso esteja sem conexão com o backend
+      const csvContent = '\uFEFFISBN;Título;Editora;Preço;Estoque\n9788535914849;1984;Companhia das Letras;59,90;25\n9788595081512;Sapiens: Uma Breve História da Humanidade;HarperCollins;69,90;15\n';
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'modelo_carga_pdv.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success('Planilha modelo (.csv) baixada!');
+    } finally {
+      setDownloadingTemplate(false);
     }
   }
 
@@ -130,8 +264,12 @@ export default function POSCatalogLoadModal({
       }
 
       const data = await res.json();
+      await clearCatalog();
       setProgressMsg(`Salvando ${data.items.length} itens no banco offline...`);
-      const saveRes = await saveCatalogItems(data.items);
+      const saveRes = await saveCatalogItems(data.items, {
+        company_id: Number(companyId),
+        session_id: activeSessionId,
+      });
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
       processLoadOutcome('Catálogo Geral', data, saveRes);
@@ -145,22 +283,30 @@ export default function POSCatalogLoadModal({
 
   async function handleLoadFromConsignment() {
     if (!companyId) return;
-    if (!consignmentCustomerId) {
-      toast.error('Informe o ID do cliente da consignação');
+    if (!consignmentCustomerId.trim() && !consignmentDoc.trim()) {
+      toast.error('Informe o ID/Código do cliente ou o CPF/CNPJ para buscar os itens do contrato no Horus');
       return;
     }
     try {
       setLoading(true);
-      setProgressMsg('Consultando contrato de consignação no Horus...');
+      setProgressMsg('Validando e consultando itens do contrato de consignação no Horus...');
       const token = getToken();
 
-      let url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/catalog-load?source=CONSIGNMENT&customer_id=${consignmentCustomerId}`;
-      if (consignmentCodCtr) {
-        url += `&cod_ctr=${encodeURIComponent(consignmentCodCtr)}`;
+      const params = new URLSearchParams({ source: 'CONSIGNMENT' });
+      if (consignmentCustomerId.trim()) {
+        params.set('customer_id', consignmentCustomerId.trim());
+      }
+      if (consignmentDoc.trim()) {
+        params.set('customer_doc', consignmentDoc.trim());
+      }
+      if (consignmentCodCtr.trim()) {
+        params.set('cod_ctr', consignmentCodCtr.trim());
       }
       if (activeSessionId) {
-        url += `&session_id=${activeSessionId}`;
+        params.set('session_id', String(activeSessionId));
       }
+
+      const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/companies/${companyId}/pos/catalog-load?${params.toString()}`;
 
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) {
@@ -170,19 +316,23 @@ export default function POSCatalogLoadModal({
 
       const data = await res.json();
       if (!data.items || data.items.length === 0) {
-        if ((data.zero_price_count || 0) > 0 || (data.duplicate_count || 0) > 0) {
+        if ((data.zero_price_count || 0) > 0 || (data.duplicate_count || 0) > 0 || (data.zero_stock_count || 0) > 0) {
           processLoadOutcome('Consignação Horus', data, { savedCount: 0, duplicateCount: 0, zeroPriceCount: 0 });
           return;
         }
-        toast.warning('Nenhum item consignado encontrado neste contrato/cliente.');
+        toast.warning('Nenhum item consignado com saldo disponível encontrado neste contrato/cliente.');
         return;
       }
 
+      await clearCatalog();
       setProgressMsg(`Salvando ${data.items.length} itens consignados no PDV offline...`);
-      const saveRes = await saveCatalogItems(data.items);
+      const saveRes = await saveCatalogItems(data.items, {
+        company_id: Number(companyId),
+        session_id: activeSessionId,
+      });
       const newCount = await getCatalogCount();
       onCatalogUpdated(newCount);
-      processLoadOutcome('Consignação Horus', data, saveRes);
+      processLoadOutcome(`Consignação Horus${data.cod_ctr ? ` (#${data.cod_ctr})` : ''}`, data, saveRes);
     } catch (err: any) {
       toast.error(err.message || 'Erro ao carregar consignação');
     } finally {
@@ -240,7 +390,10 @@ export default function POSCatalogLoadModal({
       // 1. Caso planilha pequena (<= 5.000 produtos já retornados inline no POST)
       if (data.items && data.items.length > 0) {
         setProgressMsg(`Gravando ${data.items.length.toLocaleString('pt-BR')} produtos na memória local...`);
-        const saveRes = await saveCatalogItems(data.items);
+        const saveRes = await saveCatalogItems(data.items, {
+          company_id: Number(companyId),
+          session_id: activeSessionId,
+        });
         totalSaved = saveRes.savedCount;
         totalDuplicates += saveRes.duplicateCount;
         totalZeroPrice += saveRes.zeroPriceCount;
@@ -263,7 +416,10 @@ export default function POSCatalogLoadModal({
           }
 
           const chunkData = await chunkRes.json();
-          const saveRes = await saveCatalogItems(chunkData.items || []);
+          const saveRes = await saveCatalogItems(chunkData.items || [], {
+            company_id: Number(companyId),
+            session_id: activeSessionId,
+          });
           totalSaved += saveRes.savedCount;
           totalDuplicates += saveRes.duplicateCount;
           totalZeroPrice += saveRes.zeroPriceCount;
@@ -427,6 +583,16 @@ export default function POSCatalogLoadModal({
                 </div>
               )}
 
+              {/* Alerta de Saldo Zerado */}
+              {(loadReport.zeroStockCount || 0) > 0 && (
+                <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-start gap-3">
+                  <AlertCircle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                    <strong>{loadReport.zeroStockCount}</strong> item(ns) do contrato estavam com saldo totalmente faturado/devolvido (saldo 0) e não foram incluídos.
+                  </p>
+                </div>
+              )}
+
               <div className="pt-2 flex flex-col sm:flex-row gap-2">
                 <button
                   onClick={onClose}
@@ -448,34 +614,153 @@ export default function POSCatalogLoadModal({
               {activeTab === 'consignment' && (
                 <div className="space-y-4">
                   <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 rounded-xl text-xs text-amber-800 dark:text-amber-300">
-                    Ideal para eventos e feiras: busca todos os itens, saldos e preços autorizados de um contrato de consignação aberto no Horus.
+                    Ideal para eventos e feiras: valida e busca todos os itens, editoras, saldos e preços autorizados de um contrato de consignação aberto no Horus.
                   </div>
 
-                  <div>
+                  {/* Busca rápida de cliente cadastrado */}
+                  <div className="relative">
                     <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      ID do Cliente no Cronuz / Horus *
+                      Pesquisar Cliente por Nome ou CNPJ/CPF
                     </label>
-                    <input
-                      type="number"
-                      placeholder="Ex: 142"
-                      value={consignmentCustomerId}
-                      onChange={(e) => setConsignmentCustomerId(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
+                    <div className="relative">
+                      <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                      <input
+                        type="text"
+                        placeholder="Digite o nome da escola, parceiro ou CNPJ..."
+                        value={customerSearchTerm}
+                        onChange={(e) => setCustomerSearchTerm(e.target.value)}
+                        className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                      {searchingCustomers && (
+                        <Loader2 className="w-4 h-4 animate-spin text-indigo-500 absolute right-3 top-2.5" />
+                      )}
+                    </div>
+                    {customerResults.length > 0 && (
+                      <div className="mt-1 max-h-40 overflow-y-auto rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 shadow-lg divide-y divide-slate-100 dark:divide-slate-700/60">
+                        {customerResults.map((c: any) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              setConsignmentCustomerId(String(c.id));
+                              setConsignmentDoc(c.document || '');
+                              setCustomerSearchTerm(c.name || c.corporate_name || '');
+                              setCustomerResults([]);
+                              setValidatedContracts(null);
+                            }}
+                            className="w-full text-left px-3 py-2 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition flex items-center justify-between text-xs"
+                          >
+                            <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                              {c.name || c.corporate_name}
+                            </span>
+                            <span className="font-mono text-[11px] text-slate-500 dark:text-slate-400 ml-2 shrink-0">
+                              {c.document || `ID #${c.id}`}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Número do Contrato Horus (Opcional - se vazio busca o ativo)
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: 5042"
-                      value={consignmentCodCtr}
-                      onChange={(e) => setConsignmentCodCtr(e.target.value)}
-                      className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-indigo-500 outline-none"
-                    />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        CPF / CNPJ do Cliente no Horus
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 12.345.678/0001-99"
+                        value={consignmentDoc}
+                        onChange={(e) => {
+                          setConsignmentDoc(e.target.value);
+                          setValidatedContracts(null);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Ou ID / Cód. Cliente (Cronuz / Horus)
+                      </label>
+                      <input
+                        type="number"
+                        placeholder="Ex: 142"
+                        value={consignmentCustomerId}
+                        onChange={(e) => {
+                          setConsignmentCustomerId(e.target.value);
+                          setValidatedContracts(null);
+                        }}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
                   </div>
+
+                  <div className="flex flex-col sm:flex-row gap-2 items-end">
+                    <div className="flex-1 w-full">
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Nº do Contrato Horus (Opcional - se vazio busca o ativo)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 5042"
+                        value={consignmentCodCtr}
+                        onChange={(e) => setConsignmentCodCtr(e.target.value)}
+                        className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white text-sm font-mono focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleValidateConsignment}
+                      disabled={validatingContract || loading}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 text-indigo-700 dark:text-indigo-300 font-semibold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-50 h-[38px]"
+                    >
+                      {validatingContract ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
+                      Validar Contrato
+                    </button>
+                  </div>
+
+                  {/* Resultado da validação de contratos no Horus */}
+                  {validatedContracts && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs space-y-2 ${
+                        validatedContracts.valid
+                          ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60 text-emerald-900 dark:text-emerald-200'
+                          : 'bg-rose-50/70 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60 text-rose-900 dark:text-rose-200'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-bold">
+                        <span>
+                          {validatedContracts.customer_name
+                            ? `${validatedContracts.customer_name} (${validatedContracts.customer_document})`
+                            : validatedContracts.message}
+                        </span>
+                        <span>{validatedContracts.contracts.length} contrato(s)</span>
+                      </div>
+                      {validatedContracts.contracts.length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          {validatedContracts.contracts.map((ctr) => (
+                            <button
+                              key={ctr.cod_ctr}
+                              type="button"
+                              onClick={() => setConsignmentCodCtr(String(ctr.cod_ctr))}
+                              className={`w-full text-left px-2.5 py-1.5 rounded-lg border flex items-center justify-between transition ${
+                                consignmentCodCtr === String(ctr.cod_ctr)
+                                  ? 'bg-indigo-600 text-white border-indigo-600'
+                                  : 'bg-white dark:bg-slate-800 border-emerald-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 hover:border-indigo-400'
+                              }`}
+                            >
+                              <span className="font-mono font-bold">Contrato #{ctr.cod_ctr}</span>
+                              <span className="text-[11px]">
+                                Saldo: <strong>{ctr.saldo_itens ?? 0} un.</strong> • R${' '}
+                                {Number(ctr.vlr_total_liquido || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <button
                     onClick={handleLoadFromConsignment}
@@ -483,7 +768,7 @@ export default function POSCatalogLoadModal({
                     className="w-full py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/20 transition disabled:opacity-50"
                   >
                     {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                    Carregar Itens da Consignação
+                    Sincronizar Itens do Contrato
                   </button>
                 </div>
               )}
@@ -507,8 +792,25 @@ export default function POSCatalogLoadModal({
 
               {activeTab === 'spreadsheet' && (
                 <div className="space-y-4">
-                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300">
-                    Importe uma planilha Excel (.xlsx) ou CSV com as colunas: <strong>ISBN / Código de Barras</strong>, <strong>Título</strong>, <strong>Preço</strong> e <strong>Estoque</strong>.
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900/40 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      Importe uma planilha Excel (.xlsx) ou CSV com as colunas:{' '}
+                      <strong>ISBN / Código de Barras</strong>, <strong>Título</strong>, <strong>Editora</strong>,{' '}
+                      <strong>Preço</strong> e <strong>Estoque</strong>.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      disabled={downloadingTemplate}
+                      className="shrink-0 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-[11px] flex items-center gap-1.5 shadow-sm transition"
+                    >
+                      {downloadingTemplate ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" />
+                      )}
+                      Baixar Planilha Modelo (.xlsx)
+                    </button>
                   </div>
 
                   <div className="border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-2xl p-6 text-center hover:border-indigo-500 transition bg-slate-50 dark:bg-slate-800/50">

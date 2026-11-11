@@ -21,9 +21,11 @@ import {
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import { CurrencyInput } from '@/components/CurrencyInput';
+import { enforceSellerSessionAndCatalogIsolation } from '@/lib/pdvIndexedDb';
 
 export interface POSSessionData {
   id: number;
+  company_id?: number;
   code: string;
   title: string;
   status: string;
@@ -38,7 +40,9 @@ export interface POSSessionData {
   cash_difference?: number;
   closing_notes?: string;
   products_count?: number;
+  customer_id?: number;
   customer_name?: string;
+  customer_document?: string;
   total_sales_count: number;
   total_sales_amount: number;
   opened_at: string;
@@ -133,7 +137,24 @@ export default function POSSessionModal({
       );
       if (res.ok) {
         const data = await res.json();
-        setSessions(data);
+        const sellerSessions: POSSessionData[] = (Array.isArray(data) ? data : [])
+          .filter((s: any) => !s.company_id || Number(s.company_id) === Number(companyId))
+          .map((s: any) => ({ ...s, company_id: s.company_id ? Number(s.company_id) : Number(companyId) }));
+        setSessions(sellerSessions);
+
+        if (!onlyDeleted && companyId) {
+          const validIds = sellerSessions.map((s) => Number(s.id));
+          const { purgedSession, purgedCatalog } = await enforceSellerSessionAndCatalogIsolation(
+            Number(companyId),
+            validIds
+          );
+          if (purgedSession || (activeSession && activeSession.company_id && Number(activeSession.company_id) !== Number(companyId))) {
+            onSelectSession(null);
+            toast.warning('Sessão de outro seller detectada e removida. Os itens offline guardados foram limpos.');
+          } else if (purgedCatalog) {
+            toast.info('Itens offline de outro seller foram removidos do cache local.');
+          }
+        }
       }
     } catch (e) {
       console.error(e);

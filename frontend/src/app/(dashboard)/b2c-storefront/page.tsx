@@ -3387,6 +3387,49 @@ export default function SellerB2CStorefrontManagementPage({
                                   {cust.city}/{cust.state}
                                 </span>
                               )}
+                              {alerts.length > 0 && (
+                                <div
+                                  className="mt-2 space-y-1.5"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  {alerts.map((al: any) => (
+                                    <div
+                                      key={al.id}
+                                      className="p-2 rounded-xl border border-amber-200/80 dark:border-amber-800/60 bg-amber-50/70 dark:bg-amber-950/30 flex flex-wrap items-center justify-between gap-2"
+                                    >
+                                      <div className="min-w-0">
+                                        <span className="block text-[11px] font-extrabold text-amber-900 dark:text-amber-200 truncate">
+                                          📚 {al.product_name || 'Produto'}
+                                        </span>
+                                        <span className="block text-[10px] font-mono text-amber-800/80 dark:text-amber-300/80">
+                                          {al.ean_gtin ? `ISBN: ${al.ean_gtin} • ` : ''}
+                                          Cód: {al.sku || '—'}
+                                          {al.created_at
+                                            ? ` • ${new Date(al.created_at).toLocaleString('pt-BR')}`
+                                            : ''}
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-1.5 shrink-0">
+                                        {al.status === 'NOTIFIED' ? (
+                                          <span className="px-2 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[10px] font-bold">
+                                            ✓ Cliente Avisado
+                                          </span>
+                                        ) : (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleUpdateStockNotifyStatus(al.id, 'NOTIFIED')}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[10px] font-bold cursor-pointer shadow-2xs"
+                                            title="Disparar e-mail avisando que o livro voltou ao estoque"
+                                          >
+                                            <Mail className="w-3 h-3" />
+                                            Avisar Cliente
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </td>
 
                             <td className="py-3.5 px-4">
