@@ -169,6 +169,7 @@ export default function SellerB2CStorefrontManagementPage({
     store_slug: '',
     b2c_custom_domain: '',
     b2c_storefront_open: true,
+    allow_zero_balance_sale: false,
     b2c_checkout_mode: 'NATIVE_GATEWAY',
     b2c_default_freight_value: 15.9,
     b2c_free_shipping_min_value: 150.0,
@@ -409,6 +410,9 @@ export default function SellerB2CStorefrontManagementPage({
             store_slug: s.settings.store_slug || '',
             b2c_custom_domain: s.settings.b2c_custom_domain || '',
             b2c_storefront_open: Boolean(s.settings.b2c_storefront_open),
+            allow_zero_balance_sale: Boolean(
+              s.settings.allow_zero_balance_sale ?? s.settings.horus_sync_config?.allow_zero_balance_sale
+            ),
             b2c_checkout_mode: s.settings.b2c_checkout_mode || 'NATIVE_GATEWAY',
             b2c_default_freight_value: Number(s.settings.b2c_default_freight_value || 0),
             b2c_free_shipping_min_value: Number(s.settings.b2c_free_shipping_min_value || 0),
@@ -3680,24 +3684,45 @@ export default function SellerB2CStorefrontManagementPage({
                   </button>
                 </div>
 
-                <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={settingsForm.b2c_storefront_open}
-                    onChange={(e) =>
-                      setSettingsForm({ ...settingsForm, b2c_storefront_open: e.target.checked })
-                    }
-                    className="mt-1 w-4 h-4 rounded text-indigo-600"
-                  />
-                  <div>
-                    <span className="block text-sm font-bold text-slate-900 dark:text-white">
-                      Loja Virtual Aberta ao Público
-                    </span>
-                    <span className="text-xs text-slate-500">
-                      Permite que clientes naveguem pelo catálogo, criem conta com CPF/E-mail e senha segura, calculem o frete e finalizem compras.
-                    </span>
-                  </div>
-                </label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={settingsForm.b2c_storefront_open}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, b2c_storefront_open: e.target.checked })
+                      }
+                      className="mt-1 w-4 h-4 rounded text-indigo-600"
+                    />
+                    <div>
+                      <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                        Loja Virtual Aberta ao Público
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Permite que clientes naveguem pelo catálogo, criem conta com CPF/E-mail e senha segura, calculem o frete e finalizem compras.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-3 p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(settingsForm.allow_zero_balance_sale)}
+                      onChange={(e) =>
+                        setSettingsForm({ ...settingsForm, allow_zero_balance_sale: e.target.checked })
+                      }
+                      className="mt-1 w-4 h-4 rounded text-indigo-600"
+                    />
+                    <div>
+                      <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                        Vender Itens com Saldo Zero (Exceto Situação FC ou FE)
+                      </span>
+                      <span className="text-xs text-slate-500">
+                        Habilita a compra na loja B2C de produtos sem saldo imediato quando a situação do item no Horus ERP for diferente de <code className="font-mono font-bold text-rose-600">FC</code> (Fora de Catálogo) e <code className="font-mono font-bold text-rose-600">FE</code> (Falta na Editora).
+                      </span>
+                    </div>
+                  </label>
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
@@ -4236,7 +4261,7 @@ export default function SellerB2CStorefrontManagementPage({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <label className="flex items-start gap-3 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800/40 cursor-pointer">
                   <input
                     type="checkbox"
@@ -4283,6 +4308,28 @@ export default function SellerB2CStorefrontManagementPage({
                     </span>
                     <span className="text-xs text-slate-500">
                       Assim que o pagamento for aprovado (via Cartão, PIX, Cupom 100% ou alteração manual para Pago), o pedido é integrado no Horus.
+                    </span>
+                  </div>
+                </label>
+
+                <label className="flex items-start gap-3 p-4 rounded-xl border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(settingsForm.allow_zero_balance_sale)}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        allow_zero_balance_sale: e.target.checked,
+                      })
+                    }
+                    className="mt-1 w-4 h-4 rounded text-indigo-600"
+                  />
+                  <div>
+                    <span className="block text-sm font-bold text-slate-900 dark:text-white">
+                      Permitir Venda com Saldo Zero (se Situação ≠ FC e ≠ FE)
+                    </span>
+                    <span className="text-xs text-slate-500">
+                      Guarda a situação do item no Cronuz (<code className="font-mono">SITUACAO_ITEM</code>) e libera a compra B2C com saldo zero se não for <code className="font-mono font-bold text-rose-600">FC</code> nem <code className="font-mono font-bold text-rose-600">FE</code>.
                     </span>
                   </div>
                 </label>

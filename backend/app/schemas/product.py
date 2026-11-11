@@ -28,6 +28,7 @@ class ProductBase(BaseModel):
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
     horus_cod_item: Optional[int] = None
+    horus_situacao_item: Optional[str] = None
     launch_date: Optional[datetime] = None
     is_pre_sale: Optional[bool] = False
     is_out_of_print: Optional[bool] = False
@@ -80,6 +81,7 @@ class ProductUpdate(BaseModel):
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
     horus_cod_item: Optional[int] = None
+    horus_situacao_item: Optional[str] = None
     launch_date: Optional[datetime] = None
     is_pre_sale: Optional[bool] = None
     is_out_of_print: Optional[bool] = None

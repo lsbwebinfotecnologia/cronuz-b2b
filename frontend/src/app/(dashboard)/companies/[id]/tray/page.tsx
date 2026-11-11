@@ -57,6 +57,7 @@ export default function MasterB2CSettingsPage() {
     characteristic_type_name: '',
     characteristic_value: '',
     auto_collect_bookinfo_covers: false,
+    allow_zero_balance_sale: false,
     last_sync_at: null as string | null,
     last_sync_mode: null as string | null,
     last_created_count: 0,
@@ -104,6 +105,7 @@ export default function MasterB2CSettingsPage() {
           characteristic_type_name: sc.characteristic_type_name || '',
           characteristic_value: sc.characteristic_value || '',
           auto_collect_bookinfo_covers: Boolean(sc.auto_collect_bookinfo_covers),
+          allow_zero_balance_sale: Boolean(sc.allow_zero_balance_sale),
           last_sync_at: sc.last_sync_at || null,
           last_sync_mode: sc.last_sync_mode || null,
           last_created_count: Number(sc.last_created_count || 0),
@@ -290,6 +292,7 @@ export default function MasterB2CSettingsPage() {
         cod_tpo_caract: syncConfig.cod_tpo_caract,
         cod_caract: syncConfig.cod_caract,
         auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+        allow_zero_balance_sale: syncConfig.allow_zero_balance_sale,
       };
       if (resetLastSync) {
         payload.custom_data_ini = '';
@@ -358,6 +361,7 @@ export default function MasterB2CSettingsPage() {
           cod_tpo_caract: syncConfig.cod_tpo_caract,
           cod_caract: syncConfig.cod_caract,
           auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+          allow_zero_balance_sale: syncConfig.allow_zero_balance_sale,
           full_sync: forceFullSync,
           max_items: 10000,
         }),
@@ -751,17 +755,33 @@ export default function MasterB2CSettingsPage() {
           )}
 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-            <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-700 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={syncConfig.auto_collect_bookinfo_covers}
-                onChange={(e) =>
-                  setSyncConfig((p) => ({ ...p, auto_collect_bookinfo_covers: e.target.checked }))
-                }
-                className="rounded text-indigo-600 focus:ring-indigo-500"
-              />
-              Coletar capas automaticamente na <b>Bookinfo</b> quando ausente
-            </label>
+            <div className="flex flex-col gap-2">
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={syncConfig.auto_collect_bookinfo_covers}
+                  onChange={(e) =>
+                    setSyncConfig((p) => ({ ...p, auto_collect_bookinfo_covers: e.target.checked }))
+                  }
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                Coletar capas automaticamente na <b>Bookinfo</b> quando ausente
+              </label>
+
+              <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={syncConfig.allow_zero_balance_sale}
+                  onChange={(e) =>
+                    setSyncConfig((p) => ({ ...p, allow_zero_balance_sale: e.target.checked }))
+                  }
+                  className="rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                <span>
+                  Permitir venda B2C de itens com <b>saldo zero</b> (somente se Situação no Horus ≠ <code className="font-mono font-bold text-rose-600">FC</code> e ≠ <code className="font-mono font-bold text-rose-600">FE</code>)
+                </span>
+              </label>
+            </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button

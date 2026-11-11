@@ -52,6 +52,84 @@ def _generate_unique_code(prefix: str = "VOUCHER") -> str:
     return f"{clean_prefix}-{suffix}"
 
 
+_BLOCKED_B2C_SITUACOES = {"FC", "FE"}
+_HORUS_SITUACAO_COL_ENSURED = False
+
+
+def _ensure_horus_situacao_column(db: Session) -> None:
+    """Garante de forma idempotente que a coluna horus_situacao_item exista em prd_product."""
+    global _HORUS_SITUACAO_COL_ENSURED
+    if _HORUS_SITUACAO_COL_ENSURED:
+        return
+    try:
+        from sqlalchemy import text
+        db.execute(text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS horus_situacao_item VARCHAR(20)"))
+        db.commit()
+        _HORUS_SITUACAO_COL_ENSURED = True
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _is_b2c_zero_balance_sale_enabled(settings: Optional[CompanySettings]) -> bool:
+    """Retorna True se o seller habilitou a venda B2C de itens com saldo zero (exceto situação FC ou FE)."""
+    if not settings:
+        return False
+    raw_cfg = getattr(settings, "b2c_showcases_config", None)
+    if isinstance(raw_cfg, dict):
+        sync_cfg = raw_cfg.get("horus_sync_config")
+        if isinstance(sync_cfg, dict) and "allow_zero_balance_sale" in sync_cfg:
+            return bool(sync_cfg.get("allow_zero_balance_sale"))
+        if "allow_zero_balance_sale" in raw_cfg:
+            return bool(raw_cfg.get("allow_zero_balance_sale"))
+    return False
+
+
+def _can_sell_b2c_product(
+    stock_qty: int,
+    situacao_item: Optional[str],
+    allow_zero_balance_sale: bool,
+) -> tuple[bool, str]:
+    """
+    Calcula (allow_purchase, stock_status_label) para produtos da vitrine B2C:
+    - Se stock_qty > 0: permite compra ("Em Estoque")
+    - Se stock_qty <= 0:
+      - Se allow_zero_balance_sale == True e situacao_item NÃO for FC nem FE: permite compra ("Disponível sob encomenda")
+      - Caso contrário: bloqueia compra ("Indisponível (FC/FE)" ou "Avise-me quando chegar")
+    """
+    qty = max(0, int(stock_qty or 0))
+    sit = str(situacao_item or "").strip().upper()
+    if qty > 0:
+        return True, "Em Estoque"
+    if allow_zero_balance_sale and sit not in _BLOCKED_B2C_SITUACOES:
+        return True, "Disponível sob encomenda"
+    if sit in _BLOCKED_B2C_SITUACOES:
+        return False, f"Indisponível ({sit})"
+    return False, "Avise-me quando chegar"
+
+
+def _recompute_company_b2c_product_availability(
+    db: Session,
+    company_id: int,
+    allow_zero_balance_sale: bool,
+) -> int:
+    """Recalcula allow_purchase e stock_status_label de todos os produtos locais da empresa."""
+    _ensure_horus_situacao_column(db)
+    prods = db.query(Product).filter(Product.company_id == company_id).all()
+    changed = 0
+    for p in prods:
+        qty = max(0, int(p.stock_quantity or 0))
+        sit = getattr(p, "horus_situacao_item", None)
+        new_allow, new_lbl = _can_sell_b2c_product(qty, sit, allow_zero_balance_sale)
+        if bool(p.allow_purchase) != new_allow or (p.stock_status_label or "") != new_lbl:
+            p.allow_purchase = new_allow
+            p.stock_status_label = new_lbl
+            changed += 1
+    return changed
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # SCHEMAS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -126,6 +204,7 @@ class B2CSettingsUpdateRequest(BaseModel):
     freight_config: Optional[Dict[str, Any]] = None
     horus_sync_config: Optional[Dict[str, Any]] = None
     horus_order_config: Optional[Dict[str, Any]] = None
+    allow_zero_balance_sale: Optional[bool] = None
     email_notifications_config: Optional[Dict[str, Any]] = None
     tray_enabled: Optional[bool] = None
     tray_store_url: Optional[str] = None
@@ -169,6 +248,7 @@ class B2CHorusSyncRequest(BaseModel):
     characteristic_value: Optional[str] = None
     search_term: Optional[str] = None
     auto_collect_bookinfo_covers: bool = False
+    allow_zero_balance_sale: Optional[bool] = None
     full_sync: bool = False
     custom_data_ini: Optional[str] = None
     max_items: int = Field(default=10000, ge=1, le=25000)
@@ -1305,6 +1385,7 @@ def get_b2c_coupons_summary(
         "characteristic_value": str(raw_sync_cfg.get("characteristic_value") or ""),
         "search_term": str(raw_sync_cfg.get("search_term") or ""),
         "auto_collect_bookinfo_covers": bool(raw_sync_cfg.get("auto_collect_bookinfo_covers", False)),
+        "allow_zero_balance_sale": _is_b2c_zero_balance_sale_enabled(settings),
         "last_sync_at": raw_sync_cfg.get("last_sync_at"),
         "last_synced_count": int(raw_sync_cfg.get("last_synced_count") or 0),
     }
@@ -1365,6 +1446,7 @@ def get_b2c_coupons_summary(
             "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
             "horus_company": getattr(settings, "horus_company", "") or "" if settings else "",
             "horus_branch": getattr(settings, "horus_branch", "") or "" if settings else "",
+            "allow_zero_balance_sale": _is_b2c_zero_balance_sale_enabled(settings),
             "freight_config": freight_config,
             "horus_sync_config": horus_sync_config,
             "horus_order_config": _get_b2c_horus_order_config(settings, db=db, company_id=cid),
@@ -1475,6 +1557,11 @@ def update_b2c_seller_settings(
     if data.horus_sync_config is not None and isinstance(data.horus_sync_config, dict):
         raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
         prev_sync = raw_cfg.get("horus_sync_config") if isinstance(raw_cfg.get("horus_sync_config"), dict) else {}
+        next_allow_zero = (
+            bool(data.horus_sync_config.get("allow_zero_balance_sale"))
+            if "allow_zero_balance_sale" in data.horus_sync_config
+            else bool(prev_sync.get("allow_zero_balance_sale", False))
+        )
         raw_cfg["horus_sync_config"] = {
             **prev_sync,
             "cod_tpo_caract": str(data.horus_sync_config.get("cod_tpo_caract") or "").strip(),
@@ -1482,10 +1569,24 @@ def update_b2c_seller_settings(
             "characteristic_value": str(data.horus_sync_config.get("characteristic_value") or "").strip(),
             "search_term": str(data.horus_sync_config.get("search_term") or "").strip(),
             "auto_collect_bookinfo_covers": bool(data.horus_sync_config.get("auto_collect_bookinfo_covers", False)),
+            "allow_zero_balance_sale": next_allow_zero,
             "cod_caract": str(data.horus_sync_config.get("cod_caract") or "").strip(),
         }
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")
+        _recompute_company_b2c_product_availability(db, cid, next_allow_zero)
+
+    if data.allow_zero_balance_sale is not None:
+        raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
+        prev_sync = raw_cfg.get("horus_sync_config") if isinstance(raw_cfg.get("horus_sync_config"), dict) else {}
+        next_allow_zero = bool(data.allow_zero_balance_sale)
+        raw_cfg["horus_sync_config"] = {
+            **prev_sync,
+            "allow_zero_balance_sale": next_allow_zero,
+        }
+        settings.b2c_showcases_config = raw_cfg
+        flag_modified(settings, "b2c_showcases_config")
+        _recompute_company_b2c_product_availability(db, cid, next_allow_zero)
 
     if data.horus_order_config is not None and isinstance(data.horus_order_config, dict):
         raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
@@ -2056,7 +2157,24 @@ def get_b2c_horus_sync_config(
         if isinstance(raw_cfg, dict) and isinstance(raw_cfg.get("horus_sync_config"), dict)
         else {}
     )
+    _ensure_horus_situacao_column(db)
     local_count = db.query(func.count(Product.id)).filter(Product.company_id == cid).scalar() or 0
+    fc_fe_count = (
+        db.query(func.count(Product.id))
+        .filter(Product.company_id == cid, Product.horus_situacao_item.in_(["FC", "FE"]))
+        .scalar()
+        or 0
+    )
+    zero_balance_sellable_count = (
+        db.query(func.count(Product.id))
+        .filter(
+            Product.company_id == cid,
+            Product.stock_quantity <= 0,
+            or_(Product.horus_situacao_item.is_(None), ~Product.horus_situacao_item.in_(["FC", "FE"])),
+        )
+        .scalar()
+        or 0
+    )
     return {
         "company_id": cid,
         "horus_enabled": bool(getattr(settings, "horus_enabled", False)) if settings else False,
@@ -2071,11 +2189,14 @@ def get_b2c_horus_sync_config(
             or (getattr(settings, "b2c_storefront_open", False) if settings else False)
         ),
         "local_products_count": local_count,
+        "fc_fe_products_count": fc_fe_count,
+        "zero_balance_sellable_count": zero_balance_sellable_count,
         "cod_tpo_caract": str(raw_sync.get("cod_tpo_caract") or ""),
         "cod_caract": str(raw_sync.get("cod_caract") or ""),
         "characteristic_type_name": str(raw_sync.get("characteristic_type_name") or ""),
         "characteristic_value": str(raw_sync.get("characteristic_value") or ""),
         "auto_collect_bookinfo_covers": bool(raw_sync.get("auto_collect_bookinfo_covers", False)),
+        "allow_zero_balance_sale": _is_b2c_zero_balance_sale_enabled(settings),
         "last_sync_at": raw_sync.get("last_sync_at"),
         "last_sync_data_ini": raw_sync.get("last_sync_data_ini"),
         "last_sync_data_fim": raw_sync.get("last_sync_data_fim"),
@@ -2103,11 +2224,17 @@ def update_b2c_horus_sync_config(
         db.add(settings)
     raw_cfg = dict(settings.b2c_showcases_config) if isinstance(settings.b2c_showcases_config, dict) else {}
     prev_sync = raw_cfg.get("horus_sync_config") if isinstance(raw_cfg.get("horus_sync_config"), dict) else {}
+    next_allow_zero = (
+        bool(data.allow_zero_balance_sale)
+        if data.allow_zero_balance_sale is not None
+        else bool(prev_sync.get("allow_zero_balance_sale", False))
+    )
     updated_sync = {
         **prev_sync,
-        "cod_tpo_caract": str(data.cod_tpo_caract or "").strip(),
-        "cod_caract": str(data.cod_caract or "").strip(),
+        "cod_tpo_caract": str(data.cod_tpo_caract if data.cod_tpo_caract is not None else prev_sync.get("cod_tpo_caract") or "").strip(),
+        "cod_caract": str(data.cod_caract if data.cod_caract is not None else prev_sync.get("cod_caract") or "").strip(),
         "auto_collect_bookinfo_covers": bool(data.auto_collect_bookinfo_covers),
+        "allow_zero_balance_sale": next_allow_zero,
     }
     if data.custom_data_ini is not None:
         if str(data.custom_data_ini).strip() == "":
@@ -2118,7 +2245,9 @@ def update_b2c_horus_sync_config(
     raw_cfg["horus_sync_config"] = updated_sync
     settings.b2c_showcases_config = raw_cfg
     flag_modified(settings, "b2c_showcases_config")
+    _recompute_company_b2c_product_availability(db, cid, next_allow_zero)
     db.commit()
+    _b2c_cache_clear(cid)
     return {
         "message": "Configuração de sincronização do Horus salva com sucesso!",
         **get_b2c_horus_sync_config(company_id=cid, db=db, current_user=current_user),
@@ -2221,6 +2350,7 @@ async def list_horus_characteristics(
                         "COD_ITEM": a_row.get("COD_ITEM"),
                         "NOM_ITEM": a_row.get("NOM_ITEM"),
                         "COD_BARRA_ITEM": a_row.get("COD_BARRA_ITEM") or a_row.get("BARRAS_ISBN"),
+                        "SITUACAO_ITEM": a_row.get("SITUACAO_ITEM") or a_row.get("STA_ITEM") or a_row.get("COD_SITUACAO"),
                         "VLR_CAPA": a_row.get("VLR_CAPA"),
                         "SALDO_DISPONIVEL": a_row.get("SALDO_DISPONIVEL"),
                         "DAT_ULT_ATL": a_row.get("DAT_ULT_ATL"),
@@ -2701,248 +2831,277 @@ async def sync_horus_products_to_cronuz(
     updated_count = 0
     stock_only_updated_count = 0
     covers_collected = 0
+    sync_item_warnings: List[str] = []
     company_cover_dir = STATIC_DIR / str(cid)
+    _ensure_horus_situacao_column(db)
+    allow_zero_sale = (
+        bool(data.allow_zero_balance_sale)
+        if data.allow_zero_balance_sale is not None
+        else bool(prev_sync.get("allow_zero_balance_sale", False))
+    )
 
     for h_item in horus_items:
-        raw_cod = h_item.get("COD_ITEM")
-        cod_item = int(raw_cod) if str(raw_cod or "").strip().isdigit() else 0
-        isbn = str(
-            h_item.get("BARRAS_ISBN")
-            or h_item.get("COD_BARRA_ITEM")
-            or h_item.get("COD_ISBN_ITEM")
-            or h_item.get("ISBN")
-            or ""
-        ).strip()
-        sku = str(cod_item if cod_item > 0 else (isbn or uuid.uuid4().hex[:8])).strip()
-        name = str(h_item.get("NOM_ITEM") or h_item.get("DESCRICAO") or "").strip()
-        if not name:
-            continue
+        try:
+            with db.begin_nested():
+                raw_cod = h_item.get("COD_ITEM")
+                cod_item = int(raw_cod) if str(raw_cod or "").strip().isdigit() else 0
+                isbn = str(
+                    h_item.get("BARRAS_ISBN")
+                    or h_item.get("COD_BARRA_ITEM")
+                    or h_item.get("COD_ISBN_ITEM")
+                    or h_item.get("ISBN")
+                    or ""
+                ).strip()
+                sku = str(cod_item if cod_item > 0 else (isbn or uuid.uuid4().hex[:8])).strip()
+                name = str(h_item.get("NOM_ITEM") or h_item.get("DESCRICAO") or "").strip()
+                if not name:
+                    continue
 
-        synopsis = str(
-            h_item.get("DESC_SINOPSE")
-            or h_item.get("SINOPSE")
-            or h_item.get("OBS_ITEM")
-            or ""
-        ).strip()
-        author = str(h_item.get("NOM_AUTOR") or h_item.get("AUTOR") or "").strip()
-        publisher = str(h_item.get("NOM_EDITORA") or h_item.get("NOM_FANTASIA") or "").strip()
-        genre = str(
-            h_item.get("GENERO_NIVEL_1")
-            or h_item.get("NOM_GRUPO_ITEM")
-            or h_item.get("DSC_GENERO")
-            or h_item.get("NOM_GENERO")
-            or ""
-        ).strip()
+                situacao_item = str(
+                    h_item.get("SITUACAO_ITEM")
+                    or h_item.get("STA_ITEM")
+                    or h_item.get("COD_SITUACAO")
+                    or ""
+                ).strip().upper()[:20]
 
-        vlr_capa = parse_horus_price(
-            str(h_item.get("VLR_CAPA") or h_item.get("PRECO") or h_item.get("VLR_PRECO") or "0")
-        )
-        vlr_liq = parse_horus_price(
-            str(h_item.get("VLR_LIQ_CLI") or h_item.get("VLR_LIQ_DESCONTO_PDV") or "0")
-        )
-        base_price = vlr_capa if vlr_capa > 0 else vlr_liq
-        promo_price = vlr_liq if (0 < vlr_liq < base_price) else None
+                synopsis = str(
+                    h_item.get("DESC_SINOPSE")
+                    or h_item.get("SINOPSE")
+                    or h_item.get("OBS_ITEM")
+                    or ""
+                ).strip()
+                author = str(h_item.get("NOM_AUTOR") or h_item.get("AUTOR") or "").strip()
+                publisher = str(h_item.get("NOM_EDITORA") or h_item.get("NOM_FANTASIA") or "").strip()
+                genre = str(
+                    h_item.get("GENERO_NIVEL_1")
+                    or h_item.get("NOM_GRUPO_ITEM")
+                    or h_item.get("DSC_GENERO")
+                    or h_item.get("NOM_GENERO")
+                    or ""
+                ).strip()
 
-        if cod_item and cod_item in estoque_changes_by_cod:
-            stock_qty = estoque_changes_by_cod[cod_item]
-        else:
-            try:
-                stock_qty = max(
-                    0,
-                    int(float(str(h_item.get("SALDO_DISPONIVEL", h_item.get("SALDO", 0)) or 0).replace(",", "."))),
+                vlr_capa = parse_horus_price(
+                    str(h_item.get("VLR_CAPA") or h_item.get("PRECO") or h_item.get("VLR_PRECO") or "0")
                 )
-            except Exception:
-                stock_qty = 0
-
-        # Peso e Dimensões do Horus
-        raw_peso = parse_horus_price(
-            str(
-                h_item.get("PESO")
-                or h_item.get("PESO_ITEM")
-                or h_item.get("PESO_BRUTO")
-                or h_item.get("PESO_LIQ")
-                or "0"
-            )
-        )
-        if raw_peso > 15:
-            weight_kg = round(raw_peso / 1000.0, 3)
-        elif raw_peso > 0:
-            weight_kg = round(raw_peso, 3)
-        else:
-            weight_kg = default_weight
-
-        width_cm = (
-            parse_horus_price(
-                str(h_item.get("LARGURA") or h_item.get("LARGURA_ITEM") or h_item.get("VLR_LARGURA") or "0")
-            )
-            or None
-        )
-        height_cm = (
-            parse_horus_price(
-                str(h_item.get("ALTURA") or h_item.get("ALTURA_ITEM") or h_item.get("VLR_ALTURA") or "0")
-            )
-            or None
-        )
-        length_cm = (
-            parse_horus_price(
-                str(
-                    h_item.get("COMPRIMENTO")
-                    or h_item.get("COMPRIMENTO_ITEM")
-                    or h_item.get("PROFUNDIDADE")
-                    or h_item.get("ESPESSURA")
-                    or "0"
+                vlr_liq = parse_horus_price(
+                    str(h_item.get("VLR_LIQ_CLI") or h_item.get("VLR_LIQ_DESCONTO_PDV") or "0")
                 )
-            )
-            or None
-        )
+                base_price = vlr_capa if vlr_capa > 0 else vlr_liq
+                promo_price = vlr_liq if (0 < vlr_liq < base_price) else None
 
-        # Categoria e Marca
-        cat_id = None
-        if genre:
-            g_key = genre.upper()
-            if g_key not in existing_cats:
-                new_cat = Category(company_id=cid, name=genre[:150])
-                db.add(new_cat)
-                db.flush()
-                existing_cats[g_key] = new_cat
-            cat_id = existing_cats[g_key].id
+                if cod_item and cod_item in estoque_changes_by_cod:
+                    stock_qty = estoque_changes_by_cod[cod_item]
+                else:
+                    try:
+                        stock_qty = max(
+                            0,
+                            int(float(str(h_item.get("SALDO_DISPONIVEL", h_item.get("SALDO", 0)) or 0).replace(",", "."))),
+                        )
+                    except Exception:
+                        stock_qty = 0
 
-        brand_id = None
-        if publisher:
-            b_key = publisher.upper()
-            if b_key not in existing_brands:
-                new_brand = Brand(company_id=cid, name=publisher[:100])
-                db.add(new_brand)
-                db.flush()
-                existing_brands[b_key] = new_brand
-            brand_id = existing_brands[b_key].id
-
-        # Resolver produto existente sem duplicar
-        prod = None
-        if cod_item and cod_item in by_cod:
-            prod = by_cod[cod_item]
-        elif sku.upper() in by_sku:
-            prod = by_sku[sku.upper()]
-        elif isbn and isbn in by_ean:
-            prod = by_ean[isbn]
-
-        # Verificar capa local em disco ou URL de capa retornada pelo Horus (IMAGEM_ITEM2)
-        clean_isbn_file = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn)
-        local_cover_url = None
-        if clean_isbn_file:
-            if (company_cover_dir / f"{clean_isbn_file}.jpg").exists():
-                local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.jpg"
-            elif (company_cover_dir / f"{clean_isbn_file}.png").exists():
-                local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.png"
-        if not local_cover_url:
-            for img_field in ("IMAGEM_ITEM2", "IMAGEM_ITEM3", "IMAGEM_ITEM"):
-                raw_img = str(h_item.get(img_field) or "").strip()
-                if raw_img.startswith("http://") or raw_img.startswith("https://"):
-                    local_cover_url = raw_img
-                    break
-
-        if not prod:
-            prod = Product(
-                company_id=cid,
-                sku=sku,
-                name=name[:255],
-                short_description=synopsis[:400] if synopsis else None,
-                long_description=synopsis if synopsis else None,
-                base_price=base_price,
-                promotional_price=promo_price,
-                weight_kg=weight_kg,
-                width_cm=width_cm,
-                height_cm=height_cm,
-                length_cm=length_cm,
-                brand=publisher[:100] if publisher else None,
-                model=author[:100] if author else None,
-                ean_gtin=isbn[:50] if isbn else None,
-                category_id=cat_id,
-                brand_id=brand_id,
-                status="ACTIVE",
-                stock_quantity=stock_qty,
-                allow_purchase=stock_qty > 0,
-                stock_status_label="DISPONÍVEL" if stock_qty > 0 else "SEM ESTOQUE",
-                cover_url=local_cover_url,
-                horus_cod_item=cod_item if cod_item > 0 else None,
-                subject=genre[:150] if genre else None,
-            )
-            db.add(prod)
-            db.flush()
-            created_count += 1
-            if cod_item:
-                by_cod[cod_item] = prod
-            by_sku[sku.upper()] = prod
-            if isbn:
-                by_ean[isbn] = prod
-        else:
-            prod.name = name[:255]
-            if synopsis:
-                prod.short_description = synopsis[:400]
-                prod.long_description = synopsis
-            if base_price > 0:
-                prod.base_price = base_price
-            if promo_price is not None:
-                prod.promotional_price = promo_price
-            prod.stock_quantity = stock_qty
-            prod.allow_purchase = stock_qty > 0
-            prod.stock_status_label = "DISPONÍVEL" if stock_qty > 0 else "SEM ESTOQUE"
-            if weight_kg and (not prod.weight_kg or prod.weight_kg <= 0):
-                prod.weight_kg = weight_kg
-            if width_cm:
-                prod.width_cm = width_cm
-            if height_cm:
-                prod.height_cm = height_cm
-            if length_cm:
-                prod.length_cm = length_cm
-            if publisher:
-                prod.brand = publisher[:100]
-                prod.brand_id = brand_id
-            if author:
-                prod.model = author[:100]
-            if isbn:
-                prod.ean_gtin = isbn[:50]
-            if cat_id:
-                prod.category_id = cat_id
-            if genre:
-                prod.subject = genre[:150]
-            if cod_item > 0:
-                prod.horus_cod_item = cod_item
-            if local_cover_url and not prod.cover_url:
-                prod.cover_url = local_cover_url
-            updated_count += 1
-
-        # Vincular característica (sem query N+1)
-        item_char_val = str(
-            h_item.get("DESC_CARACTERISTICA")
-            or h_item.get("DESC_CARACT")
-            or h_item.get("NOM_CARACT")
-            or eff_char_val
-        ).strip()[:150]
-        existing_pc = existing_pcs.get(prod.id)
-        if not existing_pc:
-            new_pc = ProductCharacteristic(
-                product_id=prod.id,
-                characteristic_id=char_obj.id,
-                value=item_char_val,
-            )
-            db.add(new_pc)
-            existing_pcs[prod.id] = new_pc
-        else:
-            existing_pc.value = item_char_val
-
-        # Coleta opcional na Bookinfo quando solicitado (limitado a 25 por lote síncrono para alta performance)
-        if data.auto_collect_bookinfo_covers and not prod.cover_url and isbn and covers_collected < 25:
-            try:
-                await collect_bookinfo_cover_for_company(
-                    db=db,
-                    company_id=cid,
-                    isbn=isbn,
-                    product_id=prod.id,
+                # Peso e Dimensões do Horus
+                raw_peso = parse_horus_price(
+                    str(
+                        h_item.get("PESO")
+                        or h_item.get("PESO_ITEM")
+                        or h_item.get("PESO_BRUTO")
+                        or h_item.get("PESO_LIQ")
+                        or "0"
+                    )
                 )
-                covers_collected += 1
-            except Exception:
-                pass
+                if raw_peso > 15:
+                    weight_kg = round(raw_peso / 1000.0, 3)
+                elif raw_peso > 0:
+                    weight_kg = round(raw_peso, 3)
+                else:
+                    weight_kg = default_weight
+
+                width_cm = (
+                    parse_horus_price(
+                        str(h_item.get("LARGURA") or h_item.get("LARGURA_ITEM") or h_item.get("VLR_LARGURA") or "0")
+                    )
+                    or None
+                )
+                height_cm = (
+                    parse_horus_price(
+                        str(h_item.get("ALTURA") or h_item.get("ALTURA_ITEM") or h_item.get("VLR_ALTURA") or "0")
+                    )
+                    or None
+                )
+                length_cm = (
+                    parse_horus_price(
+                        str(
+                            h_item.get("COMPRIMENTO")
+                            or h_item.get("COMPRIMENTO_ITEM")
+                            or h_item.get("PROFUNDIDADE")
+                            or h_item.get("ESPESSURA")
+                            or "0"
+                        )
+                    )
+                    or None
+                )
+
+                # Categoria e Marca
+                cat_id = None
+                if genre:
+                    g_key = genre.upper()
+                    if g_key not in existing_cats:
+                        new_cat = Category(company_id=cid, name=genre[:150])
+                        db.add(new_cat)
+                        db.flush()
+                        existing_cats[g_key] = new_cat
+                    cat_id = existing_cats[g_key].id
+
+                brand_id = None
+                if publisher:
+                    b_key = publisher.upper()
+                    if b_key not in existing_brands:
+                        new_brand = Brand(company_id=cid, name=publisher[:100])
+                        db.add(new_brand)
+                        db.flush()
+                        existing_brands[b_key] = new_brand
+                    brand_id = existing_brands[b_key].id
+
+                # Resolver produto existente sem duplicar
+                prod = None
+                if cod_item and cod_item in by_cod:
+                    prod = by_cod[cod_item]
+                elif sku.upper() in by_sku:
+                    prod = by_sku[sku.upper()]
+                elif isbn and isbn in by_ean:
+                    prod = by_ean[isbn]
+
+                # Verificar capa local em disco ou URL de capa retornada pelo Horus (IMAGEM_ITEM2)
+                clean_isbn_file = re.sub(r"[^a-zA-Z0-9_\-]", "", isbn)
+                local_cover_url = None
+                if clean_isbn_file:
+                    if (company_cover_dir / f"{clean_isbn_file}.jpg").exists():
+                        local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.jpg"
+                    elif (company_cover_dir / f"{clean_isbn_file}.png").exists():
+                        local_cover_url = f"/uploads/covers/{cid}/{clean_isbn_file}.png"
+                if not local_cover_url:
+                    for img_field in ("IMAGEM_ITEM2", "IMAGEM_ITEM3", "IMAGEM_ITEM"):
+                        raw_img = str(h_item.get(img_field) or "").strip()
+                        if raw_img.startswith("http://") or raw_img.startswith("https://"):
+                            local_cover_url = raw_img
+                            break
+
+                eff_situacao = situacao_item or (getattr(prod, "horus_situacao_item", None) if prod else None)
+                allow_p, status_lbl = _can_sell_b2c_product(stock_qty, eff_situacao, allow_zero_sale)
+
+                if not prod:
+                    prod = Product(
+                        company_id=cid,
+                        sku=sku,
+                        name=name[:255],
+                        short_description=synopsis[:400] if synopsis else None,
+                        long_description=synopsis if synopsis else None,
+                        base_price=base_price,
+                        promotional_price=promo_price,
+                        weight_kg=weight_kg,
+                        width_cm=width_cm,
+                        height_cm=height_cm,
+                        length_cm=length_cm,
+                        brand=publisher[:100] if publisher else None,
+                        model=author[:100] if author else None,
+                        ean_gtin=isbn[:50] if isbn else None,
+                        category_id=cat_id,
+                        brand_id=brand_id,
+                        status="ACTIVE",
+                        stock_quantity=stock_qty,
+                        is_pre_sale=(eff_situacao == "IP"),
+                        is_out_of_print=(eff_situacao in ("FC", "FE", "ES")),
+                        allow_purchase=allow_p,
+                        stock_status_label=status_lbl,
+                        cover_url=local_cover_url,
+                        horus_cod_item=cod_item if cod_item > 0 else None,
+                        horus_situacao_item=eff_situacao,
+                        subject=genre[:150] if genre else None,
+                    )
+                    db.add(prod)
+                    db.flush()
+                    created_count += 1
+                    if cod_item:
+                        by_cod[cod_item] = prod
+                    by_sku[sku.upper()] = prod
+                    if isbn:
+                        by_ean[isbn] = prod
+                else:
+                    prod.name = name[:255]
+                    if synopsis:
+                        prod.short_description = synopsis[:400]
+                        prod.long_description = synopsis
+                    if base_price > 0:
+                        prod.base_price = base_price
+                    if promo_price is not None:
+                        prod.promotional_price = promo_price
+                    prod.stock_quantity = stock_qty
+                    if eff_situacao:
+                        prod.horus_situacao_item = eff_situacao
+                        prod.is_pre_sale = (eff_situacao == "IP")
+                        prod.is_out_of_print = (eff_situacao in ("FC", "FE", "ES"))
+                    prod.allow_purchase = allow_p
+                    prod.stock_status_label = status_lbl
+                    if weight_kg and (not prod.weight_kg or prod.weight_kg <= 0):
+                        prod.weight_kg = weight_kg
+                    if width_cm:
+                        prod.width_cm = width_cm
+                    if height_cm:
+                        prod.height_cm = height_cm
+                    if length_cm:
+                        prod.length_cm = length_cm
+                    if publisher:
+                        prod.brand = publisher[:100]
+                        prod.brand_id = brand_id
+                    if author:
+                        prod.model = author[:100]
+                    if isbn:
+                        prod.ean_gtin = isbn[:50]
+                    if cat_id:
+                        prod.category_id = cat_id
+                    if genre:
+                        prod.subject = genre[:150]
+                    if cod_item > 0:
+                        prod.horus_cod_item = cod_item
+                    if local_cover_url and not prod.cover_url:
+                        prod.cover_url = local_cover_url
+                    updated_count += 1
+
+                # Vincular característica (sem query N+1)
+                item_char_val = str(
+                    h_item.get("DESC_CARACTERISTICA")
+                    or h_item.get("DESC_CARACT")
+                    or h_item.get("NOM_CARACT")
+                    or eff_char_val
+                ).strip()[:150]
+                existing_pc = existing_pcs.get(prod.id)
+                if not existing_pc:
+                    new_pc = ProductCharacteristic(
+                        product_id=prod.id,
+                        characteristic_id=char_obj.id,
+                        value=item_char_val,
+                    )
+                    db.add(new_pc)
+                    existing_pcs[prod.id] = new_pc
+                else:
+                    existing_pc.value = item_char_val
+
+                # Coleta opcional na Bookinfo quando solicitado (limitado a 25 por lote síncrono para alta performance)
+                if data.auto_collect_bookinfo_covers and not prod.cover_url and isbn and covers_collected < 25:
+                    try:
+                        await collect_bookinfo_cover_for_company(
+                            db=db,
+                            company_id=cid,
+                            isbn=isbn,
+                            product_id=prod.id,
+                        )
+                        covers_collected += 1
+                    except Exception:
+                        pass
+        except Exception as item_exc:
+            if len(sync_item_warnings) < 10:
+                sync_item_warnings.append(f"Item COD_ITEM={h_item.get('COD_ITEM')}: {str(item_exc)[:150]}")
 
     # Aplicar alterações de estoque (Passo 3 - Estoque) para produtos já existentes que não precisaram passar pelo Busca_Acervo
     for ci_est, new_saldo in estoque_changes_by_cod.items():
@@ -2951,9 +3110,20 @@ async def sync_horus_products_to_cronuz(
         prod_est = by_cod.get(ci_est)
         if prod_est:
             prod_est.stock_quantity = new_saldo
-            prod_est.allow_purchase = new_saldo > 0
-            prod_est.stock_status_label = "DISPONÍVEL" if new_saldo > 0 else "SEM ESTOQUE"
+            est_allow, est_lbl = _can_sell_b2c_product(
+                new_saldo,
+                getattr(prod_est, "horus_situacao_item", None),
+                allow_zero_sale,
+            )
+            prod_est.allow_purchase = est_allow
+            prod_est.stock_status_label = est_lbl
             stock_only_updated_count += 1
+
+    # Garantir que todos os produtos locais reflitam a regra de venda com saldo zero (exceto FC/FE)
+    _recompute_company_b2c_product_availability(db, cid, allow_zero_sale)
+
+    if sync_item_warnings:
+        api_diagnostics["item_warnings"] = sync_item_warnings
 
     # Gravar a data/hora de execução que teve sucesso (run_start_utc)
     success_sync_iso = run_start_utc.isoformat()
@@ -2966,6 +3136,7 @@ async def sync_horus_products_to_cronuz(
         "characteristic_type_name": eff_char_type,
         "characteristic_value": eff_char_val,
         "auto_collect_bookinfo_covers": bool(data.auto_collect_bookinfo_covers),
+        "allow_zero_balance_sale": allow_zero_sale,
         "last_sync_at": success_sync_iso,
         "last_sync_data_ini": data_ini_datetime_str or "CARGA COMPLETA",
         "last_sync_data_fim": data_fim_datetime_str or run_start_br.strftime("%d/%m/%Y %H:%M:%S"),
@@ -3141,6 +3312,7 @@ async def execute_company_horus_stock_only_sync(
     updated_count = 0
 
     if status_str == "SUCCESS" and estoque_changes_by_cod:
+        allow_zero_sale_job = _is_b2c_zero_balance_sale_enabled(settings)
         target_cods = list(estoque_changes_by_cod.keys())
         target_skus = [str(c) for c in target_cods]
         matching_products = (
@@ -3164,8 +3336,11 @@ async def execute_company_horus_stock_only_sync(
                 continue
 
             new_saldo = estoque_changes_by_cod[ci_match]
-            new_allow = new_saldo > 0
-            new_label = "DISPONÍVEL" if new_saldo > 0 else "SEM ESTOQUE"
+            new_allow, new_label = _can_sell_b2c_product(
+                new_saldo,
+                getattr(prod, "horus_situacao_item", None),
+                allow_zero_sale_job,
+            )
 
             if (
                 int(prod.stock_quantity or 0) != new_saldo
@@ -3711,11 +3886,13 @@ def _b2c_cache_clear(company_id: int) -> int:
 
 
 def _apply_b2c_promotions_to_items(
-    items: List[Dict[str, Any]], promotions: List[Dict[str, Any]]
+    items: List[Dict[str, Any]],
+    promotions: List[Dict[str, Any]],
+    allow_zero_balance_sale: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Aplica regras de preço promocional B2C (De/Por) com validade por Categoria, Editora, Produtos (SKU/ISBN) ou Todo o Catálogo,
-    e garante que `allow_purchase=True` nos itens da vitrine aberta B2C.
+    e calcula `allow_purchase` e `stock_status_label` respeitando `allow_zero_balance_sale` e `horus_situacao_item` (FC/FE).
     """
     if not items:
         return []
@@ -3739,8 +3916,15 @@ def _apply_b2c_promotions_to_items(
     result = []
     for raw_item in items:
         item = dict(raw_item)
-        # Na loja aberta B2C, habilitar Comprar se houver saldo > 0, ou Avise-me caso saldo <= 0
-        item["allow_purchase"] = int(item.get("stock_quantity") or 0) > 0
+        item_qty = int(item.get("stock_quantity") or 0)
+        item_sit = item.get("horus_situacao_item") or item.get("situacao_item")
+        allow_p, status_lbl = _can_sell_b2c_product(
+            item_qty,
+            item_sit,
+            allow_zero_balance_sale=allow_zero_balance_sale,
+        )
+        item["allow_purchase"] = allow_p
+        item["stock_status_label"] = status_lbl
 
         base_price = float(item.get("base_price") or 0)
         if base_price <= 0 or not active_rules:
@@ -3851,17 +4035,20 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
     banners = raw_cfg.get("banners") if isinstance(raw_cfg.get("banners"), list) else []
     promotions = raw_cfg.get("promotions") if isinstance(raw_cfg.get("promotions"), list) else []
     raw_showcases = raw_cfg.get("showcases") if isinstance(raw_cfg.get("showcases"), list) else []
+    allow_zero_sale = _is_b2c_zero_balance_sale_enabled(settings)
+    branding["allow_zero_balance_sale"] = allow_zero_sale
 
-    # Map real-time stock_quantity from local Product table so showcases reflect real stock
-    local_stock_map: Dict[str, int] = {}
+    # Map real-time stock_quantity and horus_situacao_item from local Product table so showcases reflect real stock & FC/FE rule
+    local_stock_map: Dict[str, tuple[int, Optional[str]]] = {}
     try:
+        _ensure_horus_situacao_column(db)
         local_prods = (
-            db.query(Product.id, Product.sku, Product.ean_gtin, Product.stock_quantity)
+            db.query(Product.id, Product.sku, Product.ean_gtin, Product.stock_quantity, Product.horus_situacao_item)
             .filter(Product.company_id == company.id)
             .all()
         )
         for lp in local_prods:
-            st_val = max(0, int(lp.stock_quantity or 0))
+            st_val = (max(0, int(lp.stock_quantity or 0)), lp.horus_situacao_item)
             if lp.id:
                 local_stock_map[f"id:{lp.id}"] = st_val
             if lp.sku:
@@ -3889,18 +4076,24 @@ def _build_b2c_appearance_config(company: Company, settings: Optional[CompanySet
                 pid = it_copy.get("id") or it_copy.get("product_id")
                 sku_k = str(it_copy.get("sku") or "").strip()
                 ean_k = str(it_copy.get("ean_gtin") or "").strip()
-                real_stock = None
+                real_info = None
                 if pid and f"id:{pid}" in local_stock_map:
-                    real_stock = local_stock_map[f"id:{pid}"]
+                    real_info = local_stock_map[f"id:{pid}"]
                 elif sku_k and f"sku:{sku_k}" in local_stock_map:
-                    real_stock = local_stock_map[f"sku:{sku_k}"]
+                    real_info = local_stock_map[f"sku:{sku_k}"]
                 elif ean_k and f"ean:{ean_k}" in local_stock_map:
-                    real_stock = local_stock_map[f"ean:{ean_k}"]
-                if real_stock is not None:
+                    real_info = local_stock_map[f"ean:{ean_k}"]
+                if real_info is not None:
+                    real_stock, real_sit = real_info
                     it_copy["stock_quantity"] = real_stock
-                    it_copy["allow_purchase"] = real_stock > 0
+                    it_copy["horus_situacao_item"] = real_sit
+                    allow_p, status_lbl = _can_sell_b2c_product(real_stock, real_sit, allow_zero_sale)
+                    it_copy["allow_purchase"] = allow_p
+                    it_copy["stock_status_label"] = status_lbl
                 enriched_items.append(it_copy)
-            sc_copy["items"] = _apply_b2c_promotions_to_items(enriched_items, promotions)
+            sc_copy["items"] = _apply_b2c_promotions_to_items(
+                enriched_items, promotions, allow_zero_balance_sale=allow_zero_sale
+            )
             showcases.append(sc_copy)
 
     raw_categories = raw_cfg.get("categories") if isinstance(raw_cfg.get("categories"), list) else []
@@ -5534,6 +5727,8 @@ async def get_public_b2c_catalog(
         or 0
     )
 
+    allow_zero_sale = _is_b2c_zero_balance_sale_enabled(settings)
+
     # Se o seller ainda não sincronizou produtos para a tabela prd_product e tem Horus ativo, usa fallback Horus
     if local_active_count == 0 and settings and settings.horus_enabled:
         effective_term = search_term if len(search_term) >= 1 else "A"
@@ -5548,7 +5743,7 @@ async def get_public_b2c_catalog(
             settings=settings,
             search_filter=filter,
         )
-        items = _apply_b2c_promotions_to_items(items, promotions)
+        items = _apply_b2c_promotions_to_items(items, promotions, allow_zero_balance_sale=allow_zero_sale)
         if only_promo:
             items = [
                 it for it in items
@@ -5560,7 +5755,7 @@ async def get_public_b2c_catalog(
         if author_filter:
             items = [it for it in items if author_filter.lower() in str(it.get("author") or "").lower()]
         if in_stock:
-            items = [it for it in items if int(it.get("stock_quantity") or 0) > 0]
+            items = [it for it in items if int(it.get("stock_quantity") or 0) > 0 or bool(it.get("allow_purchase"))]
         if min_price is not None:
             items = [it for it in items if float(it.get("promotional_price") or it.get("base_price") or 0) >= min_price]
         if max_price is not None:
@@ -5671,7 +5866,15 @@ async def get_public_b2c_catalog(
     if author_filter:
         query = query.filter(Product.model.ilike(f"%{author_filter}%"))
     if in_stock:
-        query = query.filter(Product.stock_quantity > 0)
+        if allow_zero_sale:
+            query = query.filter(
+                or_(
+                    Product.stock_quantity > 0,
+                    or_(Product.horus_situacao_item.is_(None), ~Product.horus_situacao_item.in_(["FC", "FE"])),
+                )
+            )
+        else:
+            query = query.filter(Product.stock_quantity > 0)
     if min_price is not None:
         query = query.filter(Product.base_price >= min_price)
     if max_price is not None:
@@ -5723,13 +5926,8 @@ async def get_public_b2c_catalog(
     mapped = []
     for p in products:
         real_qty = max(0, int(p.stock_quantity or 0))
-        allow, label = calculate_product_availability(
-            real_qty,
-            None,
-            getattr(p, "is_pre_sale", False),
-            getattr(p, "is_out_of_print", False),
-            allow_backorder,
-        )
+        prod_sit = getattr(p, "horus_situacao_item", None)
+        allow_p, status_lbl = _can_sell_b2c_product(real_qty, prod_sit, allow_zero_sale)
         chars_list = []
         for pc in (getattr(p, "characteristics", None) or []):
             c_name = pc.characteristic.name if getattr(pc, "characteristic", None) else "Característica"
@@ -5744,6 +5942,7 @@ async def get_public_b2c_catalog(
                 "company_id": p.company_id,
                 "sku": p.sku,
                 "ean_gtin": p.ean_gtin or "",
+                "horus_situacao_item": prod_sit,
                 "name": p.name,
                 "author": getattr(p, "author", None) or getattr(p, "model", None) or "",
                 "base_price": float(p.base_price or 0.0),
@@ -5763,13 +5962,13 @@ async def get_public_b2c_catalog(
                     if getattr(p, "category", None)
                     else {"id": 0, "name": p.subject or "Geral"}
                 ),
-                "allow_purchase": real_qty > 0,
-                "stock_status_label": "Em Estoque" if real_qty > 0 else "Avise-me quando chegar",
+                "allow_purchase": allow_p,
+                "stock_status_label": status_lbl,
                 "cover_url": getattr(p, "image_url", None) or getattr(p, "cover_url", None),
             }
         )
 
-    mapped = _apply_b2c_promotions_to_items(mapped, promotions)
+    mapped = _apply_b2c_promotions_to_items(mapped, promotions, allow_zero_balance_sale=allow_zero_sale)
     if only_promo:
         mapped = [
             it for it in mapped
@@ -5954,8 +6153,11 @@ async def get_public_b2c_product_detail(
 
     product = query.filter(or_(*filters)).first()
 
+    allow_zero_sale = _is_b2c_zero_balance_sale_enabled(settings)
     if product:
         real_qty = max(0, int(product.stock_quantity or 0))
+        prod_sit = getattr(product, "horus_situacao_item", None)
+        allow_p, status_lbl = _can_sell_b2c_product(real_qty, prod_sit, allow_zero_sale)
         chars_list = []
         for pc in (getattr(product, "characteristics", None) or []):
             c_name = pc.characteristic.name if getattr(pc, "characteristic", None) else "Característica"
@@ -5966,6 +6168,7 @@ async def get_public_b2c_product_detail(
             "company_id": product.company_id,
             "sku": product.sku,
             "ean_gtin": product.ean_gtin or "",
+            "horus_situacao_item": prod_sit,
             "name": product.name,
             "author": getattr(product, "author", None) or getattr(product, "model", None) or "",
             "base_price": float(product.base_price or 0.0),
@@ -5985,11 +6188,13 @@ async def get_public_b2c_product_detail(
                 if getattr(product, "category", None)
                 else {"id": 0, "name": product.subject or "Geral"}
             ),
-            "allow_purchase": real_qty > 0,
-            "stock_status_label": "Em Estoque" if real_qty > 0 else "Avise-me quando chegar",
+            "allow_purchase": allow_p,
+            "stock_status_label": status_lbl,
             "cover_url": getattr(product, "image_url", None) or getattr(product, "cover_url", None),
         }
-        enriched = _apply_b2c_promotions_to_items([mapped_item], promotions)[0]
+        enriched = _apply_b2c_promotions_to_items(
+            [mapped_item], promotions, allow_zero_balance_sale=allow_zero_sale
+        )[0]
 
         # Related products from same category or brand
         rel_query = (
@@ -6010,11 +6215,14 @@ async def get_public_b2c_product_detail(
         related_list = []
         for rp in rel_prods:
             r_qty = max(0, int(rp.stock_quantity or 0))
+            r_sit = getattr(rp, "horus_situacao_item", None)
+            r_allow, r_lbl = _can_sell_b2c_product(r_qty, r_sit, allow_zero_sale)
             related_list.append({
                 "id": rp.id,
                 "company_id": rp.company_id,
                 "sku": rp.sku,
                 "ean_gtin": rp.ean_gtin or "",
+                "horus_situacao_item": r_sit,
                 "name": rp.name,
                 "author": getattr(rp, "author", None) or getattr(rp, "model", None) or "",
                 "base_price": float(rp.base_price or 0.0),
@@ -6026,11 +6234,13 @@ async def get_public_b2c_product_detail(
                     if getattr(rp, "category", None)
                     else {"id": 0, "name": rp.subject or "Geral"}
                 ),
-                "allow_purchase": r_qty > 0,
-                "stock_status_label": "Em Estoque" if r_qty > 0 else "Avise-me quando chegar",
+                "allow_purchase": r_allow,
+                "stock_status_label": r_lbl,
                 "cover_url": getattr(rp, "image_url", None) or getattr(rp, "cover_url", None),
             })
-        related_list = _apply_b2c_promotions_to_items(related_list, promotions)
+        related_list = _apply_b2c_promotions_to_items(
+            related_list, promotions, allow_zero_balance_sale=allow_zero_sale
+        )
         prod_payload = {"product": enriched, "related": related_list}
         _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto {clean_code}")
         return prod_payload
@@ -6064,7 +6274,7 @@ async def get_public_b2c_product_detail(
             settings=settings,
             search_filter="default",
         )
-        items = _apply_b2c_promotions_to_items(items, promotions)
+        items = _apply_b2c_promotions_to_items(items, promotions, allow_zero_balance_sale=allow_zero_sale)
         if items:
             prod_payload = {"product": items[0], "related": items[1:6]}
             _b2c_cache_set(company_id, prod_cache_key, prod_payload, settings, label=f"Produto Horus {clean_code}")
@@ -8548,6 +8758,7 @@ async def process_b2c_checkout(
     db.add(order)
     db.flush()
 
+    allow_zero_sale = _is_b2c_zero_balance_sale_enabled(settings)
     for item in data.items:
         req_qty = max(1, int(item.quantity or 1))
         local_prod = None
@@ -8565,10 +8776,13 @@ async def process_b2c_checkout(
             )
         if local_prod is not None:
             avail_stock = max(0, int(local_prod.stock_quantity or 0))
-            if avail_stock < req_qty:
+            prod_sit = str(getattr(local_prod, "horus_situacao_item", None) or "").strip().upper()
+            can_sell_zero = allow_zero_sale and (prod_sit not in _BLOCKED_B2C_SITUACOES)
+            if avail_stock < req_qty and not can_sell_zero:
+                sit_reason = f" (Situação no acervo: {prod_sit})" if prod_sit in _BLOCKED_B2C_SITUACOES else ""
                 raise HTTPException(
                     status_code=400,
-                    detail=f"O produto '{item.name}' não possui estoque suficiente (Saldo disponível: {avail_stock}).",
+                    detail=f"O produto '{item.name}' não possui estoque suficiente (Saldo disponível: {avail_stock}){sit_reason}.",
                 )
             local_prod.stock_quantity = max(0, avail_stock - req_qty)
 

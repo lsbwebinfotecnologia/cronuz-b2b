@@ -52,6 +52,7 @@ class Product(Base):
     stock_status_label = Column(String(100), nullable=True)
     cover_url = Column(String(500), nullable=True)
     horus_cod_item = Column(Integer, nullable=True, index=True)
+    horus_situacao_item = Column(String(20), nullable=True, index=True)
     launch_date = Column(DateTime(timezone=True), nullable=True, index=True)
     
     # Horus Direct DBM Specific Fields (Cadastro de Livros Access + Multi-ISBNs E-book)

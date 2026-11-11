@@ -59,13 +59,13 @@ def map_horus_product(
         vlr_liq = parse_horus_price(item.get("VLR_LIQ_CLI", item.get("VLR_LIQ_DESCONTO_PDV", "0")))
     
     stock_quantity = int(item.get("SALDO_DISPONIVEL", 0))
-    situacao = item.get("SITUACAO_ITEM", "")
+    situacao = str(item.get("SITUACAO_ITEM") or item.get("STA_ITEM") or item.get("COD_SITUACAO") or "").strip().upper()
     
     allow_purchase, status_label = calculate_product_availability(
         stock_qty=stock_quantity,
         situacao=situacao,
-        is_pre_sale=False,
-        is_out_of_print=False,
+        is_pre_sale=(situacao == "IP"),
+        is_out_of_print=(situacao in ("FC", "FE", "ES")),
         allow_backorder=allow_backorder
     )
     
@@ -83,6 +83,7 @@ def map_horus_product(
         "id": int(item.get("COD_ITEM", 0)),
         "company_id": company_id,
         "sku": str(item.get("COD_ITEM", "")),
+        "horus_situacao_item": situacao or None,
         "ean_gtin": str(item.get("BARRAS_ISBN") or item.get("COD_BARRA_ITEM") or item.get("ISBN") or ""),
         "name": item.get("NOM_ITEM", ""),
         "author": item.get("NOM_AUTOR", ""),

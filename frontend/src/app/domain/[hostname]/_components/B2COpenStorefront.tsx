@@ -1810,7 +1810,7 @@ export default function B2COpenStorefront({
 
     for (const p of pool) {
       const k = String(p.sku || p.ean_gtin || '');
-      const hasStock = Number(p.stock_quantity ?? 0) > 0 && p.allow_purchase !== false;
+      const hasStock = p.allow_purchase === true || (Number(p.stock_quantity ?? 0) > 0 && p.allow_purchase !== false);
       if (k && hasStock && !cartSkus.has(k) && !seen.has(k)) {
         seen.add(k);
         uniqueCandidates.push(p);
@@ -1916,7 +1916,7 @@ export default function B2COpenStorefront({
       prod.discount_percent ||
       (hasPromo && basePrice > 0 ? Math.round(((basePrice - finalPrice) / basePrice) * 100) : 0);
     const stockQty = Number(prod.stock_quantity ?? 0);
-    const hasStock = stockQty > 0 && prod.allow_purchase !== false;
+    const hasStock = prod.allow_purchase === true || (stockQty > 0 && prod.allow_purchase !== false);
     const prodKey = `${keyPrefix}-${prod.sku || prod.ean_gtin}-${prod.id || ''}`;
     const isAviseMeOpen = aviseMeOpenSku === prodKey;
 
@@ -2917,6 +2917,10 @@ export default function B2COpenStorefront({
                     <span className="px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">
                       ✓ Em Estoque
                     </span>
+                  ) : selectedProduct.allow_purchase === true ? (
+                    <span className="px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 text-[11px] font-bold">
+                      ✓ Disponível sob Encomenda
+                    </span>
                   ) : (
                     <span className="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">
                       🔔 Sem Estoque (Avise-me)
@@ -2997,7 +3001,8 @@ export default function B2COpenStorefront({
               </div>
 
               {/* Quantity + Single "Comprar" Button or "Avise-me" */}
-              {Number(selectedProduct.stock_quantity ?? 0) > 0 && selectedProduct.allow_purchase !== false ? (
+              {selectedProduct.allow_purchase === true ||
+              (Number(selectedProduct.stock_quantity ?? 0) > 0 && selectedProduct.allow_purchase !== false) ? (
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <div className="flex items-center justify-between sm:justify-start border border-slate-200 rounded-2xl bg-slate-50 px-3 py-2">
                     <span className="text-xs font-bold text-slate-500 mr-3 sm:hidden">

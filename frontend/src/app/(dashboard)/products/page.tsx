@@ -58,6 +58,9 @@ export default function ProductsPage() {
     characteristic_type_name: '',
     characteristic_value: '',
     auto_collect_bookinfo_covers: false,
+    allow_zero_balance_sale: false,
+    fc_fe_products_count: 0,
+    zero_balance_sellable_count: 0,
     max_items: 10000,
     last_sync_at: null as string | null,
     last_sync_data_ini: null as string | null,
@@ -136,6 +139,9 @@ export default function ProductsPage() {
           characteristic_type_name: data.characteristic_type_name || '',
           characteristic_value: data.characteristic_value || '',
           auto_collect_bookinfo_covers: Boolean(data.auto_collect_bookinfo_covers),
+          allow_zero_balance_sale: Boolean(data.allow_zero_balance_sale),
+          fc_fe_products_count: Number(data.fc_fe_products_count || 0),
+          zero_balance_sellable_count: Number(data.zero_balance_sellable_count || 0),
           last_sync_at: data.last_sync_at || null,
           last_sync_data_ini: data.last_sync_data_ini || null,
           last_sync_data_fim: data.last_sync_data_fim || null,
@@ -209,6 +215,7 @@ export default function ProductsPage() {
         cod_tpo_caract: syncConfig.cod_tpo_caract,
         cod_caract: syncConfig.cod_caract,
         auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+        allow_zero_balance_sale: syncConfig.allow_zero_balance_sale,
       };
       if (resetLastSync) {
         payload.custom_data_ini = '';
@@ -225,6 +232,7 @@ export default function ProductsPage() {
       if (res.ok) {
         toast.success(resetLastSync ? 'Data de execução limpa! A próxima sincronia fará carga completa.' : (data.message || 'Parâmetros do Horus salvos!'));
         await fetchSyncConfig();
+        await fetchProducts();
       } else {
         toast.error(data.detail || 'Erro ao salvar configuração.');
       }
@@ -283,6 +291,7 @@ export default function ProductsPage() {
           cod_tpo_caract: syncConfig.cod_tpo_caract,
           cod_caract: syncConfig.cod_caract,
           auto_collect_bookinfo_covers: syncConfig.auto_collect_bookinfo_covers,
+          allow_zero_balance_sale: syncConfig.allow_zero_balance_sale,
           full_sync: forceFullSync,
           max_items: 10000,
         })
@@ -507,17 +516,31 @@ export default function ProductsPage() {
               )}
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <label className="inline-flex items-center gap-2.5 cursor-pointer text-sm text-slate-700 dark:text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={syncConfig.auto_collect_bookinfo_covers}
-                    onChange={(e) => setSyncConfig(prev => ({ ...prev, auto_collect_bookinfo_covers: e.target.checked }))}
-                    className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                  />
-                  <span>
-                    Coletar capas automaticamente na <b>Bookinfo</b> (quando não houver capa no Horus/local)
-                  </span>
-                </label>
+                <div className="flex flex-col gap-2">
+                  <label className="inline-flex items-center gap-2.5 cursor-pointer text-sm text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={syncConfig.auto_collect_bookinfo_covers}
+                      onChange={(e) => setSyncConfig(prev => ({ ...prev, auto_collect_bookinfo_covers: e.target.checked }))}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>
+                      Coletar capas automaticamente na <b>Bookinfo</b> (quando não houver capa no Horus/local)
+                    </span>
+                  </label>
+
+                  <label className="inline-flex items-center gap-2.5 cursor-pointer text-sm text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={syncConfig.allow_zero_balance_sale}
+                      onChange={(e) => setSyncConfig(prev => ({ ...prev, allow_zero_balance_sale: e.target.checked }))}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>
+                      Permitir venda B2C de itens com <b>saldo zero</b> (somente se a situação no Horus for diferente de <code className="font-mono font-bold text-rose-600">FC</code> e <code className="font-mono font-bold text-rose-600">FE</code>)
+                    </span>
+                  </label>
+                </div>
 
                 <div className="flex flex-wrap items-center gap-2.5">
                   <button
@@ -722,9 +745,23 @@ export default function ProductsPage() {
                     <td className="p-4">
                       <div className="flex flex-col gap-0.5">
                         <span className="text-sm font-medium text-slate-700 dark:text-slate-300 font-mono">{product.ean_gtin || 'Sem ISBN'}</span>
-                        <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                          Cód. Horus: {product.horus_cod_item || product.sku}
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs text-slate-500 dark:text-slate-400 font-mono">
+                            Cód. Horus: {product.horus_cod_item || product.sku}
+                          </span>
+                          {product.horus_situacao_item && (
+                            <span
+                              className={`text-[10px] font-bold font-mono px-1.5 py-0.5 rounded ${
+                                ['FC', 'FE'].includes(String(product.horus_situacao_item).toUpperCase())
+                                  ? 'bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                                  : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300'
+                              }`}
+                              title="Situação do Item sincronizada do Horus ERP"
+                            >
+                              Sit: {product.horus_situacao_item}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </td>
                     <td className="p-4 hidden md:table-cell">
@@ -760,9 +797,13 @@ export default function ProductsPage() {
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
                           {Number(product.stock_quantity ?? product.stock ?? 0)} un.
                         </span>
+                      ) : product.allow_purchase === true ? (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
+                          0 (Sob Encomenda)
+                        </span>
                       ) : (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
-                          0 (Avise-me)
+                          0 ({['FC', 'FE'].includes(String(product.horus_situacao_item || '').toUpperCase()) ? `Bloq. ${product.horus_situacao_item}` : 'Avise-me'})
                         </span>
                       )}
                     </td>
