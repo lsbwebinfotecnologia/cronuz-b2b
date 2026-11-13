@@ -76,6 +76,7 @@ export default function CompanyModulesPage() {
   // ─── Horus SQL Direct — Features State ────────────────────────────
   interface HorusSQLFeatures {
     vindi_baixa: boolean;
+    conciliador_padrao?: boolean;
     pedidos: boolean;
     dbm?: boolean;
   }
@@ -1199,10 +1200,10 @@ export default function CompanyModulesPage() {
                                 <div className="p-4 flex items-center justify-between gap-3">
                                   <div>
                                     <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                                      Baixa Financeira com Vindi
+                                      Baixa Financeira com Vindi (Legado / Dedicado)
                                     </p>
                                     <p className="text-[11px] text-slate-500">
-                                      Importa extrato da Vindi e gera borderô de baixa no Horus ERP.
+                                      Mantém a tela atual (/horus-direct/financeiro-vindi) ativa para clientes em uso.
                                     </p>
                                   </div>
                                   <Switch
@@ -1210,6 +1211,28 @@ export default function CompanyModulesPage() {
                                     onClick={() => handleToggleHorusSQLFeature('vindi_baixa')}
                                     disabled={togglingHorusFeature !== null}
                                     colorClass="bg-emerald-500"
+                                  />
+                                </div>
+
+                                <div className="p-4 flex items-center justify-between gap-3 bg-indigo-50/30 dark:bg-indigo-950/20">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                                        Conciliador Dinâmico &amp; Construtor de Modelos (Novo Padrão)
+                                      </p>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-indigo-600 text-white">
+                                        NOVO
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-500">
+                                      Módulo padronizado com construtor De/Para de planilhas (Shopee, Vindi, Nota Fiscal, Pedido Horus e Nº Lançamento) e migração em 1 clique.
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.conciliador_padrao ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('conciliador_padrao')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-indigo-600"
                                   />
                                 </div>
 

@@ -211,6 +211,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleBuscaPreco, setModuleBuscaPreco] = useState(false);
   const [moduleHorusSql, setModuleHorusSql] = useState(false);
   const [horusSqlVindiBaixa, setHorusSqlVindiBaixa] = useState(false);
+  const [horusSqlConciliadorPadrao, setHorusSqlConciliadorPadrao] = useState(false);
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [horusSqlDbm, setHorusSqlDbm] = useState(false);
   const [paymentProvidersEnabled, setPaymentProvidersEnabled] = useState<string[]>([]);
@@ -288,6 +289,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleBuscaPreco(data.module_busca_preco || false);
                setModuleHorusSql(data.module_horus_sql || false);
                setHorusSqlVindiBaixa(data.horus_sql_feature_vindi_baixa || false);
+               setHorusSqlConciliadorPadrao(data.horus_sql_feature_conciliador_padrao || false);
                setHorusSqlPedidos(data.horus_sql_feature_pedidos || false);
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
                setPaymentProvidersEnabled(Array.isArray(data.payment_providers_enabled) ? data.payment_providers_enabled : []);
@@ -405,6 +407,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
          { name: 'Lançamentos', href: '/financial', icon: Wallet },
          { name: 'Boletos Emitidos', href: '/financial/bank-slips', icon: Receipt },
          ...(horusSqlVindiBaixa ? [{ name: 'Conciliações (Horus)', href: '/horus-direct/financeiro-vindi', icon: RefreshCw }] : []),
+         ...(horusSqlConciliadorPadrao ? [{ name: 'Conciliador (Modelos)', href: '/horus-direct/conciliador-padrao', icon: Layers }] : []),
          ...(coraEnabled ? coraSubItems : []),
          { name: 'Bancos & Cartões', href: '/financial/accounts', icon: Building2 },
          { name: 'Categorias', href: '/financial/categories', icon: FolderTree },
@@ -509,10 +512,13 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     if (horusSqlVindiBaixa && canHorusSql) {
       subItems.push({ name: 'Conciliações (Bancos)', href: '/horus-direct/financeiro-vindi', icon: CreditCard });
     }
+    if (horusSqlConciliadorPadrao && canHorusSql) {
+      subItems.push({ name: 'Conciliador (Modelos)', href: '/horus-direct/conciliador-padrao', icon: Layers });
+    }
     if (horusSqlDbm && canDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
     }
-    if (subItems.length === 0 && canHorusSql && !horusSqlPedidos && !horusSqlVindiBaixa && !horusSqlDbm) {
+    if (subItems.length === 0 && canHorusSql && !horusSqlPedidos && !horusSqlVindiBaixa && !horusSqlConciliadorPadrao && !horusSqlDbm) {
       subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
     }
     if (subItems.length > 0) {

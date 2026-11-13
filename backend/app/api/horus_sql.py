@@ -416,6 +416,7 @@ def get_horus_sql_module_status(
 class HorusSQLFeaturesUpdate(BaseModel):
     """Payload para ativar/desativar sub-funcionalidades do modulo Horus SQL Direct."""
     horus_sql_feature_vindi_baixa: Optional[bool] = None
+    horus_sql_feature_conciliador_padrao: Optional[bool] = None
     horus_sql_feature_pedidos: Optional[bool] = None
     horus_sql_feature_dbm: Optional[bool] = None
 
@@ -445,6 +446,7 @@ def get_horus_sql_features(
         "module_horus_sql": is_module_active,
         "features": {
             "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
+            "conciliador_padrao": getattr(settings, "horus_sql_feature_conciliador_padrao", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
         }
@@ -479,6 +481,10 @@ def update_horus_sql_features(
         settings.horus_sql_feature_vindi_baixa = payload.horus_sql_feature_vindi_baixa
         changed = True
 
+    if payload.horus_sql_feature_conciliador_padrao is not None:
+        settings.horus_sql_feature_conciliador_padrao = payload.horus_sql_feature_conciliador_padrao
+        changed = True
+
     if payload.horus_sql_feature_pedidos is not None:
         settings.horus_sql_feature_pedidos = payload.horus_sql_feature_pedidos
         changed = True
@@ -490,7 +496,11 @@ def update_horus_sql_features(
     if changed:
         # Se alguma feature do Horus SQL foi ativada, garante que usuários Seller com lista restrita enxerguem o módulo
         perms_to_add = []
-        if payload.horus_sql_feature_pedidos is True or payload.horus_sql_feature_vindi_baixa is True:
+        if (
+            payload.horus_sql_feature_pedidos is True
+            or payload.horus_sql_feature_vindi_baixa is True
+            or payload.horus_sql_feature_conciliador_padrao is True
+        ):
             perms_to_add.append("horus_sql")
         if payload.horus_sql_feature_dbm is True:
             perms_to_add.extend(["horus_sql", "dbm"])
@@ -518,6 +528,7 @@ def update_horus_sql_features(
         "success": True,
         "features": {
             "vindi_baixa": getattr(settings, "horus_sql_feature_vindi_baixa", False),
+            "conciliador_padrao": getattr(settings, "horus_sql_feature_conciliador_padrao", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
         }

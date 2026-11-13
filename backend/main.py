@@ -89,6 +89,7 @@ from app.models import distributor as distributor_models
 from app.api import hosted_sites as hosted_sites_api
 from app.api import horus_sql as horus_sql_api
 from app.api import horus_financial
+from app.api import horus_dynamic_reconciliation
 from app.api import horus_orders
 from app.api import cora as cora_api
 from app.api import payments_hub as payments_hub_api
@@ -126,6 +127,7 @@ from app.models import b2c_storefront as b2c_storefront_models
 from app.models import dbm_proposal as dbm_proposal_models
 from app.models import mercadolivre as mercadolivre_models
 from app.models import horus_reconciliation_closing as horus_rec_closing_models
+from app.models import horus_reconciliation_template as horus_rec_template_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -181,10 +183,12 @@ b2c_storefront_models.Base.metadata.create_all(bind=engine)
 dbm_proposal_models.Base.metadata.create_all(bind=engine)
 mercadolivre_models.Base.metadata.create_all(bind=engine)
 horus_rec_closing_models.Base.metadata.create_all(bind=engine)
+horus_rec_template_models.Base.metadata.create_all(bind=engine)
 try:
     from sqlalchemy import text as _sql_text
     with engine.begin() as _conn:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS b2c_showcases_config JSON"))
+        _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_conciliador_padrao BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS cover_image_secondary_base_url VARCHAR(500)"))
         _conn.execute(_sql_text("ALTER TABLE crm_customer ADD COLUMN IF NOT EXISTS min_order_total DOUBLE PRECISION NOT NULL DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS is_ebook BOOLEAN NOT NULL DEFAULT FALSE"))
@@ -377,6 +381,7 @@ if _SERVER_ROLE != "horus_api_only":
     app.include_router(hosted_sites_api.router)
     app.include_router(horus_sql_api.router, tags=["horus-sql"])
     app.include_router(horus_financial.router, tags=["horus-financial"])
+    app.include_router(horus_dynamic_reconciliation.router, tags=["horus-dynamic-reconciliation"])
     app.include_router(cora_api.router, tags=["banco-cora"])
     app.include_router(payments_hub_api.router, tags=["payments-hub"])
     app.include_router(payments_api.router, tags=["payments"])

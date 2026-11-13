@@ -97,6 +97,7 @@ class CompanySettingsBase(BaseModel):
     horus_sql_cod_empresa: Optional[str] = None
     horus_sql_cod_filial: Optional[str] = None
     horus_sql_feature_vindi_baixa: Optional[bool] = False
+    horus_sql_feature_conciliador_padrao: Optional[bool] = False
     horus_sql_feature_pedidos: Optional[bool] = False
     horus_sql_feature_dbm: Optional[bool] = False
 

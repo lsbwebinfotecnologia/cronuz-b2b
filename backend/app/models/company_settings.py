@@ -138,7 +138,8 @@ class CompanySettings(Base):
     horus_sql_cod_filial  = Column(String(20),  nullable=True)   # Código filial no Horus
 
     # ── Horus SQL — Sub-funcionalidades habilitadas pelo Master ──────────────
-    horus_sql_feature_vindi_baixa = Column(Boolean, nullable=False, default=False)  # Baixa financeira com Vindi
+    horus_sql_feature_vindi_baixa = Column(Boolean, nullable=False, default=False)  # Baixa financeira com Vindi (Legado / Dedicado)
+    horus_sql_feature_conciliador_padrao = Column(Boolean, nullable=False, default=False, server_default="false")  # Módulo Conciliador Dinâmico & Construtor de Modelos
     horus_sql_feature_pedidos     = Column(Boolean, nullable=False, default=False)  # Pedidos no Horus Direct
     horus_sql_feature_logistics   = Column(Boolean, nullable=False, default=False)  # Integração com WMS de logística
     horus_sql_feature_dbm         = Column(Boolean, nullable=False, default=False)  # Módulo DBM (Painel Operacional & CRM)
