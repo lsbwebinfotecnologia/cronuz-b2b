@@ -10,7 +10,7 @@ MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 MAX_ABSOLUTE_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
-ALLOWED_SHEET_EXTENSIONS = {".xlsx", ".csv", ".ods"}
+ALLOWED_SHEET_EXTENSIONS = {".xlsx", ".xls", ".xlsm", ".csv", ".ods"}
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".xml", ".txt"}
 ALLOWED_CERT_EXTENSIONS = {".pfx", ".p12", ".pem", ".crt", ".key"}
 

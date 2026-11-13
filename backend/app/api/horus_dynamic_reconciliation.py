@@ -19,6 +19,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,19 +29,32 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
-from app.core.upload_security import read_file_safely, validate_file_size_and_extension
+from app.core.upload_security import (
+    MAX_SHEET_SIZE_BYTES,
+    read_file_safely,
+    validate_file_size_and_extension,
+)
 from app.core.utils import assert_company_ownership
 from app.db.session import SessionLocal, get_db
 from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 from app.integrators.reconciliation_parser import (
     _clean_str,
-    _normalize_header as _clean_header,
     _normalize_order_key,
     _parse_currency as _parse_money,
     _read_raw_rows,
     parse_channel_file,
     parse_tray_bridge_file,
 )
+
+
+def _clean_header(val: Any) -> str:
+    if val is None:
+        return ""
+    s = str(val).strip().lower()
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    s = re.sub(r"[_\-\./\\]+", " ", s)
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def _format_date_br(val: Any) -> str:
@@ -678,29 +692,36 @@ def _parse_dynamic_channel_file(
     idx_key = _find_col_index(
         headers,
         key_col,
-        ("nota fiscal", "nro_nota_fiscal", "nf", "lancamento", "nro_lancamento", "pedido", "id do pedido", "codigo", "numero no erp", "descricao"),
+        (
+            "nota fiscal", "nro nota fiscal", "nf", "lancamento", "nro lancamento", "lancto",
+            "nro lancto", "pedido", "id do pedido", "codigo", "numero no erp", "numero",
+            "titulo", "doc", "venda", "descricao",
+        ),
     )
     idx_liq = _find_col_index(
         headers,
         liq_col,
-        ("valor liquido", "liquido", "repasse", "valor pago", "valor", "total liquido"),
+        (
+            "valor liquido", "liquido", "vlr liquido", "repasse", "valor pago", "vlr pago",
+            "valor recebido", "recebido", "valor", "vlr", "total liquido", "total",
+        ),
     )
     idx_bruto = _find_col_index(
         headers,
         bruto_col,
-        ("valor bruto", "valor original", "valor pedido", "valor da nota", "total bruto"),
-    ) if bruto_col else _find_col_index(headers, "", ("valor bruto", "valor original", "valor da nota"))
+        ("valor bruto", "vlr bruto", "valor original", "valor pedido", "valor da nota", "total bruto"),
+    ) if bruto_col else _find_col_index(headers, "", ("valor bruto", "vlr bruto", "valor original", "valor da nota"))
 
     idx_taxa = _find_col_index(
         headers,
         taxa_col,
-        ("taxa", "comissao", "tarifa", "abatimento"),
+        ("taxa", "comissao", "tarifa", "abatimento", "desconto"),
     ) if taxa_col else _find_col_index(headers, "", ("taxa", "comissao", "tarifa"))
 
     idx_date = _find_col_index(
         headers,
         date_col,
-        ("data pagamento", "data credito", "data", "pagamento", "dt pagto"),
+        ("data pagamento", "data credito", "data", "pagamento", "dt pagto", "vencimento"),
     )
     idx_tipo = _find_col_index(
         headers,
@@ -718,6 +739,41 @@ def _parse_dynamic_channel_file(
         ("cpf", "cnpj", "documento"),
     )
 
+    # Fallback inteligente para planilhas montadas de 2 a 6 colunas (mesmo sem cabeçalho padrão)
+    start_row_idx = header_idx + 1
+    first_row_all_numeric = bool(
+        header_idx == 0
+        and raw_rows
+        and len([c for c in raw_rows[0] if _clean_str(c)]) >= 2
+        and all(
+            re.sub(r"[\d\.,R\$\-\s/]", "", _clean_str(c)) == ""
+            for c in raw_rows[0]
+            if _clean_str(c)
+        )
+    )
+    if first_row_all_numeric:
+        start_row_idx = 0
+
+    if (idx_key is None or (idx_liq is None and idx_bruto is None)) and len(headers) >= 2:
+        sample_scan = raw_rows[start_row_idx : min(len(raw_rows), start_row_idx + 10)] or raw_rows[:5]
+        if sample_scan:
+            if idx_key is None:
+                for c_i in range(len(headers)):
+                    vals = [_clean_str(r[c_i]) for r in sample_scan if c_i < len(r) and _clean_str(r[c_i])]
+                    if vals and all(re.search(r"\d+", v) and ("," not in v) for v in vals):
+                        idx_key = c_i
+                        break
+                if idx_key is None:
+                    idx_key = 0
+            if idx_liq is None and idx_bruto is None:
+                for c_i in range(len(headers)):
+                    if c_i == idx_key:
+                        continue
+                    vals = [_parse_money(r[c_i]) for r in sample_scan if c_i < len(r) and _clean_str(r[c_i])]
+                    if vals and any(abs(v) > 0 for v in vals):
+                        idx_liq = c_i
+                        break
+
     if idx_key is None:
         raise ValueError(
             f"Coluna de Chave ('{key_col or 'Pedido/NF/Lançamento'}') não encontrada na planilha. "
@@ -733,7 +789,7 @@ def _parse_dynamic_channel_file(
     debit_rows: List[Dict[str, Any]] = []
     raw_valid_rows = 0
 
-    for r_i in range(header_idx + 1, len(raw_rows)):
+    for r_i in range(start_row_idx, len(raw_rows)):
         row = raw_rows[r_i]
         if not row or not any(_clean_str(c) for c in row):
             continue
@@ -1081,7 +1137,7 @@ def _run_dynamic_reconciliation_core(
             message=f"Consultando Horus ERP por {match_field} (Filial {cod_filial}) em {total_batches} lote(s)...",
         )
 
-        # LEFT JOIN em PEDIDOS_VENDA permite encontrar tanto lançamentos com pedido quanto lançamentos avulsos / por NF
+        # LEFT JOIN em PEDIDOS_VENDA e CLIENTES permite encontrar tanto lançamentos com pedido quanto avulsos / por NF
         base_select_sql = """
             SELECT 
                 LR.NRO_LANCTO_CRECEBER,
@@ -1094,16 +1150,22 @@ def _run_dynamic_reconciliation_core(
                 LR.COD_BORDERO,
                 PV.COD_METODO,
                 PV.COD_PEDIDO_ORIGEM AS PEDIDO_WEB,
-                NF.NRO_NOTA_FISCAL
+                NF.NRO_NOTA_FISCAL,
+                CLI.NOM_CLI
             FROM LANCTOS_CRECEBER LR WITH (NOLOCK)
             LEFT JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
                 ON PV.COD_PED_VENDA = LR.COD_PED_VENDA 
                 AND PV.COD_FILIAL = LR.COD_FILIAL
+            LEFT JOIN CLIENTES CLI WITH (NOLOCK)
+                ON CLI.COD_CLI = LR.COD_CLI
             OUTER APPLY (
                 SELECT TOP 1 NRO_NOTA_FISCAL 
                 FROM NF_MESTRE WITH (NOLOCK)
-                WHERE NF_MESTRE.COD_PED_VENDA = LR.COD_PED_VENDA 
-                  AND NF_MESTRE.COD_FILIAL = LR.COD_FILIAL
+                WHERE NF_MESTRE.COD_FILIAL = LR.COD_FILIAL
+                  AND (
+                      (LR.COD_PED_VENDA IS NOT NULL AND LR.COD_PED_VENDA > 0 AND NF_MESTRE.COD_PED_VENDA = LR.COD_PED_VENDA)
+                      OR (LR.NRO_SEQ_NF IS NOT NULL AND LR.NRO_SEQ_NF > 0 AND NF_MESTRE.NRO_SEQ_NF = LR.NRO_SEQ_NF)
+                  )
             ) NF
             WHERE LR.COD_FILIAL = %s
         """
@@ -1144,14 +1206,20 @@ def _run_dynamic_reconciliation_core(
                         LR.COD_BORDERO,
                         PV.COD_METODO,
                         PV.COD_PEDIDO_ORIGEM AS PEDIDO_WEB,
-                        NFM.NRO_NOTA_FISCAL
+                        NFM.NRO_NOTA_FISCAL,
+                        CLI.NOM_CLI
                     FROM NF_MESTRE NFM WITH (NOLOCK)
                     INNER JOIN LANCTOS_CRECEBER LR WITH (NOLOCK)
-                        ON LR.COD_PED_VENDA = NFM.COD_PED_VENDA
-                        AND LR.COD_FILIAL = NFM.COD_FILIAL
+                        ON LR.COD_FILIAL = NFM.COD_FILIAL
+                        AND (
+                            (LR.COD_PED_VENDA IS NOT NULL AND LR.COD_PED_VENDA > 0 AND LR.COD_PED_VENDA = NFM.COD_PED_VENDA)
+                            OR (LR.NRO_SEQ_NF IS NOT NULL AND LR.NRO_SEQ_NF > 0 AND LR.NRO_SEQ_NF = NFM.NRO_SEQ_NF)
+                        )
                     LEFT JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
                         ON PV.COD_PED_VENDA = LR.COD_PED_VENDA
                         AND PV.COD_FILIAL = LR.COD_FILIAL
+                    LEFT JOIN CLIENTES CLI WITH (NOLOCK)
+                        ON CLI.COD_CLI = LR.COD_CLI
                     WHERE NFM.COD_FILIAL = %s
                       AND NFM.NRO_NOTA_FISCAL IN ({ph})
                     ORDER BY LR.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC
@@ -1376,13 +1444,21 @@ def _run_dynamic_reconciliation_core(
             h_bordero = h_match.get("COD_BORDERO")
             h_lancto = h_match.get("NRO_LANCTO_CRECEBER")
             h_nf = h_match.get("NRO_NOTA_FISCAL") or v_row.get("nf_tray")
+            h_nom_cli = _clean_str(h_match.get("NOM_CLI"))
+            if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and h_nom_cli:
+                v_row["cliente_nome"] = h_nom_cli
 
             # Se a planilha de entrada tinha apenas Valor Líquido (sem coluna de Valor Bruto nem Planilha Ponte),
             # adota o valor do título Horus como Bruto e calcula a taxa automaticamente!
             if not v_row.get("bruto_from_channel", True) and not is_dual_file and h_valor_original > 0:
                 if abs(v_valor - v_valor_liq) < 0.005 and h_valor_original >= v_valor_liq:
+                    old_v = v_valor
                     v_valor = round(h_valor_original, 2)
                     v_taxa = round(max(0.0, h_valor_original - v_valor_liq), 2)
+                    v_row["valor"] = v_valor
+                    v_row["valor_bruto"] = v_valor
+                    v_row["taxa"] = v_taxa
+                    total_vindi_amount += (v_valor - old_v)
 
             acrescimo_tray = float(v_row.get("acrescimo_tray") or 0.0)
             desconto_tray = float(v_row.get("desconto_tray") or 0.0)
@@ -1877,12 +1953,8 @@ async def inspect_spreadsheet_columns(
     5 linhas de amostra e uma sugestão automática de mapeamento De/Para.
     """
     assert_company_ownership(current_user, company_id)
-    validate_file_size_and_extension(
-        file,
-        max_mb=10,
-        allowed_extensions={".xlsx", ".xls", ".csv"},
-    )
-    file_bytes = await read_file_safely(file, max_mb=10)
+    validate_file_size_and_extension(file, category="sheet")
+    file_bytes = await read_file_safely(file, max_size_bytes=MAX_SHEET_SIZE_BYTES)
     filename = file.filename or "planilha.xlsx"
 
     try:
@@ -1943,8 +2015,8 @@ async def preview_dynamic_reconciliation(
     if not tpl:
         raise HTTPException(status_code=404, detail="Modelo de conciliação não encontrado.")
 
-    validate_file_size_and_extension(file, max_mb=10, allowed_extensions={".xlsx", ".xls", ".csv"})
-    channel_bytes = await read_file_safely(file, max_mb=10)
+    validate_file_size_and_extension(file, category="sheet")
+    channel_bytes = await read_file_safely(file, max_size_bytes=MAX_SHEET_SIZE_BYTES)
     channel_filename = file.filename or "planilha_1.xlsx"
 
     tray_bytes: Optional[bytes] = None
@@ -1955,8 +2027,8 @@ async def preview_dynamic_reconciliation(
                 status_code=400,
                 detail=f"O modelo '{tpl.name}' é de 2 Planilhas. Envie também o 2º arquivo ({tpl.file_2_label or 'Planilha Ponte'}).",
             )
-        validate_file_size_and_extension(tray_file, max_mb=10, allowed_extensions={".xlsx", ".xls", ".csv"})
-        tray_bytes = await read_file_safely(tray_file, max_mb=10)
+        validate_file_size_and_extension(tray_file, category="sheet")
+        tray_bytes = await read_file_safely(tray_file, max_size_bytes=MAX_SHEET_SIZE_BYTES)
         tray_filename = tray_file.filename
 
     if async_job:
