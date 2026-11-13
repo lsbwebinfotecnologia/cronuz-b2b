@@ -281,6 +281,24 @@ class CoraClient:
             raise CoraConfigError("Pagamento simulado só é permitido no ambiente Stage.")
         return self._request("POST", "/v2/invoices/pay", json_body={"id": invoice_id}, idempotency_key=str(uuid.uuid4()))
 
+    def get_bank_statement(
+        self,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        page: int = 1,
+        per_page: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        GET /bank-statement/statement — consulta lançamentos do extrato bancário Cora
+        (permite obter o valor exato debitado como tarifa `transaction.type == 'FEE'` no pagamento do boleto/Pix).
+        """
+        params: Dict[str, Any] = {"page": max(1, page), "perPage": max(1, min(per_page, 200))}
+        if start:
+            params["start"] = start
+        if end:
+            params["end"] = end
+        return self._request("GET", "/bank-statement/statement", params=params)
+
     # ── Webhooks (endpoints) ─────────────────────────────────────────────────
     def list_endpoints(self) -> Any:
         return self._request("GET", "/endpoints/")

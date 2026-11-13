@@ -28,6 +28,9 @@ export interface Charge {
   is_overdue: boolean;
   amount: number;
   total_paid: number | null;
+  fee_amount?: number | null;
+  net_amount?: number | null;
+  fee_description?: string | null;
   due_date: string | null;
   description: string | null;
   payer_name: string | null;
@@ -57,6 +60,8 @@ export interface ChargeSummary {
   overdue_amount: number;
   paid_qty: number;
   paid_amount: number;
+  paid_fee_amount?: number;
+  paid_net_amount?: number;
   cancelled_qty: number;
 }
 

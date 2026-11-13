@@ -20,14 +20,15 @@ Regras arquiteturais mandatórias:
    com `STA_FECHADO = 'N'` e `DATA_FECHAMENTO = NULL` (em aberto para o operador realizar o fechamento de banco).
 """
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Tuple
 
 from sqlalchemy.orm import Session
 
 from app.models.company_settings import CompanySettings
-from app.models.cora import CoraConfig
+from app.models.cora import CoraAccount, CoraConfig
 from app.models.financial import FinancialAccount, FinancialCashFlowLog, FinancialInstallment, FinancialTransaction
 from app.models.payments import PayCharge, PayChargeEvent
 from app.payments.registry import is_enabled
@@ -146,6 +147,142 @@ def _settle_cronuz_native(db: Session, charge: PayCharge, config: CoraConfig) ->
     logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
 
 
+def _persist_charge_fee(
+    db: Session,
+    charge: PayCharge,
+    paid_val: Decimal,
+    fee_dec: Decimal,
+    fee_desc: str,
+) -> None:
+    """Persiste a tarifa bancária e o valor líquido diretamente em `pay_charge` para auditoria e análise futura."""
+    try:
+        net_dec = max(Decimal("0.00"), (paid_val - fee_dec).quantize(Decimal("0.01")))
+        clean_desc = (fee_desc or "TAXA CORA").strip()[:120]
+        if (
+            charge.fee_amount != fee_dec
+            or charge.net_amount != net_dec
+            or (charge.fee_description or "") != clean_desc
+        ):
+            charge.fee_amount = fee_dec
+            charge.net_amount = net_dec
+            charge.fee_description = clean_desc
+            db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("[Cora Settlement] Falha ao persistir fee_amount no pay_charge #%s: %s", charge.id, e)
+
+
+def _resolve_cora_tariff_from_statement(
+    db: Session,
+    charge: PayCharge,
+    paid_date_iso: str,
+) -> Tuple[Optional[Decimal], Optional[str]]:
+    """
+    Consulta o extrato oficial do Banco Cora (`GET /bank-statement/statement`) na data do pagamento
+    para obter o valor EXATO da taxa debitada pelo Cora (`type == 'DEBIT'`, `transaction.type == 'FEE'`)
+    vinculada ao recebimento deste boleto/Pix e já persiste em `pay_charge` (`fee_amount`, `net_amount`, `fee_description`).
+
+    No extrato do Cora, o crédito do pagamento (`type == 'CREDIT'`, `transaction.type == 'PAYMENT'`)
+    e o débito da tarifa (`type == 'DEBIT'`, `transaction.type == 'FEE'`) são gravados no mesmo segundo
+    (`createdAt`). Assim, não é necessário adivinhar se a tarifa é fixa (R$) ou percentual (%).
+    """
+    paid_val = Decimal(str(charge.total_paid if charge.total_paid is not None else (charge.amount or "0.00"))).quantize(Decimal("0.01"))
+    if getattr(charge, "fee_amount", None) is not None and Decimal(str(charge.fee_amount)) > Decimal("0.00"):
+        cached_fee = Decimal(str(charge.fee_amount)).quantize(Decimal("0.01"))
+        cached_desc = getattr(charge, "fee_description", None) or "TAXA CORA"
+        _persist_charge_fee(db, charge, paid_val, cached_fee, cached_desc)
+        return cached_fee, cached_desc
+
+    from app.integrators.cora.client import CoraClient
+
+    env = (charge.environment or "PRODUCTION").upper()
+    account = (
+        db.query(CoraAccount)
+        .filter(CoraAccount.company_id == charge.company_id, CoraAccount.environment == env)
+        .first()
+    )
+    if not account or not (account.client_id and account.cert_content and account.key_content):
+        return None, None
+
+    try:
+        d_paid = datetime.strptime(paid_date_iso, "%Y-%m-%d").date()
+    except ValueError:
+        d_paid = _resolve_brazil_paid_date(charge.paid_at)
+
+    start_iso = (d_paid - timedelta(days=1)).strftime("%Y-%m-%d")
+    end_iso = (d_paid + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    expected_cents = int((paid_val * 100).quantize(Decimal("1")))
+    launch_token = (charge.financial_launch_id or "").strip()
+    inv_token = (charge.invoice_number or "").strip()
+    payer_doc_digits = re.sub(r"\D", "", str(charge.payer_document or ""))
+
+    try:
+        with CoraClient.from_account(account) as cora:
+            stmt = cora.get_bank_statement(start=start_iso, end=end_iso, page=1, per_page=200)
+        entries = (stmt or {}).get("entries") or []
+        if not entries:
+            return None, None
+
+        credit_candidates = []
+        fee_entries = []
+        for idx, ent in enumerate(entries):
+            e_type = str(ent.get("type") or "").upper()
+            tx = ent.get("transaction") or {}
+            tx_type = str(tx.get("type") or "").upper()
+            if e_type == "DEBIT" and tx_type == "FEE":
+                fee_entries.append((idx, ent))
+            elif e_type == "CREDIT" and tx_type == "PAYMENT":
+                desc = str(tx.get("description") or "")
+                cp_doc = re.sub(r"\D", "", str((tx.get("counterParty") or {}).get("identity") or ""))
+                amt_cents = int(ent.get("amount") or 0)
+                score = 0
+                if launch_token and launch_token in desc:
+                    score += 10
+                if inv_token and inv_token in desc:
+                    score += 6
+                if payer_doc_digits and cp_doc == payer_doc_digits:
+                    score += 5
+                if amt_cents == expected_cents:
+                    score += 3
+                if score >= 5:
+                    credit_candidates.append((score, idx, ent))
+
+        if not credit_candidates or not fee_entries:
+            return None, None
+
+        credit_candidates.sort(key=lambda x: (-x[0], x[1]))
+        _, matched_idx, matched_credit = credit_candidates[0]
+        credit_ts_prefix = str(matched_credit.get("createdAt") or "")[:19]  # YYYY-MM-DDTHH:MM:SS
+
+        # 1ª tentativa: FEE gravada exatamente no mesmo segundo (padrão nativo do Cora)
+        for f_idx, f_ent in fee_entries:
+            f_ts_prefix = str(f_ent.get("createdAt") or "")[:19]
+            if credit_ts_prefix and f_ts_prefix == credit_ts_prefix:
+                fee_cents = int(f_ent.get("amount") or 0)
+                if fee_cents > 0:
+                    fee_dec = (Decimal(fee_cents) / Decimal(100)).quantize(Decimal("0.01"))
+                    fee_desc = str((f_ent.get("transaction") or {}).get("description") or "TAXA CORA").strip()
+                    _persist_charge_fee(db, charge, paid_val, fee_dec, fee_desc)
+                    return fee_dec, fee_desc
+
+        # 2ª tentativa: FEE adjacente na lista de entries no mesmo minuto (YYYY-MM-DDTHH:MM)
+        credit_min_prefix = credit_ts_prefix[:16]
+        for f_idx, f_ent in fee_entries:
+            f_min_prefix = str(f_ent.get("createdAt") or "")[:16]
+            if abs(f_idx - matched_idx) == 1 and credit_min_prefix and f_min_prefix == credit_min_prefix:
+                fee_cents = int(f_ent.get("amount") or 0)
+                if fee_cents > 0:
+                    fee_dec = (Decimal(fee_cents) / Decimal(100)).quantize(Decimal("0.01"))
+                    fee_desc = str((f_ent.get("transaction") or {}).get("description") or "TAXA CORA").strip()
+                    _persist_charge_fee(db, charge, paid_val, fee_dec, fee_desc)
+                    return fee_dec, fee_desc
+    except Exception as e:
+        logger.warning("[Cora Settlement] Não foi possível consultar extrato Cora para tarifa (charge=%s): %s", charge.id, e)
+
+    return None, None
+
+
 def _settle_horus_cpagar_tarifa(
     db: Session,
     sql,
@@ -161,6 +298,7 @@ def _settle_horus_cpagar_tarifa(
     cod_contac: int,
     tarifa_val: Decimal,
     paid_date_iso: str,
+    fee_description: Optional[str] = None,
 ) -> Optional[int]:
     """
     Lança e baixa automaticamente a tarifa do boleto no Contas a Pagar do Horus (`dbo.LANCTOS_CPAGAR_GERAL`)
@@ -174,8 +312,6 @@ def _settle_horus_cpagar_tarifa(
     `COD_TPOLAN = 5 - CONTAS A PAGAR`, `STA_FECHADO = 'N'`) na tabela `BLANCTOS` para o Fechamento Bancário.
     """
     if not getattr(config, "horus_cpagar_tarifa_enabled", False):
-        return None
-    if _already_settled(db, charge.id, "horus_cpagar_tarifa_settled"):
         return None
     if tarifa_val is None or tarifa_val <= Decimal("0.00"):
         return None
@@ -208,14 +344,15 @@ def _settle_horus_cpagar_tarifa(
 
     # Regra 11 (AGENTS.md): Todos os campos textuais enviados ao Horus ERP obrigatoriamente em UPPERCASE
     nro_duplicata = str(charge.invoice_number or nro_lancto_creceber).strip().upper()[:12]
+    desc_prefix = f"TARIFA CORA ({fee_description.strip()})" if fee_description else "TARIFA BOLETO CORA"
     obs_cpagar = (
-        f"TARIFA BOLETO CORA #{charge.id} - NF {charge.invoice_number or '-'} - LANCTO CR #{nro_lancto_creceber}/{cod_parcela}"
+        f"{desc_prefix} - CORA #{charge.id} - NF {charge.invoice_number or '-'} - LANCTO CR #{nro_lancto_creceber}/{cod_parcela}"
     ).strip().upper()[:500]
 
     # Idempotência diretamente no SQL Server para evitar duplicidade caso o evento não tenha sido gravado
     existing = sql.query(
         """
-        SELECT TOP 1 NRO_LANCTO_CPAGAR, STA_LANCTO_CPAGAR
+        SELECT TOP 1 NRO_LANCTO_CPAGAR, STA_LANCTO_CPAGAR, VLR_LANCTO_PAGO
           FROM LANCTOS_CPAGAR_GERAL WITH (NOLOCK)
          WHERE COD_EMPRESA = %s
            AND COD_FILIAL = %s
@@ -229,6 +366,9 @@ def _settle_horus_cpagar_tarifa(
     if existing:
         nro_cpagar = int(existing[0]["NRO_LANCTO_CPAGAR"])
         sta_atual = str(existing[0].get("STA_LANCTO_CPAGAR") or "").strip().upper()
+        vlr_atual = Decimal(str(existing[0].get("VLR_LANCTO_PAGO") or "0.00")).quantize(Decimal("0.01"))
+        if sta_atual == "PG" and vlr_atual == tarifa_val and _already_settled(db, charge.id, "horus_cpagar_tarifa_settled"):
+            return nro_cpagar
     else:
         next_rows = sql.query(
             """
@@ -303,45 +443,72 @@ def _settle_horus_cpagar_tarifa(
             ),
         )
 
-    # Passo 2: Atualiza STA_LANCTO_CPAGAR de 'AB' para 'PG', acionando TRG_IMP_LANCTO_CPAGAR -> BLANCTOS (Débito)
-    if sta_atual != "PG":
-        sql.execute(
-            """
-            UPDATE LANCTOS_CPAGAR_GERAL
-               SET STA_LANCTO_CPAGAR = 'PG',
-                   VLR_LANCTO_PAGO = %s,
-                   DAT_PAGTO_CPAGAR = %s,
-                   COD_EMPRESA_PAGTO = %s,
-                   COD_FILIAL_PAGTO = %s,
-                   COD_BANCO_PAGTO = %s,
-                   COD_AGENCIA_PAGTO = %s,
-                   COD_CONTAC_PAGTO = %s,
-                   COD_FORMA_BAIXA = %s,
-                   DAT_ULT_ATL = GETDATE()
-             WHERE COD_EMPRESA = %s
-               AND COD_FILIAL = %s
-               AND NRO_LANCTO_CPAGAR = %s
-            """,
-            (
-                float(tarifa_val),
-                paid_date_iso,
-                cod_empresa,
-                cod_filial,
-                cod_banco,
-                cod_agencia,
-                cod_contac,
-                cod_forma_cp,
-                cod_empresa,
-                cod_filial,
-                nro_cpagar,
-            ),
-        )
+    # Passo 2: Atualiza STA_LANCTO_CPAGAR de 'AB' para 'PG' (ou corrige valor caso divergente do extrato Cora)
+    sql.execute(
+        """
+        UPDATE LANCTOS_CPAGAR_GERAL
+           SET STA_LANCTO_CPAGAR = 'PG',
+               VLR_LANCTO_CPAGAR = %s,
+               VLR_LANCTO_TOTAL = %s,
+               VLR_LANCTO_PAGO = %s,
+               OBS_CPAGAR = %s,
+               DAT_PAGTO_CPAGAR = %s,
+               COD_EMPRESA_PAGTO = %s,
+               COD_FILIAL_PAGTO = %s,
+               COD_BANCO_PAGTO = %s,
+               COD_AGENCIA_PAGTO = %s,
+               COD_CONTAC_PAGTO = %s,
+               COD_FORMA_BAIXA = %s,
+               DAT_ULT_ATL = GETDATE()
+         WHERE COD_EMPRESA = %s
+           AND COD_FILIAL = %s
+           AND NRO_LANCTO_CPAGAR = %s
+        """,
+        (
+            float(tarifa_val),
+            float(tarifa_val),
+            float(tarifa_val),
+            obs_cpagar,
+            paid_date_iso,
+            cod_empresa,
+            cod_filial,
+            cod_banco,
+            cod_agencia,
+            cod_contac,
+            cod_forma_cp,
+            cod_empresa,
+            cod_filial,
+            nro_cpagar,
+        ),
+    )
+
+    if sta_atual == "PG":
+        # Garante que o lançamento aberto em BLANCTOS reflita o valor exato do extrato Cora
+        try:
+            sql.execute(
+                """
+                UPDATE BLANCTOS
+                   SET VLR_LANCTO = %s,
+                       DAT_ULT_ATL = GETDATE()
+                 WHERE COD_EMPRESA = %s
+                   AND COD_FILIAL = %s
+                   AND STA_RASTREIO = 'CAP'
+                   AND COD_RASTREIO = %s
+                   AND STA_FECHADO = 'N'
+                """,
+                (float(tarifa_val), cod_empresa, cod_filial, nro_cpagar),
+            )
+        except Exception:
+            pass
 
     msg_cp = (
         f"Tarifa do boleto lançada e baixada no Contas a Pagar Horus: CAP #{nro_cpagar} "
         f"(R$ {tarifa_val:.2f} em {paid_date_iso}) · Banco {cod_banco} Ag. {cod_agencia} C/C {cod_contac} (BLANCTOS débito aberto)."
     )
-    _record_settlement_event(db, charge, "horus_cpagar_tarifa_settled", msg_cp)
+    if not _already_settled(db, charge.id, "horus_cpagar_tarifa_settled"):
+        _record_settlement_event(db, charge, "horus_cpagar_tarifa_settled", msg_cp)
+    else:
+        _record_settlement_event(db, charge, "horus_cpagar_tarifa_updated", msg_cp)
     db.commit()
     logger.info("[Cora Settlement] %s company=%s charge=%s", msg_cp, charge.company_id, charge.id)
     return nro_cpagar
@@ -352,8 +519,9 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
     Baixa automática do título no Horus ERP (`LANCTOS_CRECEBERA` + `LANCTOS_CRECEBER`)
     e geração automática do lançamento bancário em aberto (`BLANCTOS.STA_FECHADO = 'N'`)
     via trigger nativa `TRG_IMP_LANCTO_CRECEBER`.
-    Se `horus_cpagar_tarifa_enabled` estiver ativo e `horus_tarifa_boleto > 0`, também lança e baixa
-    automaticamente a despesa da tarifa em `LANCTOS_CPAGAR_GERAL` (gerando o débito em `BLANCTOS`).
+    Se `horus_cpagar_tarifa_enabled` estiver ativo, consulta automaticamente a tarifa real
+    debitada no extrato da API Cora (`GET /bank-statement/statement`) e lança/baixa
+    a despesa em `LANCTOS_CPAGAR_GERAL` (gerando o débito em `BLANCTOS`).
 
     TRAVA DE SEGURANÇA E DEPENDÊNCIA:
     Só executa se Cora estiver ativo E Horus SQL estiver ativo E horus_baixa_enabled estiver ativo
@@ -364,9 +532,8 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
 
     creceber_already_settled = _already_settled(db, charge.id, "horus_settled")
     cpagar_tarifa_enabled = bool(getattr(config, "horus_cpagar_tarifa_enabled", False))
-    cpagar_already_settled = _already_settled(db, charge.id, "horus_cpagar_tarifa_settled")
 
-    if creceber_already_settled and (not cpagar_tarifa_enabled or cpagar_already_settled):
+    if creceber_already_settled and not cpagar_tarifa_enabled:
         return
 
     # 1. Verifica dependência dupla (Cora ativo + Horus SQL ativo para o seller)
@@ -404,10 +571,32 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
     cod_agencia = int(cod_agencia_str)
     cod_contac = int(cod_contac_str)
     cod_forma = int(cod_forma_str) if cod_forma_str.isdigit() else None
-    tarifa_val = Decimal(str(getattr(config, "horus_tarifa_boleto", None) or "0.00")).quantize(Decimal("0.01"))
 
     paid_val = Decimal(str(charge.total_paid if charge.total_paid is not None else (charge.amount or "0.00"))).quantize(Decimal("0.01"))
     paid_date_iso = _resolve_brazil_paid_date(charge.paid_at).strftime("%Y-%m-%d")
+
+    # Obtém exclusivamente a tarifa real debitada no extrato do Cora (GET /bank-statement/statement)
+    stmt_fee_val, stmt_fee_desc = _resolve_cora_tariff_from_statement(db, charge, paid_date_iso)
+    tarifa_val = (
+        stmt_fee_val
+        if (stmt_fee_val is not None and stmt_fee_val > Decimal("0.00"))
+        else Decimal("0.00")
+    )
+
+    last_cp_ev = (
+        db.query(PayChargeEvent)
+        .filter(
+            PayChargeEvent.charge_id == charge.id,
+            PayChargeEvent.event_type.in_(("horus_cpagar_tarifa_settled", "horus_cpagar_tarifa_updated")),
+        )
+        .order_by(PayChargeEvent.id.desc())
+        .first()
+    )
+    cpagar_already_matches = bool(
+        last_cp_ev and f"R$ {tarifa_val:.2f}" in (last_cp_ev.message or "")
+    )
+    if creceber_already_settled and (not cpagar_tarifa_enabled or tarifa_val <= Decimal("0.00") or cpagar_already_matches):
+        return
 
     from app.integrators.horus_sql_client import HorusSQLClient
 
@@ -565,7 +754,32 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
                 logger.info("[Cora Settlement] %s company=%s charge=%s", msg, charge.company_id, charge.id)
 
         # 3) Lança e baixa a Tarifa do Boleto no Contas a Pagar (LANCTOS_CPAGAR_GERAL -> BLANCTOS via TRG_IMP_LANCTO_CPAGAR)
-        if cpagar_tarifa_enabled and not cpagar_already_settled and tarifa_val > Decimal("0.00"):
+        if cpagar_tarifa_enabled and not cpagar_already_matches and tarifa_val > Decimal("0.00"):
+            if creceber_already_settled:
+                try:
+                    sql.execute(
+                        """
+                        UPDATE LANCTOS_CRECEBERA
+                           SET VLR_TARIF_BOL = %s
+                         WHERE COD_EMPRESA = %s
+                           AND COD_FILIAL = %s
+                           AND NRO_LANCTO_CRECEBER = %s
+                           AND COD_PARCELA = %s
+                        """,
+                        (float(tarifa_val), cod_empresa, cod_filial, nro_lancto, cod_parcela),
+                    )
+                    sql.execute(
+                        """
+                        UPDATE LANCTOS_CRECEBER
+                           SET VLR_TARIF_BOL = %s
+                         WHERE COD_EMPRESA = %s
+                           AND COD_FILIAL = %s
+                           AND NRO_LANCTO_CRECEBER = %s
+                        """,
+                        (float(tarifa_val), cod_empresa, cod_filial, nro_lancto),
+                    )
+                except Exception:
+                    pass
             _settle_horus_cpagar_tarifa(
                 db,
                 sql,
@@ -580,6 +794,7 @@ def _settle_horus_erp(db: Session, charge: PayCharge, config: CoraConfig) -> Non
                 cod_contac=cod_contac,
                 tarifa_val=tarifa_val,
                 paid_date_iso=paid_date_iso,
+                fee_description=stmt_fee_desc,
             )
 
     except Exception as e:
@@ -593,9 +808,13 @@ def handle_charge_status_change(db: Session, charge: PayCharge, old_status: str,
     """
     Handler universal registrado para todas as origens do `pay_charge`.
     Dispara somente quando `new_status == 'PAID'` e `charge.provider == 'CORA'`.
+    Sempre captura e persiste a tarifa bancária no `pay_charge` (`fee_amount`, `net_amount`, `fee_description`).
     """
     if new_status != "PAID" or charge.provider != "CORA":
         return
+
+    paid_date_iso = _resolve_brazil_paid_date(charge.paid_at).strftime("%Y-%m-%d")
+    _resolve_cora_tariff_from_statement(db, charge, paid_date_iso)
 
     config = db.query(CoraConfig).filter(CoraConfig.company_id == charge.company_id).first()
     if not config:

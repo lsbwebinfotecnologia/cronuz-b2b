@@ -897,13 +897,13 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className={labelCls}>Tarifa do Boleto (VLR_TARIF_BOL)</label>
-                    <CurrencyInput
-                      value={config.horus_tarifa_boleto ?? 0}
-                      onChangeValue={v => setCfg('horus_tarifa_boleto', v)}
-                      prefixStr="R$ "
-                      className={inputCls}
-                    />
+                    <label className={labelCls}>Taxa do Boleto / Pix (API Cora)</label>
+                    <div className="rounded-lg border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/70 dark:bg-emerald-950/30 px-3 py-2 text-xs font-medium text-emerald-800 dark:text-emerald-300">
+                      Automática via Extrato Cora (<code className="font-mono">FEE</code>)
+                    </div>
+                    <p className="text-[10px] text-slate-500">
+                      O valor exato debitado na conta Cora é lido automaticamente na baixa.
+                    </p>
                   </div>
                 </div>
 
@@ -912,10 +912,10 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                     <div className="space-y-0.5">
                       <p className="text-xs font-bold text-slate-900 dark:text-white">
-                        Lançar e baixar automaticamente a Tarifa do Boleto no Contas a Pagar do Horus (<code className="font-mono text-[11px]">LANCTOS_CPAGAR_GERAL</code>)
+                        Lançar e baixar automaticamente a Tarifa Debitada pelo Cora no Contas a Pagar do Horus (<code className="font-mono text-[11px]">LANCTOS_CPAGAR_GERAL</code>)
                       </p>
                       <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                        Ao baixar o boleto, cria a despesa da tarifa já liquidada (<code className="font-mono text-[10px]">STA_LANCTO_CPAGAR = &apos;PG&apos;</code>) na mesma data do pagamento, acionando a trigger <code className="font-mono text-[10px]">TRG_IMP_LANCTO_CPAGAR</code> para lançar a saída (<code className="font-mono text-[10px]">DÉBITO · CAP</code>) no Fechamento Bancário (<code className="font-mono text-[10px]">BLANCTOS</code>).
+                        Ao baixar o boleto/Pix, o sistema consulta o extrato oficial do Cora (<code className="font-mono text-[10px]">/bank-statement/statement</code>), captura o valor exato debitado na transação (<code className="font-mono text-[10px]">FEE</code>) e cria a despesa já liquidada (<code className="font-mono text-[10px]">STA_LANCTO_CPAGAR = &apos;PG&apos;</code>) na mesma data do pagamento, gerando o débito (<code className="font-mono text-[10px]">CAP</code>) no Fechamento Bancário (<code className="font-mono text-[10px]">BLANCTOS</code>).
                       </p>
                     </div>
                     <Toggle
@@ -946,9 +946,6 @@ export default function CoraSettingsPanel({ companyId, hideWhenUnavailable = fal
                               setCfg('horus_cp_cod_grup_desp', pr.cod_grup_desp);
                               setCfg('horus_cp_cod_despesa', pr.cod_despesa);
                               setCfg('horus_cp_cod_forma', pr.cod_forma);
-                              if ((!config.horus_tarifa_boleto || config.horus_tarifa_boleto <= 0) && pr.vlr_tarifa > 0) {
-                                setCfg('horus_tarifa_boleto', pr.vlr_tarifa);
-                              }
                             }}
                           >
                             <option value="">Selecione um modelo de lançamento de tarifa encontrado no seu Horus...</option>

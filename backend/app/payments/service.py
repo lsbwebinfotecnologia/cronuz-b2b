@@ -349,6 +349,9 @@ def serialize_charge(c: PayCharge) -> Dict[str, Any]:
         "is_overdue": bool(c.status in ("OPEN", "LATE") and c.due_date and c.due_date < today),
         "amount": float(c.amount or 0),
         "total_paid": float(c.total_paid) if c.total_paid is not None else None,
+        "fee_amount": float(c.fee_amount) if getattr(c, "fee_amount", None) is not None else None,
+        "net_amount": float(c.net_amount) if getattr(c, "net_amount", None) is not None else None,
+        "fee_description": getattr(c, "fee_description", None),
         "due_date": c.due_date.isoformat() if c.due_date else None,
         "description": c.description,
         "payer_name": c.payer_name,
@@ -480,6 +483,8 @@ def summarize_query(q) -> Dict[str, Any]:
         func.coalesce(func.sum(case((or_(PayCharge.status == "LATE", and_(PayCharge.status == "OPEN", PayCharge.due_date < today)), PayCharge.amount))), 0).label("overdue_amount"),
         func.count(case((PayCharge.status == "PAID", 1))).label("paid_qty"),
         func.coalesce(func.sum(case((PayCharge.status == "PAID", func.coalesce(PayCharge.total_paid, PayCharge.amount)))), 0).label("paid_amount"),
+        func.coalesce(func.sum(case((PayCharge.status == "PAID", PayCharge.fee_amount))), 0).label("paid_fee_amount"),
+        func.coalesce(func.sum(case((PayCharge.status == "PAID", func.coalesce(PayCharge.net_amount, func.coalesce(PayCharge.total_paid, PayCharge.amount) - func.coalesce(PayCharge.fee_amount, 0))))), 0).label("paid_net_amount"),
         func.count(case((PayCharge.status == "CANCELLED", 1))).label("cancelled_qty"),
     ).one()
     return {
@@ -491,6 +496,8 @@ def summarize_query(q) -> Dict[str, Any]:
         "overdue_amount": float(row.overdue_amount or 0),
         "paid_qty": int(row.paid_qty or 0),
         "paid_amount": float(row.paid_amount or 0),
+        "paid_fee_amount": float(row.paid_fee_amount or 0),
+        "paid_net_amount": float(row.paid_net_amount or 0),
         "cancelled_qty": int(row.cancelled_qty or 0),
     }
 

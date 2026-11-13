@@ -719,7 +719,7 @@ def get_payments_monitor(
             None,
         )
         cpagar_ev = next(
-            (e for e in c_evs if e.event_type in ("horus_cpagar_tarifa_settled", "horus_cpagar_tarifa_error")),
+            (e for e in c_evs if e.event_type in ("horus_cpagar_tarifa_settled", "horus_cpagar_tarifa_updated", "horus_cpagar_tarifa_error")),
             None,
         )
         paid_ev = next((e for e in c_evs if e.event_type == "paid" or e.status_after == "PAID"), None)
@@ -748,7 +748,7 @@ def get_payments_monitor(
             "message": msg_combined,
             "settled_at": settle_ev.created_at.isoformat() if (settle_ev and settle_ev.created_at) else None,
             "paid_detected_by": paid_ev.source if paid_ev else "SYNC",
-            "cpagar_tarifa_settled": bool(cpagar_ev and cpagar_ev.event_type == "horus_cpagar_tarifa_settled"),
+            "cpagar_tarifa_settled": bool(cpagar_ev and cpagar_ev.event_type in ("horus_cpagar_tarifa_settled", "horus_cpagar_tarifa_updated")),
         }
         paid_charges_out.append(item)
 
@@ -790,8 +790,8 @@ def get_payments_monitor(
             f"Banco {cora_cfg.horus_cod_banco} · Ag. {cora_cfg.horus_cod_agencia or '-'} · C/C {cora_cfg.horus_cod_contac or '-'}"
             + (f" · Forma #{cora_cfg.horus_cod_forma}" if getattr(cora_cfg, "horus_cod_forma", None) else "")
             + (
-                f" · Taxa CAP R$ {float(cora_cfg.horus_tarifa_boleto or 0):.2f}".replace(".", ",")
-                if getattr(cora_cfg, "horus_cpagar_tarifa_enabled", False) and float(getattr(cora_cfg, "horus_tarifa_boleto", 0) or 0) > 0
+                " · Taxa CAP Automática"
+                if getattr(cora_cfg, "horus_cpagar_tarifa_enabled", False)
                 else ""
             )
         )

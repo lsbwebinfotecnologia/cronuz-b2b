@@ -110,6 +110,11 @@ export default function CoraBoletoDetailPage() {
             <p>Emissão <b className="text-slate-800 dark:text-slate-100">{fmtDate(c.issue_date || c.created_at)}</b></p>
             <p>Vencimento <b className="text-slate-800 dark:text-slate-100">{fmtDate(c.due_date)}</b></p>
             {c.paid_at && <p className="text-emerald-600">Pago em {fmtDateTime(c.paid_at)} · {brl(c.total_paid ?? c.amount)}</p>}
+            {c.fee_amount != null && c.fee_amount > 0 && (
+              <p className="text-amber-600 dark:text-amber-400">
+                Taxa Banco ({c.fee_description || 'Cora'}): <b>-{brl(c.fee_amount)}</b> · Líquido: <b className="text-emerald-600 dark:text-emerald-400">{brl(c.net_amount ?? ((c.total_paid ?? c.amount) - c.fee_amount))}</b>
+              </p>
+            )}
             {c.cancelled_at && <p>Cancelado em {fmtDateTime(c.cancelled_at)}</p>}
             {c.code && <p className="font-mono text-[11px]">Cód. Cora: {c.code}</p>}
           </div>

@@ -128,6 +128,9 @@ class PayCharge(Base):
     registered = Column(Boolean, nullable=True)
 
     total_paid = Column(Numeric(14, 2), nullable=True)
+    fee_amount = Column(Numeric(14, 2), nullable=True)          # tarifa cobrada pelo banco/intermediador (ex.: R$ 0,24 no Cora)
+    net_amount = Column(Numeric(14, 2), nullable=True)          # valor líquido creditado após tarifa (ex.: R$ 23,76)
+    fee_description = Column(String(120), nullable=True)        # descrição da tarifa no extrato (ex.: "Taxa de Pix via API")
     paid_at = Column(DateTime(timezone=True), nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
     last_error = Column(Text, nullable=True)

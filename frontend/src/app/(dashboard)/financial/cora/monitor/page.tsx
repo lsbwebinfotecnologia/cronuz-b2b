@@ -50,6 +50,9 @@ interface PaidChargeItem {
   payer_document?: string | null;
   amount: number;
   total_paid?: number | null;
+  fee_amount?: number | null;
+  net_amount?: number | null;
+  fee_description?: string | null;
   due_date?: string | null;
   paid_at?: string | null;
   our_number?: string | null;
@@ -423,6 +426,11 @@ export default function CoraMonitorPage() {
                         <div className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">
                           {fmtBRL(item.total_paid ?? item.amount)}
                         </div>
+                        {item.fee_amount != null && item.fee_amount > 0 && (
+                          <div className="text-[11px] font-mono text-amber-600 dark:text-amber-400">
+                            Taxa: -{fmtBRL(item.fee_amount)} · Líq.: <b className="text-emerald-600 dark:text-emerald-400">{fmtBRL(item.net_amount ?? ((item.total_paid ?? item.amount) - item.fee_amount))}</b>
+                          </div>
+                        )}
                         <div className="text-[11px] text-slate-500">
                           Pago em {fmtDateTime(item.paid_at)} · via <b>{item.settlement.paid_detected_by || 'SYNC'}</b>
                         </div>

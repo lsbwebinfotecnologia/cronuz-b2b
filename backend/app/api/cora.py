@@ -352,13 +352,12 @@ def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), 
                 cg.COD_EMPRESA,
                 cg.COD_FILIAL,
                 cg.COD_BANCO,
-                b.NOME_BANCO,
+                b.DESC_BANCO AS NOME_BANCO,
                 cg.COD_AGENCIA,
-                ag.NOME_AGENCIA,
+                ag.DESC_AGENCIA AS NOME_AGENCIA,
                 cg.COD_CONTAC,
-                cg.NUM_CC,
-                cg.DIG_CC,
-                cg.NOME_CONTAC,
+                cg.NRO_CONTAC AS NUM_CC,
+                cg.DESC_CONTAC AS NOME_CONTAC,
                 cart.NRO_CARTEIRA
             FROM BCONTAC_GERAL cg WITH (NOLOCK)
             LEFT JOIN BBANCOS b WITH (NOLOCK) ON b.COD_BANCO = cg.COD_BANCO
@@ -379,7 +378,7 @@ def get_cora_horus_bank_options(company_id: int, db: Session = Depends(get_db), 
                 "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
                 "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
                 "num_cc": str(r.get("NUM_CC") or "").strip(),
-                "dig_cc": str(r.get("DIG_CC") or "").strip(),
+                "dig_cc": "",
                 "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
                 "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
             })
@@ -665,12 +664,6 @@ def update_cora_config(
 
     next_cpagar_tarifa = data.get("horus_cpagar_tarifa_enabled", bool(getattr(config, "horus_cpagar_tarifa_enabled", False)))
     if next_cpagar_tarifa:
-        eff_tarifa = data.get("horus_tarifa_boleto", getattr(config, "horus_tarifa_boleto", None))
-        if not eff_tarifa or float(eff_tarifa) <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Informe um valor maior que R$ 0,00 no campo 'Tarifa do Boleto (VLR_TARIF_BOL)' para ativar o lançamento automático da taxa no Contas a Pagar do Horus.",
-            )
         req_cp_fields = [
             ("horus_cp_cod_grp_fornecedor", "Grupo de Fornecedor (COD_GRP_FORNECEDOR)"),
             ("horus_cp_cod_fornecedor", "Fornecedor da Tarifa (COD_FORNECEDOR)"),
