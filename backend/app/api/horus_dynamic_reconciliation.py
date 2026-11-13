@@ -1150,7 +1150,7 @@ def _run_dynamic_reconciliation_core(
                 LR.COD_BORDERO,
                 PV.COD_METODO,
                 PV.COD_PEDIDO_ORIGEM AS PEDIDO_WEB,
-                NF.NRO_NOTA_FISCAL,
+                ISNULL(NF.NRO_NOTA_FISCAL, LR.COD_NF) AS NRO_NOTA_FISCAL,
                 CLI.NOM_CLI
             FROM LANCTOS_CRECEBER LR WITH (NOLOCK)
             LEFT JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
@@ -1161,11 +1161,8 @@ def _run_dynamic_reconciliation_core(
             OUTER APPLY (
                 SELECT TOP 1 NRO_NOTA_FISCAL 
                 FROM NF_MESTRE WITH (NOLOCK)
-                WHERE NF_MESTRE.COD_FILIAL = LR.COD_FILIAL
-                  AND (
-                      (LR.COD_PED_VENDA IS NOT NULL AND LR.COD_PED_VENDA > 0 AND NF_MESTRE.COD_PED_VENDA = LR.COD_PED_VENDA)
-                      OR (LR.NRO_SEQ_NF IS NOT NULL AND LR.NRO_SEQ_NF > 0 AND NF_MESTRE.NRO_SEQ_NF = LR.NRO_SEQ_NF)
-                  )
+                WHERE NF_MESTRE.COD_PED_VENDA = LR.COD_PED_VENDA
+                  AND NF_MESTRE.COD_FILIAL = LR.COD_FILIAL
             ) NF
             WHERE LR.COD_FILIAL = %s
         """
@@ -1210,11 +1207,8 @@ def _run_dynamic_reconciliation_core(
                         CLI.NOM_CLI
                     FROM NF_MESTRE NFM WITH (NOLOCK)
                     INNER JOIN LANCTOS_CRECEBER LR WITH (NOLOCK)
-                        ON LR.COD_FILIAL = NFM.COD_FILIAL
-                        AND (
-                            (LR.COD_PED_VENDA IS NOT NULL AND LR.COD_PED_VENDA > 0 AND LR.COD_PED_VENDA = NFM.COD_PED_VENDA)
-                            OR (LR.NRO_SEQ_NF IS NOT NULL AND LR.NRO_SEQ_NF > 0 AND LR.NRO_SEQ_NF = NFM.NRO_SEQ_NF)
-                        )
+                        ON LR.COD_PED_VENDA = NFM.COD_PED_VENDA
+                        AND LR.COD_FILIAL = NFM.COD_FILIAL
                     LEFT JOIN PEDIDOS_VENDA PV WITH (NOLOCK)
                         ON PV.COD_PED_VENDA = LR.COD_PED_VENDA
                         AND PV.COD_FILIAL = LR.COD_FILIAL
@@ -1225,6 +1219,16 @@ def _run_dynamic_reconciliation_core(
                     ORDER BY LR.COD_PED_VENDA DESC, LR.NRO_LANCTO_CRECEBER DESC
                 """
                 _add_rows(_query_with_retry(q_nf, tuple([cod_filial] + numeric_batch)))
+
+                q_cod_nf = (
+                    base_select_sql
+                    + f" AND LR.COD_NF IN ({ph}) "
+                    + " ORDER BY LR.NRO_LANCTO_CRECEBER DESC"
+                )
+                try:
+                    _add_rows(_query_with_retry(q_cod_nf, tuple([cod_filial] + numeric_batch)))
+                except Exception:
+                    pass
 
             # 2) Busca por NRO_LANCTO_CRECEBER (Lançamento Direto)
             if match_field in ("NRO_LANCTO_CRECEBER", "AUTO") and numeric_batch:
