@@ -331,6 +331,44 @@ git push origin --delete feature/nome-da-funcionalidade
 3. **Formatação em Relatórios e Exportações (`strftime`)**:
    - Antes de formatar qualquer `datetime` no backend para exibição textual, JSON formatado, Excel (`.xlsx`) ou PDF (`.pdf`), deve-se converter explicitamente para `BRT_TZ = timezone(timedelta(hours=-3))` (`dt.astimezone(BRT_TZ)`), evitando que carimbos em UTC (`+00:00`) sejam impressos com 3 horas a mais.
 
+---
 
+## 🏦 14. Arquitetura Oficial de Conciliação Financeira Horus ERP (Motor Dinâmico De/Para, Schema SQL Server e Proibição de Redundâncias)
 
+> [!IMPORTANT]
+> **PROIBIÇÃO ABSOLUTA DE REDUNDÂNCIAS EM CONCILIAÇÃO FINANCEIRA**:
+> **NUNCA crie novas telas, rotas ou arquivos de API separados para novos formatos de planilhas financeiras (cartões, eventos/bienais, adquirentes, marketplaces, boletos ou extratos).**
+> Toda evolução futura — seja conciliação por **Número de Lançamento (`NRO_LANCTO_CRECEBER`)**, **Nota Fiscal (`NRO_NOTA_FISCAL` / `COD_NF`)**, **Pedido Horus (`COD_PED_VENDA`)**, **Pedido Web/Ponte (`COD_PEDIDO_ORIGEM`)**, **Valor + Data**, **CPF/CNPJ + Valor** ou **Múltiplas Referências** — deve ser evoluída **exclusivamente dentro do Motor Dinâmico Oficial** ([`horus_dynamic_reconciliation.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/horus_dynamic_reconciliation.py) e [`conciliador-padrao/page.tsx`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/app/%28dashboard%29/horus-direct/conciliador-padrao/page.tsx)).
+
+### 1. Convivência Isolada por Cliente (`cmp_settings`):
+1. **Módulo Legado / Dedicado (`horus_sql_feature_baixa_vindi`)**:
+   - Rota Frontend: `/horus-direct/financeiro-vindi`
+   - Backend: [`backend/app/api/horus_financial.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/horus_financial.py)
+   - Mantido intacto para clientes já em operação legada (Shopee/Vindi/TikTok fixos), sem sofrer alterações estruturais que afetem quem já está usando.
+2. **Módulo Oficial Padronizado — Conciliador Dinâmico & Construtor de Modelos (`horus_sql_feature_conciliador_padrao`)**:
+   - Rota Frontend: `/horus-direct/conciliador-padrao` ([`conciliador-padrao/page.tsx`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/app/%28dashboard%29/horus-direct/conciliador-padrao/page.tsx))
+   - Backend: [`backend/app/api/horus_dynamic_reconciliation.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/horus_dynamic_reconciliation.py)
+   - Modelo de Dados PostgreSQL: tabela `horus_reconciliation_templates` ([`horus_reconciliation_template.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/models/horus_reconciliation_template.py)) + histórico de fechamentos em `horus_reconciliation_closings` ([`horus_reconciliation_closing.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/models/horus_reconciliation_closing.py)).
+   - Permite criar, editar, clonar e migrar **N modelos por cliente** (1 Planilha ou 2 Planilhas Ponte), mapeando colunas ("De → Para"), regra de extração (`AUTO`, `DIGITS_ONLY`, `AFTER_HASH`, `EXACT`, `REGEX`), parâmetros bancários próprios por modelo (`forma_pagto`, `forma_pagto_credito_maior`, `banco`, `agencia`, `conta`, `carteira`) e modo de baixa (`CHANNEL_DATE`, `SPECIFIC_DATE`, `BORDERO_OPEN`).
+
+### 2. Regras de Leitura de Planilhas e Validação de Upload:
+- Sempre validar uploads de planilhas com `validate_file_size_and_extension(file, category="sheet")` e `await read_file_safely(file, max_size_bytes=MAX_SHEET_SIZE_BYTES)` de [`upload_security.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/core/upload_security.py).
+- O parser dinâmico (`_parse_dynamic_channel_file`) suporta tanto planilhas completas de canais quanto **planilhas montadas enxutas** (ex.: apenas `Lançamento` e `Valor`), detectando automaticamente cabeçalhos com ou sem acento/underscore, enriquecendo o nome do cliente (`CLI.NOM_CLI`) e a Nota Fiscal diretamente do Horus ERP quando ausentes na planilha, e calculando automaticamente `Taxa = Valor Bruto Horus - Valor Líquido Planilha` quando a planilha informar apenas o valor líquido recebido.
+- Linhas de saída/débito operacional em extratos (como ajustes/reembolsos da Shopee) são deduzidas para que o valor líquido do fechamento bata exatamente com a soma líquida da planilha.
+
+### 3. Schema Oficial do SQL Server do Horus ERP (Contas a Receber & Borderô):
+> [!CAUTION]
+> **Respeite estritamente os nomes reais das colunas do Horus ERP para evitar erros de SQL em produção:**
+- **`LANCTOS_CRECEBER` e `LANCTOS_CRECEBERA` (Espelho de Auditoria)**:
+  - Colunas existentes: `NRO_LANCTO_CRECEBER`, `COD_EMPRESA`, `COD_FILIAL`, `COD_CLI`, `COD_PED_VENDA`, `COD_NF`, `COD_BORDERO`, `STA_LANCTO_CRECEBER` (`'AB'` = Aberto, `'PG'` = Pago), `VLR_LANCTO_CRECEBER` (Bruto Original), `VLR_LANCTO_ABATIMENTO` (Taxa / Desconto), `VLR_LANCTO_CORRECAO`, `VLR_LANCTO_TOTAL` (Valor Líquido do Título), `VLR_LANCTO_PAGO`, `DAT_VENC_CRECEBER`, `DAT_PAGTO_CRECEBER`, `DAT_PAGTO_CONTA`, `DAT_ULT_ATL`, `STA_APROVACAO`, `USU_APROVACAO`, `NOM_USUARIO`, `OBS_CRECEBER`.
+  - **ATENÇÃO**: Na tabela `LANCTOS_CRECEBER`, a coluna de nota fiscal chama-se **`COD_NF`**. **NÃO existe** coluna `NRO_SEQ_NF` em `LANCTOS_CRECEBER`.
+  - **Integridade de FK e Trigger**: `LANCTOS_CRECEBERA` possui a Foreign Key `FK_LANCTOS_CRECEBERA_LANCTOS_CRECEBER1` apontando para `LANCTOS_CRECEBER`. Ao remover parcelas excedentes na unificação, **SEMPRE** consolide primeiro `CONTA_CLIENTE_VINCULACAO`, depois execute `DELETE FROM LANCTOS_CRECEBERA` e só então `DELETE FROM LANCTOS_CRECEBER`. Ao criar lançamento de Crédito Maior separado, **SEMPRE** insira primeiro em `LANCTOS_CRECEBER` e em seguida sincronize `LANCTOS_CRECEBERA`.
+- **`NF_MESTRE` (Notas Fiscais)**:
+  - Relacionamento com `LANCTOS_CRECEBER`: `NF_MESTRE.COD_PED_VENDA = LR.COD_PED_VENDA AND NF_MESTRE.COD_FILIAL = LR.COD_FILIAL` (com fallback adicional para `LR.COD_NF`), retornando `NRO_NOTA_FISCAL`.
+- **`PEDIDOS_VENDA` (Pedidos de Venda)**:
+  - Relacionamento com `LANCTOS_CRECEBER`: `PV.COD_PED_VENDA = LR.COD_PED_VENDA AND PV.COD_FILIAL = LR.COD_FILIAL`, retornando `PV.COD_PEDIDO_ORIGEM` (`PEDIDO_WEB`) e `PV.COD_METODO`.
+- **`CLIENTES`**:
+  - Relacionamento com `LANCTOS_CRECEBER`: `CLI.COD_CLI = LR.COD_CLI`, retornando `CLI.NOM_CLI`.
+- **`BORDERO`**:
+  - Recebe o fechamento (`COD_EMPRESA`, `COD_FILIAL`, `COD_FORMA`, `COD_BORDERO`, `VLR_TOT_BORDERO`, `VLR_TOT_PAGO`, `STA_BORDERO` `'AP'` ou `'PG'`, `COD_BANCO`, `COD_AGENCIA`, `COD_CONTAC`, `NRO_CARTEIRA`, `DAT_GERACAO`, `DAT_PAGAMENTO`), vinculado aos títulos via `UPDATE LANCTOS_CRECEBER SET COD_BORDERO = ...` e auditado em tempo real no banco PostgreSQL do Cronuz (`horus_reconciliation_closings`).
 

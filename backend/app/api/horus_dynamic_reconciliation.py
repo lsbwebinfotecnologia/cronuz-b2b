@@ -204,10 +204,15 @@ def _detect_best_header_row(raw_rows: List[List[Any]]) -> Tuple[int, List[str]]:
         "id", "codigo", "código", "erp", "horus", "parcela",
     )
     max_scan = min(len(raw_rows), 45)
+    max_cols_in_scan = max(
+        (len([_clean_str(c) for c in raw_rows[i] if _clean_str(c)]) for i in range(max_scan)),
+        default=0,
+    )
+    min_cols = 1 if max_cols_in_scan <= 1 else 2
     for idx in range(max_scan):
         row = raw_rows[idx]
         non_empty = [ _clean_str(c) for c in row if _clean_str(c) ]
-        if len(non_empty) < 2:
+        if len(non_empty) < min_cols:
             continue
         score = 0
         for cell in non_empty:
@@ -306,6 +311,7 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
 
     bank_configured = bool(eff_forma and eff_banco and eff_agencia and eff_conta)
     col_map = dict(t.column_mapping) if isinstance(t.column_mapping, dict) else {}
+    use_horus_val = bool(col_map.get("use_horus_value", False))
 
     return {
         "id": t.id,
@@ -331,6 +337,7 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
         "payment_date_mode": t.payment_date_mode or "CHANNEL_DATE",
         "unify_installments": bool(t.unify_installments),
         "split_excess_launch": bool(t.split_excess_launch),
+        "use_horus_value": use_horus_val,
         "is_active": bool(t.is_active),
         "is_system_preset": bool(t.is_system_preset),
         "display_order": t.display_order or 10,
@@ -346,6 +353,7 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
             "payment_date_mode": t.payment_date_mode or "CHANNEL_DATE",
             "unify_installments": bool(t.unify_installments),
             "split_excess_launch": bool(t.split_excess_launch),
+            "use_horus_value": use_horus_val,
             "cod_empresa": cod_emp,
             "cod_filial": cod_fil,
             "is_configured": bank_configured,
@@ -642,6 +650,7 @@ def _parse_dynamic_channel_file(
     file_bytes: bytes,
     filename: str,
     template: HorusReconciliationTemplate,
+    override_use_horus_value: Optional[bool] = None,
 ) -> List[Dict[str, Any]]:
     """
     Lê a planilha principal usando o mapeamento configurado no modelo (column_mapping).
@@ -651,8 +660,13 @@ def _parse_dynamic_channel_file(
     """
     col_map = dict(template.column_mapping) if isinstance(template.column_mapping, dict) else {}
     preset = str(col_map.get("engine_preset") or "DYNAMIC").upper().strip()
+    use_horus_value = (
+        bool(override_use_horus_value)
+        if override_use_horus_value is not None
+        else bool(col_map.get("use_horus_value", False))
+    )
 
-    if preset in ("SHOPEE", "VINDI", "TIKTOK"):
+    if preset in ("SHOPEE", "VINDI", "TIKTOK") and not use_horus_value:
         try:
             legacy_code = {
                 "SHOPEE": "TRAY_SHOPEE",
@@ -739,12 +753,12 @@ def _parse_dynamic_channel_file(
         ("cpf", "cnpj", "documento"),
     )
 
-    # Fallback inteligente para planilhas montadas de 2 a 6 colunas (mesmo sem cabeçalho padrão)
+    # Fallback inteligente para planilhas montadas de 1 a 6 colunas (mesmo sem cabeçalho padrão)
     start_row_idx = header_idx + 1
     first_row_all_numeric = bool(
         header_idx == 0
         and raw_rows
-        and len([c for c in raw_rows[0] if _clean_str(c)]) >= 2
+        and len([c for c in raw_rows[0] if _clean_str(c)]) >= (1 if use_horus_value else 2)
         and all(
             re.sub(r"[\d\.,R\$\-\s/]", "", _clean_str(c)) == ""
             for c in raw_rows[0]
@@ -754,7 +768,10 @@ def _parse_dynamic_channel_file(
     if first_row_all_numeric:
         start_row_idx = 0
 
-    if (idx_key is None or (idx_liq is None and idx_bruto is None)) and len(headers) >= 2:
+    if idx_key is None and len(headers) == 1:
+        idx_key = 0
+
+    if (idx_key is None or (idx_liq is None and idx_bruto is None)) and len(headers) >= 1:
         sample_scan = raw_rows[start_row_idx : min(len(raw_rows), start_row_idx + 10)] or raw_rows[:5]
         if sample_scan:
             if idx_key is None:
@@ -765,7 +782,7 @@ def _parse_dynamic_channel_file(
                         break
                 if idx_key is None:
                     idx_key = 0
-            if idx_liq is None and idx_bruto is None:
+            if idx_liq is None and idx_bruto is None and len(headers) >= 2:
                 for c_i in range(len(headers)):
                     if c_i == idx_key:
                         continue
@@ -779,15 +796,16 @@ def _parse_dynamic_channel_file(
             f"Coluna de Chave ('{key_col or 'Pedido/NF/Lançamento'}') não encontrada na planilha. "
             f"Colunas disponíveis: {', '.join(headers[:12])}. Clique em 'Editar Modelo' para ajustar o De/Para."
         )
-    if idx_liq is None and idx_bruto is None:
+    if not use_horus_value and idx_liq is None and idx_bruto is None:
         raise ValueError(
             f"Coluna de Valor ('{liq_col or bruto_col or 'Valor'}') não encontrada na planilha. "
-            f"Colunas disponíveis: {', '.join(headers[:12])}. Clique em 'Editar Modelo' para ajustar o De/Para."
+            f"Colunas disponíveis: {', '.join(headers[:12])}. Clique em 'Editar Modelo' para ajustar o De/Para ou ative 'Considerar Valor do Lançamento Pago do Horus'."
         )
 
     grouped: Dict[str, Dict[str, Any]] = {}
     debit_rows: List[Dict[str, Any]] = []
     raw_valid_rows = 0
+    header_key_norm = _extract_key_by_rule(headers[idx_key], key_rule, key_regex) if idx_key < len(headers) else ""
 
     for r_i in range(start_row_idx, len(raw_rows)):
         row = raw_rows[r_i]
@@ -796,6 +814,10 @@ def _parse_dynamic_channel_file(
 
         raw_key_cell = row[idx_key] if idx_key < len(row) else ""
         extracted_key = _extract_key_by_rule(raw_key_cell, key_rule, key_regex)
+        if not extracted_key:
+            continue
+        if r_i == header_idx and extracted_key == header_key_norm and not str(extracted_key).isdigit():
+            continue
 
         raw_liq = _parse_money(row[idx_liq]) if (idx_liq is not None and idx_liq < len(row)) else 0.0
         raw_bruto = _parse_money(row[idx_bruto]) if (idx_bruto is not None and idx_bruto < len(row)) else 0.0
@@ -807,9 +829,12 @@ def _parse_dynamic_channel_file(
             continue
 
         is_debit = (
-            any(w in tipo_str for w in ("SAIDA", "SAÍDA", "DEBITO", "DÉBITO", "ESTORNO"))
-            or (raw_liq < -0.001)
-            or (raw_liq == 0.0 and raw_bruto < -0.001)
+            not use_horus_value
+            and (
+                any(w in tipo_str for w in ("SAIDA", "SAÍDA", "DEBITO", "DÉBITO", "ESTORNO"))
+                or (raw_liq < -0.001)
+                or (raw_liq == 0.0 and raw_bruto < -0.001)
+            )
         )
 
         if is_debit:
@@ -828,7 +853,7 @@ def _parse_dynamic_channel_file(
         val_bruto = round(raw_bruto if raw_bruto > 0 else (val_liq + raw_taxa), 2)
         val_taxa = round(raw_taxa if raw_taxa > 0 else max(0.0, val_bruto - val_liq), 2)
 
-        if not extracted_key or (val_liq <= 0 and val_bruto <= 0):
+        if not use_horus_value and (val_liq <= 0 and val_bruto <= 0):
             continue
 
         raw_valid_rows += 1
@@ -988,6 +1013,7 @@ def _run_dynamic_reconciliation_core(
     job_id: Optional[str] = None,
     override_unify_installments: Optional[bool] = None,
     override_split_excess_launch: Optional[bool] = None,
+    override_use_horus_value: Optional[bool] = None,
 ) -> Dict[str, Any]:
     started_ts = time.time()
     db_local = SessionLocal()
@@ -1009,6 +1035,7 @@ def _run_dynamic_reconciliation_core(
 
         is_dual_file = (template.mode or "SINGLE_FILE").upper() == "DUAL_FILE"
         match_field = (template.horus_match_field or "AUTO").upper().strip()
+        tpl_col_map = dict(template.column_mapping) if isinstance(template.column_mapping, dict) else {}
 
         eff_unify_installments = (
             bool(override_unify_installments)
@@ -1020,6 +1047,11 @@ def _run_dynamic_reconciliation_core(
             if override_split_excess_launch is not None
             else bool(template.split_excess_launch)
         )
+        eff_use_horus_value = (
+            bool(override_use_horus_value)
+            if override_use_horus_value is not None
+            else bool(tpl_col_map.get("use_horus_value", False))
+        )
         eff_forma_credito_maior = str(template.forma_pagto_credito_maior or "").strip()
 
         _update_job_progress(
@@ -1029,7 +1061,12 @@ def _run_dynamic_reconciliation_core(
             message=f"Lendo planilha de {template.channel_label} ({channel_filename})...",
         )
 
-        vindi_rows = _parse_dynamic_channel_file(channel_bytes, channel_filename, template)
+        vindi_rows = _parse_dynamic_channel_file(
+            channel_bytes,
+            channel_filename,
+            template,
+            override_use_horus_value=eff_use_horus_value,
+        )
         if not vindi_rows:
             raise ValueError("Nenhum lançamento válido encontrado na planilha principal.")
 
@@ -1452,9 +1489,19 @@ def _run_dynamic_reconciliation_core(
             if (not v_row.get("cliente_nome") or v_row["cliente_nome"] == "-") and h_nom_cli:
                 v_row["cliente_nome"] = h_nom_cli
 
-            # Se a planilha de entrada tinha apenas Valor Líquido (sem coluna de Valor Bruto nem Planilha Ponte),
-            # adota o valor do título Horus como Bruto e calcula a taxa automaticamente!
-            if not v_row.get("bruto_from_channel", True) and not is_dual_file and h_valor_original > 0:
+            # Se a opção "Considerar Valor do Lançamento Pago do Horus" estiver ativa:
+            # mesmo que a planilha tenha outro valor ou nem tenha coluna de valor, assume 100% o valor do lançamento no Horus ERP.
+            if eff_use_horus_value and h_valor_original > 0:
+                old_v = v_valor
+                v_valor = round(h_valor_original, 2)
+                v_valor_liq = round(h_valor_original, 2)
+                v_taxa = 0.0
+                v_row["valor"] = v_valor
+                v_row["valor_bruto"] = v_valor
+                v_row["valor_liquido"] = v_valor_liq
+                v_row["taxa"] = 0.0
+                total_vindi_amount += (v_valor - old_v)
+            elif not v_row.get("bruto_from_channel", True) and not is_dual_file and h_valor_original > 0:
                 if abs(v_valor - v_valor_liq) < 0.005 and h_valor_original >= v_valor_liq:
                     old_v = v_valor
                     v_valor = round(h_valor_original, 2)
@@ -1466,13 +1513,13 @@ def _run_dynamic_reconciliation_core(
 
             acrescimo_tray = float(v_row.get("acrescimo_tray") or 0.0)
             desconto_tray = float(v_row.get("desconto_tray") or 0.0)
-            raw_diff = round(v_valor - h_valor_original, 2)
+            raw_diff = 0.0 if eff_use_horus_value else round(v_valor - h_valor_original, 2)
 
             valor_credito_maior = 0.0
             has_credito_maior_split = False
             h_valor = h_valor_original
 
-            if eff_unify_installments:
+            if eff_unify_installments and not eff_use_horus_value:
                 if raw_diff < -0.05 and eff_split_excess_launch:
                     valor_credito_maior = round(abs(raw_diff), 2)
                     has_credito_maior_split = True
@@ -1549,6 +1596,8 @@ def _run_dynamic_reconciliation_core(
                 total_divergence_amount += h_valor
             else:
                 motivo_ready = f"Vínculo {match_field} OK: #{ped_canal} → Horus Lanç. #{h_lancto}"
+                if eff_use_horus_value:
+                    motivo_ready += f" • Valor considerado do Lançamento Horus (R$ {h_valor:.2f})"
                 if unificadas_qtd > 1:
                     motivo_ready += f" ({unificadas_qtd} parcelas unificadas)"
                 if has_credito_maior_split:
@@ -1560,8 +1609,8 @@ def _run_dynamic_reconciliation_core(
                 })
                 total_ready_amount += h_valor
 
-        unassigned_debits = float((channel_meta or {}).get("unassigned_debits_total") or 0.0)
-        if unassigned_debits > 0.001 and eff_unify_installments:
+        unassigned_debits = 0.0 if eff_use_horus_value else float((channel_meta or {}).get("unassigned_debits_total") or 0.0)
+        if unassigned_debits > 0.001 and eff_unify_installments and not eff_use_horus_value:
             rem_debit = round(unassigned_debits, 2)
             abertos_candidates = sorted(
                 items_ready + items_divergence,
@@ -1606,6 +1655,7 @@ def _run_dynamic_reconciliation_core(
                 "is_dual_file": is_dual_file,
                 "unify_installments": eff_unify_installments,
                 "split_excess_launch": eff_split_excess_launch,
+                "use_horus_value": eff_use_horus_value,
                 "forma_pagto_credito_maior": eff_forma_credito_maior,
                 "credito_maior_count": credito_maior_count,
                 "credito_maior_total": round(credito_maior_total, 2),
@@ -1689,6 +1739,7 @@ class ReconciliationTemplatePayload(BaseModel):
     payment_date_mode: Optional[str] = "CHANNEL_DATE"
     unify_installments: Optional[bool] = True
     split_excess_launch: Optional[bool] = True
+    use_horus_value: Optional[bool] = None
 
 
 # ── Endpoints REST ────────────────────────────────────────────────────────────
@@ -1775,6 +1826,10 @@ def create_dynamic_reconciliation_template(
     if pay_mode not in ("CHANNEL_DATE", "SPECIFIC_DATE", "BORDERO_OPEN"):
         pay_mode = "CHANNEL_DATE"
 
+    col_map = dict(payload.column_mapping or {"engine_preset": "DYNAMIC"})
+    if payload.use_horus_value is not None:
+        col_map["use_horus_value"] = bool(payload.use_horus_value)
+
     new_tpl = HorusReconciliationTemplate(
         company_id=company_id,
         code=code,
@@ -1788,7 +1843,7 @@ def create_dynamic_reconciliation_template(
         file_1_label=(payload.file_1_label or f"1º Arquivo: Planilha Financeira ({short_name})").strip(),
         file_2_label=(payload.file_2_label or "2º Arquivo: Planilha Ponte (Vínculo com Horus)").strip() if mode == "DUAL_FILE" else None,
         horus_match_field=match_field,
-        column_mapping=payload.column_mapping or {"engine_preset": "DYNAMIC"},
+        column_mapping=col_map,
         forma_pagto=(payload.forma_pagto or "").strip(),
         forma_pagto_credito_maior=(payload.forma_pagto_credito_maior or "").strip(),
         banco=(payload.banco or "").strip(),
@@ -1867,7 +1922,14 @@ def update_dynamic_reconciliation_template(
     tpl.badge = f"{'2 Planilhas' if tpl.mode == 'DUAL_FILE' else '1 Planilha'} • {tpl.horus_match_field}"
 
     if payload.column_mapping is not None:
-        tpl.column_mapping = payload.column_mapping
+        col_map = dict(payload.column_mapping)
+        if payload.use_horus_value is not None:
+            col_map["use_horus_value"] = bool(payload.use_horus_value)
+        tpl.column_mapping = col_map
+    elif payload.use_horus_value is not None:
+        col_map = dict(tpl.column_mapping or {})
+        col_map["use_horus_value"] = bool(payload.use_horus_value)
+        tpl.column_mapping = col_map
 
     if payload.forma_pagto is not None:
         tpl.forma_pagto = payload.forma_pagto.strip()
@@ -1998,6 +2060,7 @@ async def preview_dynamic_reconciliation(
     async_job: Optional[bool] = Query(default=True),
     unify_installments: Optional[bool] = Query(default=None),
     split_excess_launch: Optional[bool] = Query(default=None),
+    use_horus_value: Optional[bool] = Query(default=None),
     file: UploadFile = File(...),
     tray_file: Optional[UploadFile] = File(default=None),
     db: Session = Depends(get_db),
@@ -2051,6 +2114,7 @@ async def preview_dynamic_reconciliation(
                     job_id=job_id,
                     override_unify_installments=unify_installments,
                     override_split_excess_launch=split_excess_launch,
+                    override_use_horus_value=use_horus_value,
                 )
             except Exception as bg_err:
                 logger.error("[DynamicReconciliationJob] Job %s falhou: %s", job_id, bg_err)
@@ -2071,6 +2135,7 @@ async def preview_dynamic_reconciliation(
             job_id=None,
             override_unify_installments=unify_installments,
             override_split_excess_launch=split_excess_launch,
+            override_use_horus_value=use_horus_value,
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

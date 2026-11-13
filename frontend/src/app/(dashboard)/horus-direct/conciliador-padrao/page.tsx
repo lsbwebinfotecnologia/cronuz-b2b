@@ -54,6 +54,7 @@ interface ColumnMappingConfig {
   cliente_col?: string;
   documento_col?: string;
   deduct_debit_rows?: boolean;
+  use_horus_value?: boolean;
   bridge_channel_key_col?: string;
   bridge_channel_extract_rule?: string;
   bridge_horus_key_col?: string;
@@ -91,6 +92,7 @@ interface DynamicTemplate {
   payment_date_mode: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
   unify_installments: boolean;
   split_excess_launch: boolean;
+  use_horus_value?: boolean;
   is_active: boolean;
   is_system_preset: boolean;
   bank_configured: boolean;
@@ -127,6 +129,7 @@ interface SummaryData {
   is_dual_file?: boolean;
   unify_installments?: boolean;
   split_excess_launch?: boolean;
+  use_horus_value?: boolean;
   forma_pagto_credito_maior?: string;
   credito_maior_count?: number;
   credito_maior_total?: number;
@@ -172,6 +175,7 @@ interface BankConfig {
   payment_date_mode?: string;
   unify_installments?: boolean;
   split_excess_launch?: boolean;
+  use_horus_value?: boolean;
   cod_empresa: string;
   cod_filial: string;
   is_configured: boolean;
@@ -302,6 +306,7 @@ export default function ConciliadorPadraoPage() {
   >('CHANNEL_DATE');
   const [unifyInstallments, setUnifyInstallments] = useState<boolean>(true);
   const [splitExcessLaunch, setSplitExcessLaunch] = useState<boolean>(true);
+  const [useHorusValue, setUseHorusValue] = useState<boolean>(false);
   const [formaPagtoCreditoMaior, setFormaPagtoCreditoMaior] = useState<string>('');
   const [specificPaymentDate, setSpecificPaymentDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
@@ -355,6 +360,7 @@ export default function ConciliadorPadraoPage() {
     payment_date_mode: 'CHANNEL_DATE',
     unify_installments: true,
     split_excess_launch: true,
+    use_horus_value: false,
   });
 
   // Histórico de Fechamentos
@@ -417,6 +423,9 @@ export default function ConciliadorPadraoPage() {
     );
     setUnifyInstallments(Boolean(activeTemplate.unify_installments));
     setSplitExcessLaunch(Boolean(activeTemplate.split_excess_launch));
+    setUseHorusValue(
+      Boolean(activeTemplate.use_horus_value ?? activeTemplate.column_mapping?.use_horus_value)
+    );
     setFormaPagtoCreditoMaior(activeTemplate.forma_pagto_credito_maior || '');
   }, [activeTemplate]);
 
@@ -500,6 +509,7 @@ export default function ConciliadorPadraoPage() {
         payment_date_mode: tpl.payment_date_mode || 'CHANNEL_DATE',
         unify_installments: Boolean(tpl.unify_installments),
         split_excess_launch: Boolean(tpl.split_excess_launch),
+        use_horus_value: Boolean(tpl.use_horus_value ?? cm.use_horus_value),
       });
     } else {
       setEditingTemplateId(null);
@@ -537,6 +547,7 @@ export default function ConciliadorPadraoPage() {
         payment_date_mode: 'CHANNEL_DATE',
         unify_installments: true,
         split_excess_launch: true,
+        use_horus_value: false,
       });
     }
     setShowBuilderModal(true);
@@ -636,6 +647,7 @@ export default function ConciliadorPadraoPage() {
           cliente_col: builderForm.cliente_col.trim(),
           documento_col: builderForm.documento_col.trim(),
           deduct_debit_rows: Boolean(builderForm.deduct_debit_rows),
+          use_horus_value: Boolean(builderForm.use_horus_value),
           bridge_channel_key_col: builderForm.bridge_channel_key_col.trim(),
           bridge_horus_key_col: builderForm.bridge_horus_key_col.trim(),
           bridge_valor_pedido_col: builderForm.bridge_valor_pedido_col.trim(),
@@ -649,6 +661,7 @@ export default function ConciliadorPadraoPage() {
         payment_date_mode: builderForm.payment_date_mode,
         unify_installments: Boolean(builderForm.unify_installments),
         split_excess_launch: Boolean(builderForm.split_excess_launch),
+        use_horus_value: Boolean(builderForm.use_horus_value),
       };
 
       const url = editingTemplateId
@@ -760,6 +773,7 @@ export default function ConciliadorPadraoPage() {
         async_job: 'true',
         unify_installments: unifyInstallments ? 'true' : 'false',
         split_excess_launch: splitExcessLaunch ? 'true' : 'false',
+        use_horus_value: useHorusValue ? 'true' : 'false',
       });
 
       const res = await fetch(
@@ -1305,13 +1319,22 @@ export default function ConciliadorPadraoPage() {
                     ({activeTemplate.column_mapping.key_extract_rule || 'AUTO'})
                   </span>
                 )}
-                {activeTemplate.column_mapping?.valor_liquido_col && (
-                  <span className="text-[11px] text-slate-500">
-                    • Coluna Valor Líq:{' '}
-                    <b className="font-mono text-slate-700 dark:text-slate-300">
-                      {activeTemplate.column_mapping.valor_liquido_col}
-                    </b>
+                {Boolean(
+                  activeTemplate.use_horus_value ??
+                    activeTemplate.column_mapping?.use_horus_value
+                ) ? (
+                  <span className="rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 text-[11px] font-bold">
+                    • Valor: Considerando Lançamento Pago do Horus
                   </span>
+                ) : (
+                  activeTemplate.column_mapping?.valor_liquido_col && (
+                    <span className="text-[11px] text-slate-500">
+                      • Coluna Valor Líq:{' '}
+                      <b className="font-mono text-slate-700 dark:text-slate-300">
+                        {activeTemplate.column_mapping.valor_liquido_col}
+                      </b>
+                    </span>
+                  )
                 )}
               </div>
               <div className="flex items-center gap-2 text-[11px] text-slate-500">
@@ -2038,7 +2061,9 @@ export default function ConciliadorPadraoPage() {
 
                       <div>
                         <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300 block mb-1">
-                          Coluna de Valor Líquido / Repasse *
+                          {builderForm.use_horus_value
+                            ? 'Coluna de Valor Líquido / Repasse (Opcional — Usando Valor do Horus)'
+                            : 'Coluna de Valor Líquido / Repasse *'}
                         </label>
                         <input
                           type="text"
@@ -2047,7 +2072,11 @@ export default function ConciliadorPadraoPage() {
                           onChange={(e) =>
                             setBuilderForm((p) => ({ ...p, valor_liquido_col: e.target.value }))
                           }
-                          placeholder="Ex: Valor Liquido, Valor, Repasse"
+                          placeholder={
+                            builderForm.use_horus_value
+                              ? 'Opcional (usando valor do lançamento no Horus)'
+                              : 'Ex: Valor Liquido, Valor, Repasse'
+                          }
                           className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-1.5 text-xs font-mono font-bold"
                         />
                       </div>
@@ -2221,35 +2250,108 @@ export default function ConciliadorPadraoPage() {
                         </option>
                       </select>
 
-                      <div className="flex items-center justify-between pt-1">
-                        <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                          Unificar Parcelas + Gravar Taxa (Abatimento)
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={builderForm.unify_installments}
-                          onChange={(e) =>
-                            setBuilderForm((p) => ({ ...p, unify_installments: e.target.checked }))
-                          }
-                          className="h-4 w-4 rounded text-indigo-600"
-                        />
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                          Separar Crédito Maior em Novo Lançamento
-                        </span>
-                        <input
-                          type="checkbox"
-                          checked={builderForm.split_excess_launch}
-                          onChange={(e) =>
+                      <div className="pt-1.5 space-y-2">
+                        <label
+                          onClick={() =>
                             setBuilderForm((p) => ({
                               ...p,
-                              split_excess_launch: e.target.checked,
+                              unify_installments: !p.unify_installments,
                             }))
                           }
-                          className="h-4 w-4 rounded text-indigo-600"
-                        />
+                          className={`flex items-start justify-between gap-3 rounded-lg border p-2.5 transition-all cursor-pointer ${
+                            builderForm.unify_installments
+                              ? 'border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/40 dark:bg-indigo-950/20'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                              Unificar Parcelas + Gravar Taxa (Abatimento)
+                            </span>
+                            <span className="text-[10.5px] leading-snug text-slate-500 dark:text-slate-400 block">
+                              Consolida múltiplas parcelas em aberto da mesma nota/pedido no 1º lançamento e grava eventual taxa retida no campo de abatimento do Horus.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={builderForm.unify_installments}
+                            onChange={(e) =>
+                              setBuilderForm((p) => ({ ...p, unify_installments: e.target.checked }))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            className="h-4 w-4 mt-0.5 rounded text-indigo-600 shrink-0 cursor-pointer"
+                          />
+                        </label>
+
+                        <label
+                          onClick={() =>
+                            setBuilderForm((p) => ({
+                              ...p,
+                              split_excess_launch: !p.split_excess_launch,
+                            }))
+                          }
+                          className={`flex items-start justify-between gap-3 rounded-lg border p-2.5 transition-all cursor-pointer ${
+                            builderForm.split_excess_launch
+                              ? 'border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/40 dark:bg-indigo-950/20'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                              Separar Crédito Maior em Novo Lançamento
+                            </span>
+                            <span className="text-[10.5px] leading-snug text-slate-500 dark:text-slate-400 block">
+                              Quando o valor pago na planilha for menor que o título no Horus, baixa o valor pago e cria automaticamente um novo lançamento em aberto (AB) com a diferença na Forma de Crédito Maior.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={builderForm.split_excess_launch}
+                            onChange={(e) =>
+                              setBuilderForm((p) => ({
+                                ...p,
+                                split_excess_launch: e.target.checked,
+                              }))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            className="h-4 w-4 mt-0.5 rounded text-indigo-600 shrink-0 cursor-pointer"
+                          />
+                        </label>
+
+                        <label
+                          onClick={() =>
+                            setBuilderForm((p) => ({
+                              ...p,
+                              use_horus_value: !p.use_horus_value,
+                            }))
+                          }
+                          className={`flex items-start justify-between gap-3 rounded-lg border p-2.5 transition-all cursor-pointer ${
+                            builderForm.use_horus_value
+                              ? 'border-emerald-300 dark:border-emerald-700 bg-emerald-50/60 dark:bg-emerald-950/30 ring-1 ring-emerald-400/50'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                          }`}
+                        >
+                          <div className="space-y-0.5">
+                            <span className="text-xs font-bold text-emerald-900 dark:text-emerald-300 block">
+                              Considerar Valor do Lançamento Pago do Horus
+                            </span>
+                            <span className="text-[10.5px] leading-snug text-slate-600 dark:text-slate-400 block">
+                              Mesmo que na planilha apareça outro valor — ou até mesmo não tenha coluna de valor na planilha —, o valor considerado para conciliação e baixa será exatamente o valor registrado no lançamento do Horus ERP.
+                            </span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={builderForm.use_horus_value}
+                            onChange={(e) =>
+                              setBuilderForm((p) => ({
+                                ...p,
+                                use_horus_value: e.target.checked,
+                              }))
+                            }
+                            onClick={(e) => e.stopPropagation()}
+                            className="h-4 w-4 mt-0.5 rounded text-emerald-600 shrink-0 cursor-pointer"
+                          />
+                        </label>
                       </div>
                     </div>
                   </div>
