@@ -33,30 +33,98 @@ from app.core.utils import assert_company_ownership
 from app.db.session import SessionLocal, get_db
 from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
 from app.integrators.reconciliation_parser import (
-    _clean_header,
     _clean_str,
-    _format_date_br,
+    _normalize_header as _clean_header,
     _normalize_order_key,
-    _parse_money,
+    _parse_currency as _parse_money,
     _read_raw_rows,
     parse_channel_file,
     parse_tray_bridge_file,
 )
+
+
+def _format_date_br(val: Any) -> str:
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):
+        return val.strftime("%d/%m/%Y")
+    s = str(val).strip()
+    if not s:
+        return ""
+    # YYYY-MM-DD... -> DD/MM/YYYY
+    m_iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if m_iso:
+        return f"{m_iso.group(3)}/{m_iso.group(2)}/{m_iso.group(1)}"
+    m_br = re.match(r"^(\d{2}/\d{2}/\d{4})", s)
+    if m_br:
+        return m_br.group(1)
+    return s.split(" ")[0]
 from app.models.company_settings import CompanySettings
 from app.models.horus_reconciliation_closing import HorusReconciliationClosing
 from app.models.horus_reconciliation_template import HorusReconciliationTemplate
 from app.api.horus_financial import (
     CreateBorderoPayload,
-    _create_reconciliation_job,
-    _execute_bordero_transaction,
-    _finalize_reconciliation_job,
-    _update_job_progress,
     _RECONCILIATION_JOBS,
-    _RECONCILIATION_JOBS_LOCK,
+    _cleanup_old_reconciliation_jobs,
+    _save_job_to_disk,
+    _update_job_progress,
+    create_vindi_bordero,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _create_reconciliation_job(company_id: int, profile_code: str) -> str:
+    _cleanup_old_reconciliation_jobs()
+    job_id = f"dyn_{uuid.uuid4().hex[:12]}"
+    job_data = {
+        "job_id": job_id,
+        "company_id": company_id,
+        "profile_code": profile_code,
+        "status": "RUNNING",
+        "phase": "LENDO_PLANILHAS",
+        "percent": 2,
+        "message": "Iniciando leitura da planilha no Conciliador Dinâmico...",
+        "processed_orders": 0,
+        "total_orders": 0,
+        "current_batch": 0,
+        "total_batches": 1,
+        "horus_found_count": 0,
+        "started_at": time.time(),
+        "elapsed_seconds": 0.0,
+        "result": None,
+        "error": None,
+    }
+    _RECONCILIATION_JOBS[job_id] = job_data
+    _save_job_to_disk(job_id, job_data)
+    return job_id
+
+
+def _finalize_reconciliation_job(
+    job_id: Optional[str],
+    result: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    if not job_id:
+        return
+    if error:
+        _update_job_progress(
+            job_id,
+            status="ERROR",
+            phase="ERRO",
+            message=str(error),
+            error=str(error),
+        )
+    else:
+        _update_job_progress(
+            job_id,
+            status="COMPLETED",
+            phase="CONCLUIDO",
+            percent=100,
+            message="Conciliação finalizada com sucesso!",
+            result=result,
+        )
 
 
 # ── Helpers de Extração de Chave ──────────────────────────────────────────────
@@ -577,14 +645,16 @@ def _parse_dynamic_channel_file(
                 "VINDI": "TRAY_VINDI",
                 "TIKTOK": "TRAY_TIKTOK",
             }[preset]
-            return parse_channel_file(file_bytes, filename, legacy_code)
+            parsed_rows, _ = parse_channel_file(file_bytes, filename, legacy_code)
+            if parsed_rows:
+                return parsed_rows
         except Exception as e:
             logger.info(
                 "[DynamicReconciliation] Fallback para motor De/Para no template %s (%s): %s",
                 template.code, filename, e,
             )
 
-    raw_rows = _read_raw_rows(file_bytes, filename)
+    raw_rows, _ = _read_raw_rows(file_bytes, filename)
     if not raw_rows:
         raise ValueError("A planilha enviada está vazia.")
 
@@ -787,12 +857,14 @@ def _parse_dynamic_bridge_file(
     bridge_horus_col = str(col_map.get("bridge_horus_key_col") or "").strip()
 
     try:
-        return parse_tray_bridge_file(file_bytes, filename)
+        parsed_bridge, _ = parse_tray_bridge_file(file_bytes, filename)
+        if parsed_bridge and (parsed_bridge.get("by_channel_order") or parsed_bridge.get("by_tray_order")):
+            return parsed_bridge
     except Exception:
         if not bridge_channel_col or not bridge_horus_col:
             raise
 
-    raw_rows = _read_raw_rows(file_bytes, filename)
+    raw_rows, _ = _read_raw_rows(file_bytes, filename)
     header_idx, headers = _detect_best_header_row(raw_rows)
     idx_ch = _find_col_index(headers, bridge_channel_col, ("codigo na loja", "pedido canal", "pedido marketplace"))
     idx_hr = _find_col_index(headers, bridge_horus_col, ("numero no erp", "pedido horus", "nota fiscal", "nf"))
@@ -1814,7 +1886,7 @@ async def inspect_spreadsheet_columns(
     filename = file.filename or "planilha.xlsx"
 
     try:
-        raw_rows = _read_raw_rows(file_bytes, filename)
+        raw_rows, _ = _read_raw_rows(file_bytes, filename)
         if not raw_rows:
             raise ValueError("A planilha enviada está vazia.")
         header_idx, headers = _detect_best_header_row(raw_rows)
@@ -1929,7 +2001,7 @@ async def preview_dynamic_reconciliation(
 
 
 @router.post("/companies/{company_id}/horus-sql/dynamic-reconciliation/bordero")
-def create_dynamic_template_bordero(
+async def create_dynamic_template_bordero(
     company_id: int,
     payload: CreateBorderoPayload,
     template_id: int = Query(..., description="ID do Modelo de Conciliação"),
@@ -1968,7 +2040,7 @@ def create_dynamic_template_bordero(
     cod_banco = bank_cfg["banco"]
     cod_agencia = bank_cfg["agencia"]
     cod_conta = bank_cfg["conta"]
-    nro_carteira = bank_cfg["carteira"] or None
+    nro_carteira = bank_cfg["carteira"] or ""
 
     if not all([forma_pagto, cod_banco, cod_agencia, cod_conta]):
         raise HTTPException(
@@ -2003,83 +2075,32 @@ def create_dynamic_template_bordero(
     if payment_date_mode not in ("CHANNEL_DATE", "SPECIFIC_DATE", "BORDERO_OPEN"):
         payment_date_mode = "CHANNEL_DATE"
 
-    specific_dt_sql: Optional[str] = None
-    if payment_date_mode == "SPECIFIC_DATE":
-        raw_spec = (payload.specific_payment_date or "").strip()
-        if not raw_spec:
-            raise HTTPException(status_code=400, detail="Informe a data específica de pagamento.")
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-            try:
-                specific_dt_sql = datetime.strptime(raw_spec[:10], fmt).strftime("%Y-%m-%dT00:00:00")
-                break
-            except ValueError:
-                continue
-        if not specific_dt_sql:
-            raise HTTPException(status_code=400, detail=f"Data específica inválida: '{raw_spec}'.")
+    # Sincroniza o perfil bancário do modelo no dicionário da empresa para o pipeline de Borderô do Horus
+    prof_configs = dict(getattr(settings, "horus_sql_profile_bank_configs", None) or {})
+    prof_configs[tpl.code] = {
+        "forma_pagto": forma_pagto,
+        "forma_pagto_credito_maior": forma_pagto_credito_maior,
+        "banco": cod_banco,
+        "agencia": cod_agencia,
+        "conta": cod_conta,
+        "carteira": nro_carteira,
+        "payment_date_mode": payment_date_mode,
+        "unify_installments": unify_installments,
+        "split_excess_launch": split_excess_launch,
+    }
+    settings.horus_sql_profile_bank_configs = prof_configs
+    db.commit()
 
-    sql_client = HorusSQLClient(db, company_id)
-    cod_empresa = str(sql_client.cod_empresa or "1").strip()
-    cod_filial = str(payload.releases[0].cod_filial or sql_client.cod_filial or "1").strip()
+    payload.profile_code = tpl.code
+    payload.payment_date_mode = payment_date_mode
+    payload.unify_installments = unify_installments
+    payload.split_excess_launch = split_excess_launch
+    payload.forma_pagto_credito_maior = forma_pagto_credito_maior
 
-    raw_user_name = (
-        current_user.get("name")
-        or current_user.get("email")
-        or "CRONUZ"
-    )
-    nom_usuario = str(raw_user_name).strip().upper()[:25]
-
-    if async_job:
-        job_id = _create_reconciliation_job(company_id, f"BORDERO_{tpl.code}")
-
-        def _bg_bordero_worker():
-            try:
-                res_data = _execute_bordero_transaction(
-                    company_id=company_id,
-                    payload=payload,
-                    active_profile=tpl.code,
-                    forma_pagto=forma_pagto,
-                    forma_pagto_credito_maior=forma_pagto_credito_maior,
-                    cod_banco=cod_banco,
-                    cod_agencia=cod_agencia,
-                    cod_conta=cod_conta,
-                    nro_carteira=nro_carteira,
-                    unify_installments=unify_installments,
-                    split_excess_launch=split_excess_launch,
-                    payment_date_mode=payment_date_mode,
-                    specific_dt_sql=specific_dt_sql,
-                    cod_empresa=cod_empresa,
-                    cod_filial=cod_filial,
-                    nom_usuario=nom_usuario,
-                    current_user=current_user,
-                    job_id=job_id,
-                )
-                _finalize_reconciliation_job(job_id, result=res_data)
-            except HTTPException as he:
-                _finalize_reconciliation_job(job_id, error=str(he.detail))
-            except Exception as ex:
-                _finalize_reconciliation_job(job_id, error=str(ex))
-
-        t = threading.Thread(target=_bg_bordero_worker, daemon=True)
-        t.start()
-        return {"job_id": job_id, "status": "RUNNING"}
-
-    return _execute_bordero_transaction(
+    return await create_vindi_bordero(
         company_id=company_id,
         payload=payload,
-        active_profile=tpl.code,
-        forma_pagto=forma_pagto,
-        forma_pagto_credito_maior=forma_pagto_credito_maior,
-        cod_banco=cod_banco,
-        cod_agencia=cod_agencia,
-        cod_conta=cod_conta,
-        nro_carteira=nro_carteira,
-        unify_installments=unify_installments,
-        split_excess_launch=split_excess_launch,
-        payment_date_mode=payment_date_mode,
-        specific_dt_sql=specific_dt_sql,
-        cod_empresa=cod_empresa,
-        cod_filial=cod_filial,
-        nom_usuario=nom_usuario,
+        async_job=bool(async_job),
+        db=db,
         current_user=current_user,
-        job_id=None,
     )
