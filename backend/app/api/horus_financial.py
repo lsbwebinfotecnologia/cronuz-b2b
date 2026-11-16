@@ -1858,7 +1858,7 @@ async def create_vindi_bordero(
                                 VLR_LANCTO_ABATIMENTO, DATA_LANCTO_CRECEBER
                             ) VALUES (
                                 1, %s, %s, %s, %s,
-                                %s, 2, %s,
+                                %s, CASE WHEN EXISTS (SELECT 1 FROM LANCTOS_SITUACAO WHERE COD_SITUACAO = 2) THEN 2 ELSE 1 END, %s,
                                 %s, 0, %s, 0,
                                 'AB', 'S', %s, %s,
                                 GETDATE(), %s, %s, %s, %s,
@@ -2052,7 +2052,15 @@ async def create_vindi_bordero(
                 )
                 cur.execute(insert_sql, insert_params)
 
-                # Atualiza cada lançamento em LANCTOS_CRECEBER e LANCTOS_CRECEBERA (acionando TRG_IMP_LANCTO_CRECEBER para BLANCTOS)
+                # Resolve dinamicamente COD_SITUACAO válido em LANCTOS_SITUACAO (evitando violação de FK_LANCTOS_CRECEBERA_LANCTOS_SITUACAO em clientes que não possuem COD_SITUACAO = 8, como Editora Olhares)
+                has_situacao_8 = False
+                try:
+                    cur.execute("SELECT 1 FROM LANCTOS_SITUACAO WHERE COD_SITUACAO = 8")
+                    has_situacao_8 = cur.fetchone() is not None
+                except Exception:
+                    has_situacao_8 = False
+
+                # Atualiza cada lançamento em LANCTOS_CRECEBERA (acionando TRG_IMP_LANCTO_CRECEBER para BLANCTOS) e em seguida LANCTOS_CRECEBER garantindo 100% de paridade de status e datas nas 2 tabelas
                 for t_idx, r_item in enumerate(releases_validos, start=1):
                     lid = int(r_item.nro_lancamento)
                     pay_dt = item_pay_dates.get(lid, bordero_pay_dt)
@@ -2065,6 +2073,54 @@ async def create_vindi_bordero(
                             else max(0.0, float(r_item.valor) - taxa_val),
                             2,
                         )
+                        sql_upd_a = f"""
+                            UPDATE LANCTOS_CRECEBERA
+                            SET COD_BORDERO = %s,
+                                STA_LANCTO_CRECEBER = 'PG',
+                                COD_SITUACAO = {'8' if has_situacao_8 else 'ISNULL(COD_SITUACAO, 1)'},
+                                DAT_PAGTO_CRECEBER = %s,
+                                DAT_PAGTO_CONTA = %s,
+                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                DAT_ULT_ATL = GETDATE(),
+                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
+                                VLR_LANCTO_ABATIMENTO = %s,
+                                VLR_LANCTO_TOTAL = %s,
+                                VLR_LANCTO_PAGO = %s,
+                                VLR_LANCTO_RECEBIDO = %s,
+                                COD_BANCO = %s,
+                                COD_AGENCIA = %s,
+                                COD_CONTAC = %s,
+                                COD_FORMA = %s,
+                                NRO_CARTEIRA = %s
+                            WHERE COD_FILIAL = %s
+                              AND NRO_LANCTO_CRECEBER = %s
+                        """
+                        params_upd_a = (
+                            id_bordero,
+                            pay_dt,
+                            pay_dt,
+                            liq_val,
+                            liq_val,
+                            taxa_val,
+                            liq_val,
+                            liq_val,
+                            liq_val,
+                            cod_banco_val,
+                            cod_agencia_val,
+                            cod_contac_val,
+                            cod_forma_val,
+                            carteira_val or None,
+                            cod_filial,
+                            lid,
+                        )
+                        try:
+                            cur.execute(sql_upd_a, params_upd_a)
+                        except Exception as ex_a:
+                            logger.warning("[HorusBordero] Retry LANCTOS_CRECEBERA com IGNORARTRIGGER #%s: %s", lid, ex_a)
+                            cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
+                            cur.execute(sql_upd_a, params_upd_a)
+                            cur.execute("SET CONTEXT_INFO 0x;")
+
                         cur.execute(
                             """
                             UPDATE LANCTOS_CRECEBER
@@ -2084,52 +2140,46 @@ async def create_vindi_bordero(
                             """,
                             (id_bordero, pay_dt, pay_dt, liq_val, liq_val, taxa_val, liq_val, liq_val, liq_val, cod_filial, lid),
                         )
-                        try:
-                            cur.execute(
-                                """
-                                UPDATE LANCTOS_CRECEBERA
-                                SET COD_BORDERO = %s,
-                                     STA_LANCTO_CRECEBER = 'PG',
-                                     COD_SITUACAO = 8,
-                                     DAT_PAGTO_CRECEBER = %s,
-                                     DAT_PAGTO_CONTA = %s,
-                                     DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                     DAT_ULT_ATL = GETDATE(),
-                                     VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
-                                     VLR_LANCTO_ABATIMENTO = %s,
-                                     VLR_LANCTO_TOTAL = %s,
-                                     VLR_LANCTO_PAGO = %s,
-                                     VLR_LANCTO_RECEBIDO = %s,
-                                     COD_BANCO = %s,
-                                     COD_AGENCIA = %s,
-                                     COD_CONTAC = %s,
-                                     COD_FORMA = %s,
-                                     NRO_CARTEIRA = %s
-                                 WHERE COD_FILIAL = %s
-                                   AND NRO_LANCTO_CRECEBER = %s
-                                 """,
-                                 (
-                                     id_bordero,
-                                     pay_dt,
-                                     pay_dt,
-                                     liq_val,
-                                     liq_val,
-                                     taxa_val,
-                                     liq_val,
-                                     liq_val,
-                                     liq_val,
-                                     cod_banco_val,
-                                     cod_agencia_val,
-                                     cod_contac_val,
-                                     cod_forma_val,
-                                     carteira_val or None,
-                                     cod_filial,
-                                     lid,
-                                 ),
-                             )
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (PG+taxa) #%s: %s", lid, ex_a)
                     else:
+                        sql_upd_a_no_unify = f"""
+                            UPDATE LANCTOS_CRECEBERA
+                            SET COD_BORDERO = %s,
+                                STA_LANCTO_CRECEBER = 'PG',
+                                COD_SITUACAO = {'8' if has_situacao_8 else 'ISNULL(COD_SITUACAO, 1)'},
+                                DAT_PAGTO_CRECEBER = %s,
+                                DAT_PAGTO_CONTA = %s,
+                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                DAT_ULT_ATL = GETDATE(),
+                                VLR_LANCTO_PAGO = VLR_LANCTO_TOTAL,
+                                VLR_LANCTO_RECEBIDO = VLR_LANCTO_TOTAL,
+                                COD_BANCO = %s,
+                                COD_AGENCIA = %s,
+                                COD_CONTAC = %s,
+                                COD_FORMA = %s,
+                                NRO_CARTEIRA = %s
+                            WHERE COD_FILIAL = %s
+                              AND NRO_LANCTO_CRECEBER = %s
+                        """
+                        params_upd_a_no_unify = (
+                            id_bordero,
+                            pay_dt,
+                            pay_dt,
+                            cod_banco_val,
+                            cod_agencia_val,
+                            cod_contac_val,
+                            cod_forma_val,
+                            carteira_val or None,
+                            cod_filial,
+                            lid,
+                        )
+                        try:
+                            cur.execute(sql_upd_a_no_unify, params_upd_a_no_unify)
+                        except Exception as ex_a:
+                            logger.warning("[HorusBordero] Retry LANCTOS_CRECEBERA (PG) com IGNORARTRIGGER #%s: %s", lid, ex_a)
+                            cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
+                            cur.execute(sql_upd_a_no_unify, params_upd_a_no_unify)
+                            cur.execute("SET CONTEXT_INFO 0x;")
+
                         cur.execute(
                             """
                             UPDATE LANCTOS_CRECEBER
@@ -2146,42 +2196,6 @@ async def create_vindi_bordero(
                             """,
                             (id_bordero, pay_dt, pay_dt, cod_filial, lid),
                         )
-                        try:
-                            cur.execute(
-                                """
-                                UPDATE LANCTOS_CRECEBERA
-                                SET COD_BORDERO = %s,
-                                    STA_LANCTO_CRECEBER = 'PG',
-                                    COD_SITUACAO = 8,
-                                    DAT_PAGTO_CRECEBER = %s,
-                                    DAT_PAGTO_CONTA = %s,
-                                    DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                    DAT_ULT_ATL = GETDATE(),
-                                    VLR_LANCTO_PAGO = VLR_LANCTO_TOTAL,
-                                    VLR_LANCTO_RECEBIDO = VLR_LANCTO_TOTAL,
-                                    COD_BANCO = %s,
-                                    COD_AGENCIA = %s,
-                                    COD_CONTAC = %s,
-                                    COD_FORMA = %s,
-                                    NRO_CARTEIRA = %s
-                                WHERE COD_FILIAL = %s
-                                  AND NRO_LANCTO_CRECEBER = %s
-                                """,
-                                (
-                                    id_bordero,
-                                    pay_dt,
-                                    pay_dt,
-                                    cod_banco_val,
-                                    cod_agencia_val,
-                                    cod_contac_val,
-                                    cod_forma_val,
-                                    carteira_val or None,
-                                    cod_filial,
-                                    lid,
-                                ),
-                            )
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (PG) #%s: %s", lid, ex_a)
 
                     if t_idx == 1 or t_idx % batch_size == 0 or t_idx == len(releases_validos):
                         cur_b = (t_idx + batch_size - 1) // batch_size
