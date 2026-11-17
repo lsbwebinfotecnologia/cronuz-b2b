@@ -97,6 +97,10 @@ def get_dashboard_metrics(
         (getattr(company, "module_mercadolivre", False) if company else False)
         or (getattr(settings, "meli_enabled", False) if settings else False)
     )
+    module_estantevirtual = False if is_master_global else bool(
+        (getattr(company, "module_estantevirtual", False) if company else False)
+        or (getattr(settings, "ev_enabled", False) if settings else False)
+    )
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_conciliador_padrao = getattr(settings, "horus_sql_feature_conciliador_padrao", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
@@ -422,6 +426,7 @@ def get_dashboard_metrics(
         "module_order_intake": module_order_intake,
         "module_b2c_storefront": module_b2c_storefront,
         "module_mercadolivre": module_mercadolivre,
+        "module_estantevirtual": module_estantevirtual,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_conciliador_padrao": horus_sql_feature_conciliador_padrao,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
@@ -542,6 +547,7 @@ def get_master_overview(
         {"key": "order_intake", "label": "Mesa de Pedidos B2B", "field": "module_order_intake", "color": "indigo"},
         {"key": "b2c_storefront", "label": "Storefront Aberto B2C", "field": "module_b2c_storefront", "color": "fuchsia"},
         {"key": "mercadolivre", "label": "Mercado Livre Hub", "field": "module_mercadolivre", "color": "amber"},
+        {"key": "estantevirtual", "label": "Estante Virtual Hub", "field": "module_estantevirtual", "color": "indigo"},
         {"key": "customers", "label": "Clientes / CRM", "field": "module_customers", "color": "sky"},
         {"key": "financial", "label": "Financeiro", "field": "module_financial", "color": "emerald"},
         {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},

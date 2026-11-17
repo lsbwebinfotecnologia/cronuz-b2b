@@ -445,8 +445,18 @@ Quando um Seller seleciona produtos do catálogo/Horus e ativa a integração pa
        - Para operações que exigem envio **1 a 1** (ex.: `POST /produtos` na Estante Virtual ou `POST /items` no Mercado Livre), processa em fatias controladas respeitando o *Rate Limit* do canal.
        - Para operações que suportam **Lote / Batch** (ex.: `PUT /estoques` e `PUT /precos` na Estante Virtual), agrupa todos os itens `PENDING` daquele seller e dispara uma única chamada em lote.
      - **Eliminação da Fila (`Queue Drain`)**: Assim que o item é processado com sucesso (`HTTP 200/201`), o Worker atualiza `last_synced_stock` / `last_synced_price` / `status` na tabela de anúncios, grava o resumo consolidado no log de auditoria e **elimina (DELETE) o registro concluído da fila `mkt_sync_queue`**, mantendo a tabela de fila enxuta, rápida e contendo apenas o que está pendente ou com erro para retentativa.
-3. **Consulta Horus ERP Obrigatória (`SD_*` e `OFFSET/LIMIT`)**:
-   - Toda coleta de saldo e preço no Horus ERP para alimentar a fila deve respeitar estritamente os parâmetros `SD_COD_EMPRESA`, `SD_COD_FILIAL`, `SD_LOCAL_ESTOQUE` (Regra 9) e a configuração de paginação `OFFSET/LIMIT` (`horus_legacy_pagination`) do seller.
+3. **Regra Obrigatória da Origem dos Produtos e Sincronização de Estoque Dual (`HORUS_ERP` vs. `CRONUZ_LOCAL` — Zero Redundância)**:
+   Todo marketplace (`Mercado Livre`, `Estante Virtual`, `Shopee`, etc.) deve operar de forma transparente e padronizada para **ambos os perfis de Seller** (definidos no Módulo 1 do Master: `module_horus_erp` vs. `module_b2b_native`):
+   - **Perfil 1 — Seller Integrado ao Horus ERP (`company.module_horus_erp == True` ou `settings.horus_enabled == True`)**:
+     - **Origem do Envio/Publicação de Produtos**: A busca de candidatos para publicação (`catalog-candidates`) consulta **diretamente o Horus ERP** (`HorusProducts.busca_acervo_b2b` com `id_doc`, `id_guid`, `SD_COD_EMPRESA`, `SD_COD_FILIAL`, `SD_LOCAL_ESTOQUE` e paginação `OFFSET/LIMIT` respeitando `horus_legacy_pagination`), montando a capa a partir de `cover_image_base_url/{isbn}.jpg` e enviando os livros selecionados para a fila `mkt_sync_queue` do marketplace.
+     - **Job de Atualização de Estoque e Preço por Últimas Movimentações (`DATA_INI` → `DATA_FIM`)**:
+       - Em vez de consultar item a item repetidamente, o job coleta do Horus **apenas as últimas movimentações** na janela incremental `DATA_INI` → `DATA_FIM` (em horário de Brasília `America/Sao_Paulo`, formato `dd/mm/yyyy HH:MM:SS`, via endpoint `Estoque` por `COD_ITEM` e/ou lote `Busca_AcervoB2B` por `BARRAS_ISBN`, respeitando `SD_*` e `OFFSET/LIMIT`).
+       - Quando acionado manualmente com `force_all=True`, consulta em lote (`chunks` de ISBNs) todos os anúncios ativos do seller no Horus.
+       - O saldo coletado do Horus alimenta simultaneamente o espelho do anúncio (`ev_listings`, `meli_listings`) e a fila `mkt_sync_queue` (`SYNC_STOCK` / `SYNC_PRICE`), que dispara o envio ao marketplace (em lote `PUT /estoques` e `PUT /precos` na Estante Virtual ou `PUT /items/{id}` no Mercado Livre) e elimina os registros concluídos da fila.
+   - **Perfil 2 — Seller que Utiliza Somente o Cronuz Nativo (`company.module_b2b_native == True` e `not settings.horus_enabled`)**:
+     - **Origem do Envio/Publicação de Produtos**: Coleta os produtos, preços, saldos, capas, categorias e marcas **diretamente da tabela nativa `prd_product`** do Cronuz e envia para a fila `mkt_sync_queue` do marketplace.
+     - **Job de Atualização de Estoque e Preço Local (`prd_product` → Marketplace)**:
+       - O job lê em uma única query SQL os produtos da tabela `prd_product` vinculados aos anúncios (`product_id`, `sku` ou `ean_gtin`/`isbn`), compara `prd_product.stock_quantity` e `prd_product.base_price` / `promotional_price` com `last_synced_stock` e `last_synced_price` do anúncio e, havendo diferença, enfileira em `mkt_sync_queue` e sincroniza com o marketplace, eliminando da fila após o sucesso.
 
 #### Pilar C — Padronização de Recebimento de Pedidos, Estoque Cruzado e Envio ao Horus ERP
 1. **Recepção Unificada (Webhook Push + Polling)**:

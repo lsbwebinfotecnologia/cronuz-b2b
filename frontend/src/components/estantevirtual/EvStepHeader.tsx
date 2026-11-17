@@ -1,0 +1,297 @@
+'use client';
+
+import React, { useEffect } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import {
+  SlidersHorizontal,
+  Zap,
+  LayoutGrid,
+  PackageCheck,
+  ChevronsLeft,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsRight,
+  Keyboard,
+  HelpCircle,
+} from 'lucide-react';
+
+export type EvStepNumber = 1 | 2 | 3 | 4;
+
+interface StepDefinition {
+  step: EvStepNumber;
+  title: string;
+  subtitle: string;
+  href: string;
+  icon: any;
+  shortcut: string;
+}
+
+const EV_STEPS: StepDefinition[] = [
+  {
+    step: 1,
+    title: '1. Conectar Conta & 74 Estantes',
+    subtitle: 'Login JWT 24h, id_vendedor e Regras',
+    href: '/estantevirtual/settings',
+    icon: SlidersHorizontal,
+    shortcut: 'Alt+1',
+  },
+  {
+    step: 2,
+    title: '2. Publicar do Catálogo / Horus',
+    subtitle: 'Envio à Fila com ISBN e Sinopse Limpa',
+    href: '/estantevirtual/publish',
+    icon: Zap,
+    shortcut: 'Alt+2',
+  },
+  {
+    step: 3,
+    title: '3. Acervo, Fila & Lote Estoque/Preço',
+    subtitle: 'Planilha Viva + Fila mkt_sync_queue',
+    href: '/estantevirtual',
+    icon: LayoutGrid,
+    shortcut: 'Alt+3',
+  },
+  {
+    step: 4,
+    title: '4. Pedidos EV, Rastreio & Etiquetas MLE',
+    subtitle: 'Webhooks, Horus ERP e Magalu Entregas',
+    href: '/estantevirtual/orders',
+    icon: PackageCheck,
+    shortcut: 'Alt+4',
+  },
+];
+
+interface EvStepHeaderProps {
+  currentStep: EvStepNumber;
+  title: string;
+  explanation: string;
+  guideSteps: string[];
+  actions?: React.ReactNode;
+}
+
+export function EvStepHeader({
+  currentStep,
+  title,
+  explanation,
+  guideSteps,
+  actions,
+}: EvStepHeaderProps) {
+  const router = useRouter();
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey) {
+        if (e.key === '1') {
+          e.preventDefault();
+          router.push('/estantevirtual/settings');
+        } else if (e.key === '2') {
+          e.preventDefault();
+          router.push('/estantevirtual/publish');
+        } else if (e.key === '3') {
+          e.preventDefault();
+          router.push('/estantevirtual');
+        } else if (e.key === '4') {
+          e.preventDefault();
+          router.push('/estantevirtual/orders');
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [router]);
+
+  return (
+    <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+      {/* Barra de Alternância Rápida de Canal do Hub Marketplaces */}
+      <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-800 bg-slate-100/80 dark:bg-slate-950 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-[10px] font-extrabold uppercase tracking-wider text-slate-400">
+            Hub Marketplaces:
+          </span>
+          <Link
+            href="/mercadolivre"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-amber-400 hover:text-amber-700 font-bold text-[11px] transition"
+          >
+            <span className="h-2 w-2 rounded-full bg-amber-400" />
+            Mercado Livre (Ativo)
+          </Link>
+          <Link
+            href="/estantevirtual"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 text-white font-extrabold text-[11px] shadow-2xs"
+          >
+            <span className="h-2 w-2 rounded-full bg-white" />
+            Estante Virtual (Ativo)
+          </Link>
+        </div>
+        <span className="text-[11px] text-slate-400 font-mono hidden sm:inline">
+          API Oficial: api-marketplace.estantevirtual.com.br • Fila mkt_sync_queue
+        </span>
+      </div>
+
+      {/* Faixa Superior: Jornada de 4 Etapas (Access Moderno) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 border-b border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50">
+        {EV_STEPS.map((item) => {
+          const Icon = item.icon;
+          const isActive = item.step === currentStep;
+          const isPast = item.step < currentStep;
+
+          return (
+            <Link
+              key={item.step}
+              href={item.href}
+              className={`flex items-center justify-between gap-3 px-4 py-3 border-b sm:border-b-0 sm:border-r last:border-r-0 border-slate-200/80 dark:border-slate-800 transition ${
+                isActive
+                  ? 'bg-indigo-50/90 dark:bg-indigo-950/30 text-slate-900 dark:text-white'
+                  : 'hover:bg-white dark:hover:bg-slate-900 text-slate-500 dark:text-slate-400'
+              }`}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div
+                  className={`h-8 w-8 rounded-xl flex items-center justify-center shrink-0 text-xs font-black ${
+                    isActive
+                      ? 'bg-indigo-600 text-white shadow-sm'
+                      : isPast
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                      : 'bg-slate-200/70 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p
+                    className={`text-xs font-extrabold truncate ${
+                      isActive
+                        ? 'text-slate-900 dark:text-white'
+                        : 'text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    {item.title}
+                  </p>
+                  <p className="text-[11px] text-slate-400 truncate">{item.subtitle}</p>
+                </div>
+              </div>
+              <span className="hidden xl:inline-block font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-200/60 dark:bg-slate-800 text-slate-500 shrink-0">
+                {item.shortcut}
+              </span>
+            </Link>
+          );
+        })}
+      </div>
+
+      {/* Corpo do Cabeçalho: Título + Explicação Direta + Botão Primário Único */}
+      <div className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="px-2 py-0.5 rounded-md bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 font-mono text-[11px] font-extrabold uppercase">
+              Etapa {currentStep} de 4 • Estante Virtual
+            </span>
+            <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white">
+              {title}
+            </h1>
+          </div>
+          <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">{explanation}</p>
+
+          {guideSteps.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-600 dark:text-indigo-400">
+                <HelpCircle className="h-3.5 w-3.5" /> Como operar:
+              </span>
+              {guideSteps.map((g, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-300"
+                >
+                  <strong className="text-indigo-600 dark:text-indigo-400 font-mono">
+                    {idx + 1}.
+                  </strong>{' '}
+                  {g}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {actions && <div className="flex flex-wrap items-center gap-2 shrink-0">{actions}</div>}
+      </div>
+    </div>
+  );
+}
+
+interface EvAccessFooterProps {
+  currentIndex: number;
+  totalCount: number;
+  onSelectIndex: (idx: number) => void;
+  extraHints?: string[];
+}
+
+export function EvAccessFooter({
+  currentIndex,
+  totalCount,
+  onSelectIndex,
+  extraHints = ['↑↓ Navegar linhas', 'Enter Selecionar/Ficha', 'F2 Salvar Edição', 'Esc Voltar'],
+}: EvAccessFooterProps) {
+  const safeCurrent = totalCount > 0 ? Math.min(Math.max(0, currentIndex), totalCount - 1) : 0;
+
+  return (
+    <div className="bg-white dark:bg-slate-900 px-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm">
+      <div className="flex items-center gap-1.5">
+        <button
+          type="button"
+          disabled={totalCount === 0 || safeCurrent === 0}
+          onClick={() => onSelectIndex(0)}
+          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+          title="Primeiro Registro (Home)"
+        >
+          <ChevronsLeft className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          disabled={totalCount === 0 || safeCurrent === 0}
+          onClick={() => onSelectIndex(Math.max(0, safeCurrent - 1))}
+          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+          title="Registro Anterior (↑)"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" />
+        </button>
+
+        <div className="px-3 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 font-mono font-bold text-slate-700 dark:text-slate-200">
+          {totalCount > 0 ? `Registro ${safeCurrent + 1} de ${totalCount}` : '0 registros'}
+        </div>
+
+        <button
+          type="button"
+          disabled={totalCount === 0 || safeCurrent >= totalCount - 1}
+          onClick={() => onSelectIndex(Math.min(totalCount - 1, safeCurrent + 1))}
+          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+          title="Próximo Registro (↓)"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          disabled={totalCount === 0 || safeCurrent >= totalCount - 1}
+          onClick={() => onSelectIndex(Math.max(0, totalCount - 1))}
+          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-40 cursor-pointer"
+          title="Último Registro (End)"
+        >
+          <ChevronsRight className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+        <span className="inline-flex items-center gap-1 font-semibold text-slate-600 dark:text-slate-300">
+          <Keyboard className="h-3.5 w-3.5 text-indigo-500" /> Atalhos Planilha:
+        </span>
+        {extraHints.map((hint, i) => (
+          <span
+            key={i}
+            className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 font-mono text-[10px]"
+          >
+            {hint}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}

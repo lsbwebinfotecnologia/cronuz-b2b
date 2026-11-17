@@ -333,6 +333,7 @@ export default function CompanyModulesPage() {
       module_order_intake: company.module_order_intake ?? false,
       module_b2c_storefront: company.module_b2c_storefront ?? false,
       module_mercadolivre: company.module_mercadolivre ?? false,
+      module_estantevirtual: company.module_estantevirtual ?? false,
       [moduleName]: !currentValue,
     };
 
@@ -435,6 +436,14 @@ export default function CompanyModulesPage() {
           icon: ShoppingBag,
           colorClass: 'bg-amber-500',
           badge: 'Meli Hub',
+        },
+        {
+          key: 'module_estantevirtual',
+          title: 'Estante Virtual (API Marketplace)',
+          desc: 'Integração nativa com a Estante Virtual (JWT 24h, 74 Estantes Oficiais, fila mkt_sync_queue, lote de estoque/preços, webhooks e etiquetas MLE).',
+          icon: BookOpen,
+          colorClass: 'bg-indigo-600',
+          badge: 'EV Hub',
         },
         {
           key: 'module_orders',

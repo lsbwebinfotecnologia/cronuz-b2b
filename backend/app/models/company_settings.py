@@ -205,6 +205,17 @@ class CompanySettings(Base):
     meli_token_expires_at             = Column(DateTime(timezone=True), nullable=True)
     meli_preset_config                = Column(JSON, nullable=True)
 
+    # ── Módulo Estante Virtual (JWT 24h, Categorias 1..74, Fila & Webhooks) ──
+    ev_enabled                        = Column(Boolean, default=False, nullable=False, server_default="false")
+    ev_environment                    = Column(String(30), default="PRODUCAO", nullable=False, server_default="'PRODUCAO'")
+    ev_seller_id                      = Column(String(100), nullable=True, index=True)  # id_vendedor fixo fornecido pela EV
+    ev_email                          = Column(String(255), nullable=True)
+    ev_password                       = Column(String(255), nullable=True)
+    ev_auth_token                     = Column(String(1500), nullable=True)
+    ev_token_expires_at               = Column(DateTime(timezone=True), nullable=True)
+    ev_webhook_secret                 = Column(String(255), nullable=True)
+    ev_preset_config                  = Column(JSON, nullable=True)
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")

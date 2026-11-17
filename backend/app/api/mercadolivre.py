@@ -23,6 +23,8 @@ from app.models.catalog_support import Category, Brand
 from app.models.customer import Customer, Address
 from app.models.order import Order, OrderItem
 from app.models.mercadolivre import MeliListing, MeliOrder, MeliSyncLog
+from app.models.estantevirtual import MarketplaceSyncQueue
+from app.api.estantevirtual import enqueue_marketplace_task
 
 logger = logging.getLogger("cronuz.mercadolivre")
 
@@ -1133,6 +1135,21 @@ async def publish_meli_listings(
             thumbnail = item_in.cover_url or ""
             status_str = "active" if eff_stock > 0 else "paused"
             sync_err = None
+            sku_key = str(item_in.sku or item_in.ean_gtin or item_in.title[:30]).strip()
+
+            q_task = enqueue_marketplace_task(
+                db=db,
+                company_id=cid,
+                channel="mercadolivre",
+                operation="PUBLISH_PRODUCT",
+                sku=sku_key,
+                isbn_ean=item_in.ean_gtin,
+                title=item_in.title,
+                product_id=item_in.product_id,
+                priority=30,
+                payload={"price": final_price, "stock": eff_stock, "category_id": cat_id},
+            )
+            db.flush()
 
             if token and not item_in.simulate_only:
                 try:
@@ -1164,6 +1181,8 @@ async def publish_meli_listings(
                                 headers={"Authorization": f"Bearer {token}"},
                             )
                             status_str = "paused"
+                        # Sucesso: elimina da fila mkt_sync_queue!
+                        db.delete(q_task)
                     else:
                         err_json = resp.json() if resp.content else {}
                         causes = err_json.get("cause") or []
@@ -1171,6 +1190,9 @@ async def publish_meli_listings(
                             [c.get("message") or c.get("code") or "" for c in causes if isinstance(c, dict)]
                         )
                         sync_err = cause_msg or err_json.get("message") or f"Rejeitado pelo Mercado Livre ({resp.status_code})"
+                        q_task.attempts += 1
+                        q_task.error_message = sync_err
+                        q_task.status = "FAILED" if q_task.attempts >= q_task.max_attempts else "RETRY"
                         failed_count += 1
                         results.append({
                             "title": item_in.title,
@@ -1181,6 +1203,9 @@ async def publish_meli_listings(
                         continue
                 except Exception as e:
                     sync_err = f"Falha de comunicação com o Mercado Livre: {str(e)}"
+                    q_task.attempts += 1
+                    q_task.error_message = sync_err
+                    q_task.status = "FAILED" if q_task.attempts >= q_task.max_attempts else "RETRY"
                     failed_count += 1
                     results.append({
                         "title": item_in.title,
@@ -1190,7 +1215,7 @@ async def publish_meli_listings(
                     })
                     continue
             else:
-                # Modo Rascunho Homologado / Pré-vínculo quando ainda sem token OAuth ativo
+                # Modo Rascunho Homologado / Pré-vínculo quando ainda sem token OAuth ativo: mantém na fila PENDING para envio posterior
                 suffix = re.sub(r"\D", "", str(item_in.ean_gtin or item_in.sku or ""))[-8:] or str(int(datetime.now().timestamp()))[-6:]
                 meli_item_id = f"MLB-DRAFT-{suffix}"
                 status_str = "under_review"
@@ -1475,6 +1500,17 @@ def list_meli_listings(
 
     rows = q.order_by(MeliListing.updated_at.desc().nullslast(), MeliListing.id.desc()).offset(skip).limit(limit).all()
 
+    queue_rows = (
+        db.query(MarketplaceSyncQueue)
+        .filter(
+            MarketplaceSyncQueue.company_id == cid,
+            MarketplaceSyncQueue.channel == "mercadolivre",
+        )
+        .order_by(MarketplaceSyncQueue.priority.asc(), MarketplaceSyncQueue.id.asc())
+        .limit(100)
+        .all()
+    )
+
     return {
         "kpis": {
             "total": total_all,
@@ -1482,6 +1518,22 @@ def list_meli_listings(
             "paused": paused_count,
             "zero_stock": zero_stock_count,
         },
+        "queue_count": len(queue_rows),
+        "queue_items": [
+            {
+                "id": qr.id,
+                "sku": qr.sku,
+                "isbn_ean": qr.isbn_ean,
+                "title": qr.title,
+                "operation": qr.operation,
+                "priority": qr.priority,
+                "status": qr.status,
+                "attempts": qr.attempts,
+                "error_message": qr.error_message,
+                "created_at": qr.created_at.isoformat() if qr.created_at else None,
+            }
+            for qr in queue_rows
+        ],
         "items": [
             {
                 "id": r.id,
@@ -1598,21 +1650,62 @@ async def execute_company_stock_delta_sync(db: Session, company_id: int, force_a
 
     uses_horus = bool((getattr(company, "module_horus_erp", False) if company else False) or settings.horus_enabled)
     horus_stock_by_isbn: Dict[str, int] = {}
+    horus_stock_by_cod: Dict[int, int] = {}
 
     if uses_horus and settings.horus_enabled:
         from app.integrators.horus_products import HorusProducts
         id_doc = re.sub(r"\D", "", str(company.document or "")) if company else ""
         id_guid = (settings.horus_default_b2b_guid or "").strip()
-
-        isbns_to_check = [
-            re.sub(r"\D", "", str(l.ean_gtin or l.sku or ""))
-            for l in listings
-            if re.sub(r"\D", "", str(l.ean_gtin or l.sku or ""))
-        ]
+        use_pagination = not getattr(settings, "horus_legacy_pagination", False)
+        brt_tz = timezone(timedelta(hours=-3))
+        now_utc = datetime.now(timezone.utc)
+        now_brt = now_utc.astimezone(brt_tz)
 
         horus_client = HorusProducts(db, company_id)
         try:
-            # Consulta em lotes de 100 ISBNs sem AC_* para enxergar inclusive saldos zerados
+            # Etapa A: Coleta incremental das últimas movimentações de estoque no Horus (DATA_INI -> DATA_FIM)
+            last_sync_iso = str(preset.get("last_horus_movement_sync_at") or "").strip()
+            dt_ini_br = now_brt - timedelta(hours=24)
+            if last_sync_iso and not force_all:
+                try:
+                    parsed_dt = datetime.fromisoformat(last_sync_iso.replace("Z", "+00:00"))
+                    if parsed_dt.tzinfo is None:
+                        parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+                    dt_ini_br = (parsed_dt - timedelta(minutes=10)).astimezone(brt_tz)
+                except Exception:
+                    pass
+
+            p_est: Dict[str, Any] = {
+                "COD_EMPRESA": settings.horus_company or "01",
+                "COD_FILIAL": settings.horus_branch or "001",
+                "DATA_INI": dt_ini_br.strftime("%d/%m/%Y %H:%M:%S"),
+                "DATA_FIM": now_brt.strftime("%d/%m/%Y %H:%M:%S"),
+            }
+            if getattr(settings, "horus_stock_local", None):
+                p_est["COD_LOCAL_ESTOQUE"] = settings.horus_stock_local
+            if use_pagination:
+                p_est["OFFSET"] = 0
+                p_est["LIMIT"] = 500
+
+            res_est = await horus_client.get("Estoque", params=p_est)
+            if isinstance(res_est, list):
+                for row in res_est:
+                    if isinstance(row, dict) and not row.get("Falha") and row.get("COD_ITEM"):
+                        try:
+                            ci = int(str(row.get("COD_ITEM")).strip())
+                            raw_s = row.get("SALDO_DISPONIVEL") if row.get("SALDO_DISPONIVEL") is not None else (row.get("SALDO") or 0)
+                            horus_stock_by_cod[ci] = max(0, int(float(str(raw_s).replace(",", "."))))
+                        except Exception:
+                            pass
+
+            # Etapa B: Consulta em lotes de 100 ISBNs sem AC_* para enxergar inclusive saldos zerados
+            isbns_to_check = [
+                re.sub(r"\D", "", str(l.ean_gtin or l.sku or ""))
+                for l in listings
+                if re.sub(r"\D", "", str(l.ean_gtin or l.sku or ""))
+                and (force_all or not l.horus_cod_item or int(l.horus_cod_item) not in horus_stock_by_cod)
+            ]
+
             for idx in range(0, len(isbns_to_check), 100):
                 batch = isbns_to_check[idx:idx + 100]
                 payload_isbns = []
@@ -1627,7 +1720,7 @@ async def execute_company_stock_delta_sync(db: Session, company_id: int, force_a
                     payload_isbns.append(obj)
 
                 params: Dict[str, Any] = {"ID_DOC": id_doc, "ID_GUID": id_guid}
-                if not getattr(settings, "horus_legacy_pagination", False):
+                if use_pagination:
                     params["OFFSET"] = 0
                     params["LIMIT"] = 500
 
@@ -1644,10 +1737,26 @@ async def execute_company_stock_delta_sync(db: Session, company_id: int, force_a
                             saldo_int = 0
                         if code_ret:
                             horus_stock_by_isbn[code_ret] = saldo_int
+
+            preset["last_horus_movement_sync_at"] = now_utc.isoformat()
+            settings.meli_preset_config = preset
+            flag_modified(settings, "meli_preset_config")
         except Exception as e:
             logger.warning("[MELI_STOCK_HORUS] Erro ao consultar lote no Horus para empresa %s: %s", company_id, e)
         finally:
             await horus_client.close()
+
+    # Mapa em memória da tabela prd_product para Sellers CRONUZ_LOCAL
+    local_prod_by_id: Dict[int, Product] = {}
+    local_prod_by_sku: Dict[str, Product] = {}
+    local_prod_by_ean: Dict[str, Product] = {}
+    if not uses_horus or any(l.product_id for l in listings):
+        for p in db.query(Product).filter(Product.company_id == company_id).all():
+            local_prod_by_id[p.id] = p
+            if p.sku:
+                local_prod_by_sku[p.sku.strip()] = p
+            if p.ean_gtin:
+                local_prod_by_ean[re.sub(r"\D", "", p.ean_gtin)] = p
 
     token: Optional[str] = None
     if settings.meli_access_token:
@@ -1662,12 +1771,18 @@ async def execute_company_stock_delta_sync(db: Session, company_id: int, force_a
     async with httpx.AsyncClient(timeout=20.0) as client:
         for listing in listings:
             raw_qty = listing.current_stock
-            if uses_horus and horus_stock_by_isbn:
-                clean_ean = re.sub(r"\D", "", str(listing.ean_gtin or listing.sku or ""))
-                # Se não retornou na consulta do Horus, assume 0 por segurança
-                raw_qty = horus_stock_by_isbn.get(clean_ean, 0)
-            elif listing.product_id:
-                prod = db.query(Product).filter(Product.id == listing.product_id).first()
+            clean_ean = re.sub(r"\D", "", str(listing.ean_gtin or listing.sku or ""))
+            if uses_horus and settings.horus_enabled:
+                if listing.horus_cod_item and int(listing.horus_cod_item) in horus_stock_by_cod:
+                    raw_qty = horus_stock_by_cod[int(listing.horus_cod_item)]
+                elif clean_ean in horus_stock_by_isbn:
+                    raw_qty = horus_stock_by_isbn[clean_ean]
+            else:
+                prod = (
+                    (local_prod_by_id.get(listing.product_id) if listing.product_id else None)
+                    or (local_prod_by_sku.get(listing.sku.strip()) if listing.sku else None)
+                    or (local_prod_by_ean.get(clean_ean) if clean_ean else None)
+                )
                 if prod:
                     raw_qty = int(prod.stock_quantity or 0)
 

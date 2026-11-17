@@ -73,6 +73,7 @@ class CompanyBase(BaseModel):
     module_b2c_storefront: bool = False
     module_horus_api_bridge: bool = False
     module_mercadolivre: bool = False
+    module_estantevirtual: bool = False
     active: bool = True
 
 
@@ -153,6 +154,7 @@ class CompanyUpdate(BaseModel):
     module_b2c_storefront: Optional[bool] = None
     module_horus_api_bridge: Optional[bool] = None
     module_mercadolivre: Optional[bool] = None
+    module_estantevirtual: Optional[bool] = None
     active: Optional[bool] = None
 
 class CompanyInDBBase(CompanyBase):

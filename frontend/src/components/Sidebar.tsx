@@ -224,6 +224,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleOrderIntake, setModuleOrderIntake] = useState(false);
   const [moduleB2cStorefront, setModuleB2cStorefront] = useState(false);
   const [moduleMercadolivre, setModuleMercadolivre] = useState(false);
+  const [moduleEstantevirtual, setModuleEstantevirtual] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const _settingsFetchedRef = useRef(false);
@@ -253,7 +254,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
        if (pathname.startsWith('/cafeteria')) initialOpen['Cafeteria'] = true;
        if (pathname.startsWith('/product-search') || pathname.startsWith('/addressing')) initialOpen['Busca Preço'] = true;
        if (pathname.startsWith('/b2c-storefront') || pathname.startsWith('/products')) initialOpen['B2C'] = true;
-       if (pathname.startsWith('/mercadolivre')) initialOpen['Mercado Livre'] = true;
+       if (pathname.startsWith('/mercadolivre') || pathname.startsWith('/estantevirtual')) initialOpen['Marketplace'] = true;
        if (pathname.startsWith('/pdv')) initialOpen['PDV'] = true;
        setOpenMenus(initialOpen);
        
@@ -302,6 +303,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleOrderIntake(data.module_order_intake || false);
                setModuleB2cStorefront(data.module_b2c_storefront || false);
                setModuleMercadolivre(data.module_mercadolivre || false);
+               setModuleEstantevirtual(data.module_estantevirtual || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -627,14 +629,27 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
-  if (moduleMercadolivre) {
+  if (moduleMercadolivre || moduleEstantevirtual) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
-    filteredSellerNavigation.splice(targetIndex, 0, {
-      name: 'Hub Marketplaces',
-      href: '/mercadolivre',
-      icon: ShoppingBag,
-    });
+    const hasRestricted = user?.type === 'SELLER' && Array.isArray(user?.allowed_modules) && user.allowed_modules.length > 0;
+    const mktSubItems: { name: string; href: string; icon?: any }[] = [];
+
+    if (moduleMercadolivre && (!hasRestricted || user?.allowed_modules?.includes('mercadolivre'))) {
+      mktSubItems.push({ name: 'Mercado Livre', href: '/mercadolivre', icon: ShoppingBag });
+    }
+    if (moduleEstantevirtual && (!hasRestricted || user?.allowed_modules?.includes('estantevirtual'))) {
+      mktSubItems.push({ name: 'Estante Virtual', href: '/estantevirtual', icon: BookOpen });
+    }
+
+    if (mktSubItems.length > 0) {
+      filteredSellerNavigation.splice(targetIndex, 0, {
+        name: 'Marketplace',
+        href: mktSubItems[0].href,
+        icon: ShoppingBag,
+        subItems: mktSubItems,
+      });
+    }
   }
 
   if (modulePdv) {
@@ -679,7 +694,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const dynamicNavigation = (user?.type === 'SELLER' && Array.isArray(userAllowedModules) && userAllowedModules.length > 0)
     ? baseNavigation.filter(nav => {
         if (nav.name === 'B2C' || nav.href.startsWith('/b2c-storefront')) return userAllowedModules.includes('b2c') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
-        if (nav.name === 'Hub Marketplaces' || nav.name === 'Mercado Livre' || nav.href.startsWith('/mercadolivre')) return userAllowedModules.includes('mercadolivre') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
+        if (nav.name === 'Marketplace' || nav.name === 'Hub Marketplaces' || nav.name === 'Mercado Livre' || nav.href.startsWith('/mercadolivre') || nav.href.startsWith('/estantevirtual')) return userAllowedModules.includes('mercadolivre') || userAllowedModules.includes('estantevirtual') || userAllowedModules.includes('products') || userAllowedModules.includes('orders');
         if (nav.name === 'PDV' || nav.href.startsWith('/pdv')) return userAllowedModules.includes('pdv') || userAllowedModules.includes('pdv_horus_sync');
         if (nav.name === 'Busca Preço' || nav.href === '/product-search' || nav.name === 'Endereçamento' || nav.href === '/addressing') return userAllowedModules.includes('busca_preco') || userAllowedModules.includes('enderecamento');
         if (nav.name === 'Encomendas' || nav.href === '/encomendas') return userAllowedModules.includes('encomendas') || userAllowedModules.includes('orders');
@@ -765,7 +780,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
 
         <nav className="space-y-1">
           {dynamicNavigation.map((item) => {
-            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href || (sub.href === '/products' && pathname.startsWith('/products/')))) || pathname.startsWith(item.href + '/');
+            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href || (sub.href === '/products' && pathname.startsWith('/products/')))) || pathname.startsWith(item.href + '/') || (item.name === 'Hub Marketplaces' && pathname.startsWith('/estantevirtual'));
             const isOpen = openMenus[item.name];
 
             return (

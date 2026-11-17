@@ -53,6 +53,7 @@ class ModuleUpdate(BaseModel):
     module_b2c_storefront: Optional[bool] = None
     module_horus_api_bridge: Optional[bool] = None
     module_mercadolivre: Optional[bool] = None
+    module_estantevirtual: Optional[bool] = None
 
 
 class HorusTestRequest(BaseModel):
@@ -303,6 +304,7 @@ def update_company_modules(
         "module_cora": ["financial"],
         "module_services": ["services"],
         "module_mercadolivre": ["mercadolivre"],
+        "module_estantevirtual": ["estantevirtual"],
     }
     newly_enabled_perms: List[str] = []
     for mod_key, mod_val in update_data.items():

@@ -206,11 +206,19 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
   },
   {
     id: 'mercadolivre',
-    label: 'Hub Marketplaces (Mercado Livre)',
-    description: 'Publicação de anúncios, sincronização de estoque e pedidos de marketplaces',
+    label: 'Marketplace: Mercado Livre',
+    description: 'Publicação de anúncios, sincronização de estoque e pedidos do Mercado Livre',
     category: 'sales_channels',
     icon: ShoppingBag,
     companyCheck: (c) => Boolean(c?.module_mercadolivre),
+  },
+  {
+    id: 'estantevirtual',
+    label: 'Marketplace: Estante Virtual',
+    description: 'Publicação de livros, fila mkt_sync_queue, 74 estantes e pedidos da Estante Virtual',
+    category: 'sales_channels',
+    icon: BookOpen,
+    companyCheck: (c) => Boolean(c?.module_estantevirtual),
   },
 
   // 2. Ecossistema Horus, Logística & Estoque

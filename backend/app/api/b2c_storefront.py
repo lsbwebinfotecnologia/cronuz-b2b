@@ -1856,11 +1856,25 @@ def update_b2c_seller_settings(
             if isinstance(raw_cfg.get("horus_order_config"), dict)
             else _default_b2c_horus_order_config(db=db, company_id=cid)
         )
+
+        def _clean_from_to_list(raw_list: Any) -> List[Dict[str, str]]:
+            if not isinstance(raw_list, list):
+                return []
+            out: List[Dict[str, str]] = []
+            for item in raw_list:
+                if not isinstance(item, dict):
+                    continue
+                fv = str(item.get("from_value") or item.get("fromm") or item.get("de") or "").strip()
+                th = str(item.get("to_horus") or item.get("too") or item.get("para") or "").strip().upper()
+                if fv or th:
+                    out.append({"from_value": fv, "to_horus": th})
+            return out
+
         raw_cfg["horus_order_config"] = {
             **prev_hord,
             "enabled": bool(data.horus_order_config.get("enabled", True)),
             "auto_send_on_paid": bool(data.horus_order_config.get("auto_send_on_paid", False)),
-            "tipo_pedido": str(data.horus_order_config.get("tipo_pedido") or "L").strip().upper()[:1] or "L",
+            "tipo_pedido": str(data.horus_order_config.get("tipo_pedido") or "V").strip().upper()[:1] or "V",
             "cod_param_fiscal_intra": str(data.horus_order_config.get("cod_param_fiscal_intra") or "").strip().upper(),
             "cod_param_fiscal_inter": str(data.horus_order_config.get("cod_param_fiscal_inter") or "").strip().upper(),
             "cod_metodo": str(data.horus_order_config.get("cod_metodo") or "1").strip().upper(),
@@ -1868,11 +1882,18 @@ def update_b2c_seller_settings(
             "cod_transp": str(data.horus_order_config.get("cod_transp") or "").strip().upper(),
             "frete_emit_dest": str(data.horus_order_config.get("frete_emit_dest") or "1").strip().upper(),
             "status_envio_erp": str(data.horus_order_config.get("status_envio_erp") or "LEX").strip().upper(),
-            "resp_cliente": str(data.horus_order_config.get("resp_cliente") or "").strip().upper(),
-            "cod_resp": str(data.horus_order_config.get("cod_resp") or "").strip().upper(),
+            "pular_expedicao": bool(data.horus_order_config.get("pular_expedicao", False)),
+            "resp_cliente": str(data.horus_order_config.get("resp_cliente") or "FMZ").strip().upper(),
+            "cod_resp": str(data.horus_order_config.get("cod_resp") or "1").strip().upper(),
+            "cod_tipo_cliente": str(data.horus_order_config.get("cod_tipo_cliente") or "").strip().upper(),
             "cod_forma": str(data.horus_order_config.get("cod_forma") or "").strip().upper(),
+            "cod_forma_zero": str(data.horus_order_config.get("cod_forma_zero") or "").strip().upper(),
+            "order_prefix": str(data.horus_order_config.get("order_prefix") or "").strip().upper(),
             "send_freight_value": bool(data.horus_order_config.get("send_freight_value", True)),
             "price_mode": str(data.horus_order_config.get("price_mode") or "UNIT_PRICE").strip().upper(),
+            "transport_from_to": _clean_from_to_list(data.horus_order_config.get("transport_from_to")),
+            "payment_from_to": _clean_from_to_list(data.horus_order_config.get("payment_from_to")),
+            "method_from_to": _clean_from_to_list(data.horus_order_config.get("method_from_to")),
         }
         settings.b2c_showcases_config = raw_cfg
         flag_modified(settings, "b2c_showcases_config")

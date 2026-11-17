@@ -441,5 +441,19 @@ def start_scheduler():
     except Exception as _e_job_meli:
         logger.warning(f"Falha ao registrar job do Mercado Livre: {_e_job_meli}")
 
+    # Sincronização Delta de Estoque/Preço + Fila -> Estante Virtual (a cada 15 minutos)
+    try:
+        from app.api.estantevirtual import run_estantevirtual_stock_sync_job
+        scheduler.add_job(
+            run_estantevirtual_stock_sync_job,
+            IntervalTrigger(minutes=15),
+            id="job_estantevirtual_stock_sync",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=300,
+        )
+    except Exception as _e_job_ev:
+        logger.warning(f"Falha ao registrar job da Estante Virtual: {_e_job_ev}")
+
     scheduler.start()
     logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync, B2C Horus Stock Sync")

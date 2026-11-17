@@ -56,6 +56,7 @@ export interface Company {
   module_order_intake?: boolean;
   module_b2c_storefront?: boolean;
   module_mercadolivre?: boolean;
+  module_estantevirtual?: boolean;
   module_cafeteria?: boolean;
   active: boolean;
 }

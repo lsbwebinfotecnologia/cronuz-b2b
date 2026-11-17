@@ -87,10 +87,11 @@ const MARKETPLACE_CHANNELS = [
   {
     id: 'estantevirtual',
     name: 'Estante Virtual',
-    badge: 'EM BREVE',
-    tagline: 'Especializado em Livreiros, Editoras & Acervo ISBN',
+    badge: 'OFICIAL • ATIVO',
+    tagline: 'Especializado em Livreiros, Editoras, 74 Estantes & Acervo ISBN',
     color: 'bg-indigo-600 text-white border-indigo-500/40',
-    available: false,
+    available: true,
+    href: '/estantevirtual/settings',
   },
 ];
 
@@ -620,10 +621,15 @@ export default function MercadoLivreSettingsPage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2.5">
             {MARKETPLACE_CHANNELS.map((ch) => {
               const activeChannel = ch.id === 'mercadolivre';
+              const isEv = ch.id === 'estantevirtual';
               return (
                 <div
                   key={ch.id}
                   onClick={() => {
+                    if (isEv) {
+                      window.location.href = '/estantevirtual/settings';
+                      return;
+                    }
                     if (activeChannel && !isAppInstalled) {
                       handleInstallAndConnectMeli('redirect');
                     }
@@ -631,6 +637,8 @@ export default function MercadoLivreSettingsPage() {
                   className={`p-3 rounded-xl border transition flex flex-col justify-between gap-2 ${
                     activeChannel
                       ? 'border-amber-400 bg-amber-50/40 dark:bg-amber-950/20 shadow-xs cursor-pointer'
+                      : isEv
+                      ? 'border-indigo-400 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-xs cursor-pointer hover:bg-indigo-50/80'
                       : 'border-slate-200/80 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 opacity-75'
                   }`}
                 >
@@ -646,10 +654,12 @@ export default function MercadoLivreSettingsPage() {
                           ? isAppInstalled
                             ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                             : 'bg-amber-200/80 text-amber-950'
+                          : isEv
+                          ? 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300'
                           : 'bg-slate-200/70 dark:bg-slate-800 text-slate-500'
                       }`}
                     >
-                      {activeChannel ? (isAppInstalled ? 'INSTALADO' : 'INSTALAR') : ch.badge}
+                      {activeChannel ? (isAppInstalled ? 'INSTALADO' : 'INSTALAR') : isEv ? 'ABRIR CANAL →' : ch.badge}
                     </span>
                   </div>
                   <div>
