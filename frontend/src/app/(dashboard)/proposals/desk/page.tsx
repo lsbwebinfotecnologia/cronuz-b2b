@@ -102,9 +102,17 @@ const DEFAULT_COLUMN_WIDTHS: Record<string, number> = {
   clientSalesX: 68,
   horusStock: 68,
   boxUnits: 48,
-  generalSales365: 62,
+  generalSales365: 68,
   generalSalesX: 68,
   action: 82,
+};
+
+const formatDaysToMonths = (days: number): string => {
+  const d = Math.max(1, Number(days) || 30);
+  if (d === 365 || d === 360) return '12M';
+  const m = d / 30;
+  if (Number.isInteger(m)) return `${m}M`;
+  return `${Math.max(1, Math.round(m))}M`;
 };
 
 const getDeskStorageKey = () => {
@@ -3434,7 +3442,7 @@ export default function ProposalsDeskPage() {
                 (columnWidths.clientSalesX || 68) +
                 (columnWidths.horusStock || 68) +
                 (columnWidths.boxUnits || 48) +
-                (columnWidths.generalSales365 || 62) +
+                (columnWidths.generalSales365 || 68) +
                 (columnWidths.generalSalesX || 68) +
                 (columnWidths.action || 82)
               }px`
@@ -3666,14 +3674,15 @@ export default function ProposalsDeskPage() {
                   />
                 </th>
 
-                {/* Cli(Xd) */}
+                {/* CLI(XM) */}
                 <th
                   style={{ width: columnWidths.clientSalesX }}
                   onClick={() => handleSortColumn('clientSalesX')}
                   className="group relative py-1.5 px-1 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/70 select-none border-r border-slate-200/70 dark:border-slate-700/60"
+                  title={`Vendas deste cliente nos últimos ${clientSalesDays} dias (${formatDaysToMonths(clientSalesDays)})`}
                 >
                   <div className="flex items-center justify-center gap-1">
-                    <span className="truncate">Cli({clientSalesDays}d)</span>
+                    <span className="truncate">CLI({formatDaysToMonths(clientSalesDays)})</span>
                     {renderSortIcon('clientSalesX')}
                   </div>
                   <div
@@ -3717,14 +3726,15 @@ export default function ProposalsDeskPage() {
                   />
                 </th>
 
-                {/* 365d */}
+                {/* VDS365 */}
                 <th
                   style={{ width: columnWidths.generalSales365 }}
                   onClick={() => handleSortColumn('generalSales365')}
                   className="group relative py-1.5 px-1 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/70 select-none border-r border-slate-200/70 dark:border-slate-700/60"
+                  title="Vendas gerais nos últimos 365 dias (12M)"
                 >
                   <div className="flex items-center justify-center gap-1">
-                    <span className="truncate">365d</span>
+                    <span className="truncate">VDS365</span>
                     {renderSortIcon('generalSales365')}
                   </div>
                   <div
@@ -3734,14 +3744,15 @@ export default function ProposalsDeskPage() {
                   />
                 </th>
 
-                {/* Ger(Xd) */}
+                {/* VDS(XM) */}
                 <th
                   style={{ width: columnWidths.generalSalesX }}
                   onClick={() => handleSortColumn('generalSalesX')}
                   className="group relative py-1.5 px-1 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/70 select-none border-r border-slate-200/70 dark:border-slate-700/60"
+                  title={`Vendas gerais nos últimos ${generalSalesDays} dias (${formatDaysToMonths(generalSalesDays)})`}
                 >
                   <div className="flex items-center justify-center gap-1">
-                    <span className="truncate">Ger({generalSalesDays}d)</span>
+                    <span className="truncate">VDS({formatDaysToMonths(generalSalesDays)})</span>
                     {renderSortIcon('generalSalesX')}
                   </div>
                   <div
