@@ -91,7 +91,7 @@ def _map_columns(headers: List[str]) -> dict:
             if 'codigo_horus' not in col_map:
                 col_map['codigo_horus'] = idx
         # apelido / fantasia
-        elif any(k in norm for k in ['apelido', 'fantasia', 'nomefantasia']) or norm in ['nome', 'empresa']:
+        elif any(k in norm for k in ['apelido', 'fantasia', 'nomefantasia', 'nomereduzido', 'nomreduzido']) or norm in ['nome', 'empresa', 'cliente']:
             if 'apelido' not in col_map:
                 col_map['apelido'] = idx
         # grupo
@@ -114,6 +114,14 @@ def _map_columns(headers: List[str]) -> dict:
         elif any(k in norm for k in ['account', 'conta', 'custummer']):
             if 'account' not in col_map:
                 col_map['account'] = idx
+
+    # Se a planilha tiver apenas 2 colunas e a primeira for codigo_horus, garante que a segunda seja mapeada como apelido
+    if 'codigo_horus' in col_map and 'apelido' not in col_map and len(headers) >= 2:
+        used_indices = set(col_map.values())
+        for idx in range(len(headers)):
+            if idx not in used_indices and str(headers[idx] or '').strip():
+                col_map['apelido'] = idx
+                break
 
     return col_map
 
@@ -617,43 +625,61 @@ def save_dbm_company(
 # ── Importação Inteligente de Planilha Excel / CSV ────────────────────────────
 
 @router.get("/companies/import/template")
-def download_dbm_import_template():
+def download_dbm_import_template(
+    mode: Optional[str] = Query(None, description="Modo da planilha modelo: cliente, fornecedor ou apelido_only")
+):
     """
     Gera e entrega modelo Excel (.xlsx) para importação de empresas no DBM.
     """
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Importacao DBM"
 
-    headers = [
-        "codigo_horus",
-        "apelido",
-        "grupo",
-        "segmento",
-        "obs da empresa",
-        "detalhes fechamento roy",
-        "account"
-    ]
-    ws.append(headers)
+    if (mode or "").strip().lower() in ("apelido_only", "atualizar_apelido"):
+        ws.title = "Atualizar Apelido"
+        headers = [
+            "codigo_horus",
+            "apelido",
+        ]
+        ws.append(headers)
+        sample_rows = [
+            [19, "WMF Paulista"],
+            [11740, "EO EDITORA"],
+            [2, "Livraria Cultura"],
+        ]
+        for r in sample_rows:
+            ws.append(r)
+        filename = "modelo_atualizar_apelido_horus.xlsx"
+    else:
+        ws.title = "Importacao DBM"
+        headers = [
+            "codigo_horus",
+            "apelido",
+            "grupo",
+            "segmento",
+            "obs da empresa",
+            "detalhes fechamento roy",
+            "account"
+        ]
+        ws.append(headers)
 
-    sample_rows = [
-        [11740, "EO EDITORA", "Grupo Editorial", "Editoras", "Instruções de faturamento e notas", "Banco do Brasil Ag 1234 CC 5678", "ACC-1001"],
-        [2, "Livraria Cultura", "Varejo", "Livrarias", "Entregar somente em horário comercial", "", "ACC-2002"]
-    ]
-    for r in sample_rows:
-        ws.append(r)
+        sample_rows = [
+            [11740, "EO EDITORA", "Grupo Editorial", "Editoras", "Instruções de faturamento e notas", "Banco do Brasil Ag 1234 CC 5678", "ACC-1001"],
+            [2, "Livraria Cultura", "Varejo", "Livrarias", "Entregar somente em horário comercial", "", "ACC-2002"]
+        ]
+        for r in sample_rows:
+            ws.append(r)
+        filename = "modelo_importacao_empresas_dbm.xlsx"
 
     # Ajusta largura das colunas
     for col in ws.columns:
         max_len = max(len(str(cell.value or '')) for cell in col)
         col_letter = openpyxl.utils.get_column_letter(col[0].column)
-        ws.column_dimensions[col_letter].width = max(max_len + 4, 15)
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 18)
 
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
 
-    filename = "modelo_importacao_empresas_dbm.xlsx"
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -807,6 +833,10 @@ def process_dbm_companies_import_batch(
     """
     seller_id = _resolve_seller_id(current_user, payload.seller_company_id or payload.company_id)
 
+    import_mode = (payload.import_mode or "cliente").strip().lower()
+    is_fornecedor_mode = (import_mode == "fornecedor")
+    is_apelido_only_mode = import_mode in ("apelido_only", "atualizar_apelido")
+
     # Identificar CompanySettings correspondente
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
 
@@ -819,13 +849,16 @@ def process_dbm_companies_import_batch(
             if not settings:
                 settings = active_sql
 
-    if not sql_company_id:
+    sql_client = None
+    if sql_company_id:
+        try:
+            sql_client = HorusSQLClient(db, sql_company_id)
+        except Exception as e:
+            if not is_apelido_only_mode:
+                raise HTTPException(status_code=500, detail=f"Erro ao conectar ao banco Horus: {str(e)}")
+            log.warning(f"[DBM Batch Import] Conexão SQL indisponível em modo apelido_only (seguindo com base local): {e}")
+    elif not is_apelido_only_mode:
         raise HTTPException(status_code=400, detail="Nenhuma conexão Horus SQL configurada no sistema.")
-
-    try:
-        sql_client = HorusSQLClient(db, sql_company_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao conectar ao banco Horus: {str(e)}")
 
     # Filial configurada nos dados da API (horus_branch)
     api_filial = None
@@ -835,10 +868,7 @@ def process_dbm_companies_import_batch(
         elif settings.horus_sql_cod_filial and str(settings.horus_sql_cod_filial).strip():
             api_filial = str(settings.horus_sql_cod_filial).strip()
 
-    cod_filial = int(api_filial) if (api_filial and api_filial.isdigit()) else (int(sql_client.cod_filial) if str(sql_client.cod_filial).isdigit() else 2)
-
-    import_mode = (payload.import_mode or "cliente").strip().lower()
-    is_fornecedor_mode = (import_mode == "fornecedor")
+    cod_filial = int(api_filial) if (api_filial and api_filial.isdigit()) else (int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2)
 
     results = []
     
@@ -847,7 +877,85 @@ def process_dbm_companies_import_batch(
         row_idx = item.row_index
 
         try:
-            if is_fornecedor_mode:
+            if is_apelido_only_mode:
+                # ── MODO ATUALIZAR APENAS APELIDO (CÓD. HORUS + APELIDO) ──
+                novo_apelido = (item.apelido or "").strip()
+                if not novo_apelido:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": "",
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Cód. Horus #{cod_horus}: coluna 'apelido' está vazia na planilha (registro ignorado)."
+                    })
+                    continue
+
+                # 1. Busca direta na base do Seller pelo Cód. Cliente Horus ou Cód. Fornecedor Horus
+                existing_cust = db.query(Customer).filter(
+                    Customer.company_id == seller_id,
+                    Customer.horus_cod_cli == cod_horus
+                ).first()
+
+                if not existing_cust:
+                    existing_cust = db.query(Customer).filter(
+                        Customer.company_id == seller_id,
+                        Customer.horus_cod_fornecedor == cod_horus
+                    ).first()
+
+                # 2. Caso o cliente exista na base pelo CNPJ mas ainda não esteja com horus_cod_cli gravado,
+                # consulta rapidamente o CNPJ no Horus SQL para amarrar e atualizar só o apelido
+                if not existing_cust and sql_client:
+                    try:
+                        rows_doc = sql_client.query(
+                            "SELECT TOP 1 CNPJ, CPF FROM CLIENTES WITH (NOLOCK) WHERE COD_CLI = %s",
+                            (cod_horus,),
+                            max_rows=1
+                        )
+                        if rows_doc and len(rows_doc) > 0:
+                            raw_doc = str(rows_doc[0].get("CNPJ") or rows_doc[0].get("CPF") or "").strip()
+                            clean_doc = _sanitize_doc(raw_doc)
+                            if clean_doc:
+                                existing_cust = db.query(Customer).filter(
+                                    Customer.company_id == seller_id,
+                                    or_(
+                                        func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                                        Customer.document == clean_doc
+                                    )
+                                ).first()
+                                if existing_cust and not existing_cust.horus_cod_cli:
+                                    existing_cust.horus_cod_cli = cod_horus
+                    except Exception as e_lookup:
+                        log.debug(f"[DBM Batch Apelido] Aviso ao consultar CNPJ no Horus para #{cod_horus}: {e_lookup}")
+
+                if not existing_cust:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": novo_apelido,
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Empresa com Cód. Horus #{cod_horus} não encontrada na base para atualizar o apelido '{novo_apelido}'."
+                    })
+                    continue
+
+                old_name = existing_cust.name
+                existing_cust.name = novo_apelido
+                db.commit()
+
+                results.append({
+                    "row_index": row_idx,
+                    "codigo_horus": cod_horus,
+                    "apelido": novo_apelido,
+                    "razao_social": existing_cust.corporate_name,
+                    "document": existing_cust.document,
+                    "company_id": existing_cust.id,
+                    "action": "UPDATED",
+                    "status": "SUCCESS",
+                    "message": f"Cód. Horus #{cod_horus}: Apelido atualizado de '{old_name}' para '{novo_apelido}'."
+                })
+
+            elif is_fornecedor_mode:
                 # ── MODO FORNECEDOR: Consulta na tabela FORNECEDORES (Filial configurada) ──
                 sql_forn = f"""
                     SELECT TOP 1 
@@ -5152,13 +5260,32 @@ async def import_dbm_products_excel_lancamentos(
         if link_raw and str(link_raw).strip():
             prod.external_link = str(link_raw).strip()[:500]
 
-        # Esgotado e Data_Esgotado
+        # Esgotado, Data_Esgotado e Situação do Item (Lançamento, Em Distribuição, Esgotado, Fora de Catálogo)
         dt_esg_raw = _i_val(row_vals, "Data_Esgotado", "dataesgotado")
         if dt_esg_raw:
             dt_esg_str = _format_cell_date_br(dt_esg_raw)
             if dt_esg_str:
                 prod.out_of_print_date = dt_esg_str
                 prod.is_out_of_print = True
+                prod.horus_situacao_item = "Esgotado"
+
+        sit_raw = _i_val(row_vals, "Situacao", "situacao", "Situação", "Status", "status")
+        if sit_raw and str(sit_raw).strip():
+            s_up = str(sit_raw).strip().upper()
+            if "FORA" in s_up or s_up == "FC":
+                prod.horus_situacao_item = "Fora de Catálogo"
+                prod.is_out_of_print = True
+            elif "ESGOT" in s_up or s_up in ("ES", "FE"):
+                prod.horus_situacao_item = "Esgotado"
+                prod.is_out_of_print = True
+            elif "LANC" in s_up or "LANÇ" in s_up or s_up in ("LC", "IP"):
+                prod.horus_situacao_item = "Lançamento"
+                prod.is_out_of_print = False
+            elif "DISTRIB" in s_up or s_up in ("ED", "DI", "A", "ATIVO"):
+                prod.horus_situacao_item = "Em Distribuição"
+                prod.is_out_of_print = False
+        elif not prod.horus_situacao_item:
+            prod.horus_situacao_item = "Esgotado" if prod.is_out_of_print else "Em Distribuição"
 
         # Consignado e Giro 90 dias (se informados na planilha)
         consig_raw = _i_val(row_vals, "Consignado", "consignado")

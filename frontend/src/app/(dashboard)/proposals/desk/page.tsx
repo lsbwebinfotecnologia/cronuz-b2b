@@ -3461,7 +3461,7 @@ export default function ProposalsDeskPage() {
             }}
           >
             <thead className="sticky top-0 z-20 shadow-xs">
-              <tr className="bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-[10px] font-semibold uppercase tracking-tight text-slate-600 dark:text-slate-300">
+              <tr className="bg-slate-100 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 text-[11px] font-extrabold uppercase tracking-tight text-slate-700 dark:text-slate-200">
                 
                 {/* Checkbox nas abas de pesquisa/catálogo */}
                 {isCatalogSearchTab && (
@@ -3783,7 +3783,7 @@ export default function ProposalsDeskPage() {
                 </th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px]">
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-xs font-bold">
               {activeItems.length === 0 ? (
                 <tr>
                   <td colSpan={18} className="py-12 text-center text-slate-400 font-sans text-xs">
@@ -3819,7 +3819,7 @@ export default function ProposalsDeskPage() {
                     <tr 
                       key={it.id} 
                       onClick={() => setSelectedRowId(it.id)}
-                      className={`transition-colors border-b border-slate-100 dark:border-slate-800/80 cursor-pointer ${
+                      className={`transition-colors border-b border-slate-100 dark:border-slate-800/80 cursor-pointer font-bold ${
                         isSelected
                           ? 'bg-slate-100 dark:bg-slate-800 ring-1 ring-inset ring-slate-300 dark:ring-slate-600'
                           : isChecked
@@ -3849,10 +3849,10 @@ export default function ProposalsDeskPage() {
                       {/* Seletor de Linha Estilo Access/Excel */}
                       <td 
                         onClick={() => setSelectedRowId(it.id)}
-                        className={`py-1 px-1 text-center text-xs font-sans select-none cursor-pointer transition-colors border-r border-slate-100 dark:border-slate-800/60 ${
+                        className={`py-1 px-1 text-center text-xs font-sans font-bold select-none cursor-pointer transition-colors border-r border-slate-100 dark:border-slate-800/60 ${
                           isSelected 
                             ? 'bg-slate-800 text-white font-bold' 
-                            : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                            : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
                         }`}
                         title="Linha ativa (Pressione Delete nas abas de sugestão para remover da pesquisa)"
                       >
@@ -3862,17 +3862,17 @@ export default function ProposalsDeskPage() {
                       {/* Situação */}
                       <td className="py-1 px-1.5 whitespace-nowrap overflow-hidden text-ellipsis border-r border-slate-100 dark:border-slate-800/60">
                         {it.situation === 'DISPONIVEL' && (
-                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50">
+                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/50">
                             ✓ Disp
                           </span>
                         )}
                         {it.situation === 'PARCIAL' && (
-                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-semibold bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/50">
+                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300 border border-amber-200/80 dark:border-amber-800/50">
                             ⚠ Parcial
                           </span>
                         )}
                         {it.situation === 'SEM_ESTOQUE' && (
-                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-semibold bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/50">
+                          <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-bold bg-rose-50 text-rose-700 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-200/80 dark:border-rose-800/50">
                             ✗ Falta
                           </span>
                         )}
@@ -3885,7 +3885,7 @@ export default function ProposalsDeskPage() {
                             const orig = it.originCategory || it.tabCategory;
                             const b = getOriginBadge(orig, it.tabCategory);
                             return (
-                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium border ${b.bg} ${b.border} ${b.text}`}>
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold border ${b.bg} ${b.border} ${b.text}`}>
                                 {b.label}
                               </span>
                             );
@@ -3895,18 +3895,18 @@ export default function ProposalsDeskPage() {
 
                       {/* EAN / ISBN (Ocultável) */}
                       {showIsbnInGrid && (
-                        <td className="py-1 px-1.5 font-medium text-slate-700 dark:text-slate-300 font-mono text-[10px] truncate border-r border-slate-100 dark:border-slate-800/60" title={it.isbn}>
+                        <td className="py-1 px-1.5 font-bold text-slate-800 dark:text-slate-200 font-mono text-xs truncate border-r border-slate-100 dark:border-slate-800/60" title={it.isbn}>
                           {it.isbn}
                         </td>
                       )}
 
                       {/* Título (Separado do Assunto) */}
                       <td className="py-1 px-1.5 overflow-hidden border-r border-slate-100 dark:border-slate-800/60" title={it.title}>
-                        <div className="font-sans font-medium text-slate-800 dark:text-slate-100 truncate text-[11px] flex items-center gap-1">
+                        <div className="font-sans font-bold text-slate-900 dark:text-white truncate text-[13px] flex items-center gap-1">
                           <span className="truncate">{it.title}</span>
                           {it.launchLabel && (
                             <span
-                              className={`shrink-0 px-1 py-0.2 rounded text-[8px] font-mono font-semibold border ${
+                              className={`shrink-0 px-1 py-0.2 rounded text-[9px] font-mono font-bold border ${
                                 it.launchStatus === 'PRE_LANCAMENTO'
                                   ? 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800'
                                   : it.launchStatus === 'EXPIRANDO'
@@ -3920,27 +3920,27 @@ export default function ProposalsDeskPage() {
                           )}
                         </div>
                         {(it.lastSaleQty || it.notes) && (
-                          <div className="font-sans text-[9px] text-slate-400 truncate leading-tight flex items-center gap-1">
+                          <div className="font-sans text-[10px] text-slate-500 truncate leading-tight flex items-center gap-1">
                             {it.lastSaleQty && (
-                              <span className="text-slate-600 dark:text-slate-300 font-semibold">
+                              <span className="text-slate-700 dark:text-slate-300 font-bold">
                                 Últ. op: {it.lastSaleQty} un ({it.lastSaleDate})
                               </span>
                             )}
                             {it.notes && (
-                              <span className="text-rose-500 font-semibold">• {it.notes}</span>
+                              <span className="text-rose-500 font-bold">• {it.notes}</span>
                             )}
                           </div>
                         )}
                       </td>
 
                       {/* Assunto (Regra 5: Coluna dedicada) */}
-                      <td className="py-1 px-1.5 font-sans text-[10px] text-slate-600 dark:text-slate-400 truncate border-r border-slate-100 dark:border-slate-800/60" title={it.subject}>
+                      <td className="py-1 px-1.5 font-sans text-xs font-bold text-slate-700 dark:text-slate-300 truncate border-r border-slate-100 dark:border-slate-800/60" title={it.subject}>
                         {it.subject || '—'}
                       </td>
 
                       {/* Preço Capa (Ocultável pela Regra 7) */}
                       {showCoverPriceInGrid && (
-                        <td className="py-1 px-1.5 text-right text-slate-600 dark:text-slate-400 font-mono text-[11px] truncate border-r border-slate-100 dark:border-slate-800/60">
+                        <td className="py-1 px-1.5 text-right text-slate-800 dark:text-slate-200 font-mono text-xs font-bold truncate border-r border-slate-100 dark:border-slate-800/60">
                           {it.coverPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                         </td>
                       )}
@@ -3961,14 +3961,14 @@ export default function ProposalsDeskPage() {
                             }}
                             onKeyDown={(e) => handleCellKeyDown(e, idx, 'discount', activeItems.length)}
                             onChange={(e) => handleUpdateItemDiscount(it.id, parseFloat(e.target.value) || 0)}
-                            className="w-full max-w-[54px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-1 py-0.5 text-right text-xs font-semibold text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-slate-500 font-mono"
+                            className="w-full max-w-[54px] rounded border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 px-1 py-0.5 text-right text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-slate-500 font-mono"
                           />
                         </td>
                       )}
 
                       {/* Preço Líquido (Ocultável pela Regra 7) */}
                       {showDiscountInGrid && (
-                        <td className="py-1 px-1.5 text-right font-medium text-slate-800 dark:text-slate-200 font-mono text-[11px] truncate border-r border-slate-100 dark:border-slate-800/60">
+                        <td className="py-1 px-1.5 text-right font-bold text-slate-900 dark:text-white font-mono text-xs truncate border-r border-slate-100 dark:border-slate-800/60">
                           {netPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                         </td>
                       )}
@@ -3986,7 +3986,7 @@ export default function ProposalsDeskPage() {
                           }}
                           onKeyDown={(e) => handleCellKeyDown(e, idx, 'qty', activeItems.length)}
                           onChange={(e) => handleUpdateItemQty(it.id, parseInt(e.target.value, 10) || 0)}
-                          className={`w-full max-w-[56px] rounded border px-1 py-0.5 text-center text-xs font-bold focus:outline-none focus:ring-1 font-mono ${
+                          className={`w-full max-w-[56px] rounded border px-1 py-0.5 text-center text-xs font-extrabold focus:outline-none focus:ring-1 font-mono ${
                             isItemInOrder
                               ? 'border-emerald-400 bg-emerald-50/40 dark:bg-emerald-950/30 text-emerald-900 dark:text-emerald-200 focus:ring-emerald-500'
                               : 'border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-slate-500'
@@ -3996,7 +3996,7 @@ export default function ProposalsDeskPage() {
 
                       {/* Subtotal */}
                       {showDiscountInGrid && (
-                        <td className="py-1 px-1.5 text-right font-bold text-slate-900 dark:text-slate-100 font-mono text-[11px] truncate border-r border-slate-100 dark:border-slate-800/60">
+                        <td className="py-1 px-1.5 text-right font-extrabold text-slate-900 dark:text-white font-mono text-xs truncate border-r border-slate-100 dark:border-slate-800/60">
                           {isItemInOrder
                             ? subtotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
                             : netPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -4008,43 +4008,43 @@ export default function ProposalsDeskPage() {
                       <td className="py-1 px-1 text-center font-mono border-r border-slate-100 dark:border-slate-800/60">
                         {it.consignedQty > 0 ? (
                           <span 
-                            className="inline-block px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium text-[10px]" 
+                            className="inline-block px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 font-bold text-xs" 
                             title={`${it.consignedQty} unidades atualmente em consignação no cliente`}
                           >
                             {it.consignedQty}
                           </span>
                         ) : (
-                          <span className="text-slate-400 text-[10px]">0</span>
+                          <span className="text-slate-400 text-xs font-bold">0</span>
                         )}
                       </td>
 
                       {/* VdsCli {x}d */}
-                      <td className="py-1 px-1 text-center font-mono font-medium text-slate-700 dark:text-slate-300 border-r border-slate-100 dark:border-slate-800/60">
-                        <span className="px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[10px]" title={`Vendas do cliente nos últimos ${clientSalesDays} dias`}>
+                      <td className="py-1 px-1 text-center font-mono font-bold text-slate-800 dark:text-slate-200 border-r border-slate-100 dark:border-slate-800/60">
+                        <span className="px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-xs font-bold" title={`Vendas do cliente nos últimos ${clientSalesDays} dias`}>
                           {it.clientSalesX || 0}
                         </span>
                       </td>
 
                       {/* Disponível (Estoque Horus) */}
-                      <td className={`py-1 px-1.5 text-right font-mono font-semibold border-r border-slate-100 dark:border-slate-800/60 ${
-                        it.horusStock === 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-slate-200'
+                      <td className={`py-1 px-1.5 text-right font-mono text-xs font-extrabold border-r border-slate-100 dark:border-slate-800/60 ${
+                        it.horusStock === 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
                       }`}>
                         {it.horusStock}
                       </td>
 
                       {/* Unid(CX) */}
-                      <td className="py-1 px-1 text-center font-mono text-slate-500 dark:text-slate-400 text-[10px] border-r border-slate-100 dark:border-slate-800/60">
+                      <td className="py-1 px-1 text-center font-mono font-bold text-slate-700 dark:text-slate-300 text-xs border-r border-slate-100 dark:border-slate-800/60">
                         {it.boxUnits || '-'}
                       </td>
 
                       {/* VdsGeral 365d */}
-                      <td className="py-1 px-1 text-center font-mono text-slate-600 dark:text-slate-400 text-[10px] border-r border-slate-100 dark:border-slate-800/60">
+                      <td className="py-1 px-1 text-center font-mono font-bold text-slate-800 dark:text-slate-200 text-xs border-r border-slate-100 dark:border-slate-800/60">
                         {it.generalSales365?.toLocaleString('pt-BR') || 0}
                       </td>
 
                       {/* VdsGeral {x}d */}
-                      <td className="py-1 px-1 text-center font-mono font-medium text-slate-700 dark:text-slate-300 border-r border-slate-100 dark:border-slate-800/60">
-                        <span className="px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[10px]" title={`Vendas gerais da distribuidora nos últimos ${generalSalesDays} dias`}>
+                      <td className="py-1 px-1 text-center font-mono font-bold text-slate-800 dark:text-slate-200 border-r border-slate-100 dark:border-slate-800/60">
+                        <span className="px-1 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-xs font-bold" title={`Vendas gerais da distribuidora nos últimos ${generalSalesDays} dias`}>
                           {it.generalSalesX?.toLocaleString('pt-BR') || 0}
                         </span>
                       </td>

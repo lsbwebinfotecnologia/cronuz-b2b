@@ -38,6 +38,7 @@ import {
   GripVertical,
   Columns3,
   RotateCcw,
+  Settings2,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { getToken, getUser } from '@/lib/auth';
@@ -47,8 +48,10 @@ import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
 export type ProductColumnKey =
   | 'cod_horus'
   | 'isbn'
+  | 'additional_isbns'
   | 'name'
   | 'brand'
+  | 'subject'
   | 'launch_date'
   | 'base_price'
   | 'stock_quantity'
@@ -60,8 +63,10 @@ export type ProductColumnKey =
 export const DEFAULT_PRODUCT_COLUMNS: ProductColumnKey[] = [
   'cod_horus',
   'isbn',
+  'additional_isbns',
   'name',
   'brand',
+  'subject',
   'launch_date',
   'base_price',
   'stock_quantity',
@@ -70,6 +75,22 @@ export const DEFAULT_PRODUCT_COLUMNS: ProductColumnKey[] = [
   'sales_90',
   'units_per_box',
 ];
+
+export const DEFAULT_VISIBLE_COLUMNS: Record<ProductColumnKey, boolean> = {
+  cod_horus: true,
+  isbn: true,
+  additional_isbns: false,
+  name: true,
+  brand: true,
+  subject: false,
+  launch_date: true,
+  base_price: true,
+  stock_quantity: true,
+  consignment_stock: true,
+  sales_365: true,
+  sales_90: true,
+  units_per_box: true,
+};
 
 const formatProductDaysToMonths = (days: number): string => {
   const d = Math.max(1, Number(days) || 90);
@@ -141,6 +162,8 @@ interface ProductGridItem {
   brand?: string;
   is_ebook?: boolean;
   is_out_of_print?: boolean;
+  is_pre_sale?: boolean;
+  horus_situacao_item?: string | null;
   status?: string;
   is_highlighted_red?: boolean;
   horus_cod_item?: number | null;
@@ -192,6 +215,7 @@ interface DbmBookFormState {
   units_per_box: string;
   is_ebook: boolean;
   is_out_of_print: boolean;
+  horus_situacao_item: string;
   out_of_print_date: string;
   external_link: string;
   royalty_company: string;
@@ -235,6 +259,7 @@ const EMPTY_BOOK_FORM: DbmBookFormState = {
   units_per_box: '0',
   is_ebook: false,
   is_out_of_print: false,
+  horus_situacao_item: 'Em Distribuição',
   out_of_print_date: '',
   external_link: '',
   royalty_company: '',
@@ -266,66 +291,50 @@ const EMPTY_BOOK_FORM: DbmBookFormState = {
   ]
 };
 
-// Avalia a janela de Novidade (-9 meses até +6 meses) a partir da Data de Lançamento
-function evaluateLaunchWindow(launchDateStr?: string | null): {
-  status: 'PRE_LAUNCH' | 'ACTIVE_NOVELTY' | 'EXPIRING_SOON' | 'BACKLIST' | 'NONE';
-  label: string;
+export type DbmProductSituationKey = 'LANCAMENTO' | 'EM_DISTRIBUICAO' | 'ESGOTADO' | 'FORA_DE_CATALOGO';
+
+// Avalia a Situação Oficial do Item no Cadastro de Produtos DBM:
+// Lançamento | Em Distribuição | Esgotado | Fora de Catálogo (sem confundir com a janela do Pedido)
+function evaluateProductSituation(item: {
+  horus_situacao_item?: string | null;
+  is_out_of_print?: boolean;
+  is_pre_sale?: boolean;
+}): {
+  key: DbmProductSituationKey;
+  label: 'Lançamento' | 'Em Distribuição' | 'Esgotado' | 'Fora de Catálogo';
   badgeClass: string;
   detail: string;
 } {
-  if (!launchDateStr) {
+  const raw = String(item.horus_situacao_item || '').trim().toUpperCase();
+  if (raw === 'FC' || raw.includes('FORA')) {
     return {
-      status: 'NONE',
-      label: 'Sem Data',
-      badgeClass: 'bg-slate-100 text-slate-500 border-slate-200',
-      detail: 'Data de lançamento não informada'
+      key: 'FORA_DE_CATALOGO',
+      label: 'Fora de Catálogo',
+      badgeClass: 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
+      detail: 'Item fora de catálogo editorial'
     };
   }
-  const clean = String(launchDateStr).slice(0, 10);
-  const dt = new Date(`${clean}T12:00:00`);
-  if (isNaN(dt.getTime())) {
+  if (raw === 'ES' || raw === 'FE' || raw.includes('ESGOT') || item.is_out_of_print) {
     return {
-      status: 'NONE',
-      label: 'Sem Data',
-      badgeClass: 'bg-slate-100 text-slate-500 border-slate-200',
-      detail: 'Data inválida'
+      key: 'ESGOTADO',
+      label: 'Esgotado',
+      badgeClass: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800',
+      detail: 'Item esgotado'
     };
   }
-
-  const now = new Date();
-  const diffDays = Math.round((dt.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-  // Limite inferior: -275 dias (~9 meses atrás) | Limite superior: +185 dias (~6 meses à frente)
-  const daysRemainingAsNovelty = 275 + diffDays;
-
-  if (diffDays > 0 && diffDays <= 185) {
+  if (raw === 'LC' || raw === 'IP' || raw.includes('LANC') || raw.includes('LANÇ') || item.is_pre_sale) {
     return {
-      status: 'PRE_LAUNCH',
-      label: `Pré-Lançamento (+${diffDays}d)`,
-      badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200',
-      detail: `Entra em lançamento em ${diffDays} dia(s)`
-    };
-  }
-  if (diffDays <= 0 && diffDays >= -275) {
-    if (daysRemainingAsNovelty <= 30) {
-      return {
-        status: 'EXPIRING_SOON',
-        label: `⏳ Expira em ${daysRemainingAsNovelty}d`,
-        badgeClass: 'bg-amber-50 text-amber-800 border-amber-300',
-        detail: `Sai da aba Novidades em ${daysRemainingAsNovelty} dia(s)`
-      };
-    }
-    return {
-      status: 'ACTIVE_NOVELTY',
-      label: `✨ Novidade (${daysRemainingAsNovelty}d rest.)`,
-      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-      detail: `Dentro da janela de Novidades (-9m a +6m)`
+      key: 'LANCAMENTO',
+      label: 'Lançamento',
+      badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800',
+      detail: 'Obra em lançamento'
     };
   }
   return {
-    status: 'BACKLIST',
-    label: 'Fundo de Catálogo',
-    badgeClass: 'bg-slate-100 text-slate-600 border-slate-200',
-    detail: diffDays < -275 ? 'Lançado há mais de 9 meses' : 'Acima de 6 meses no futuro'
+    key: 'EM_DISTRIBUICAO',
+    label: 'Em Distribuição',
+    badgeClass: 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800',
+    detail: 'Obra ativa em distribuição'
   };
 }
 
@@ -375,7 +384,7 @@ export default function DbmProductsSearchPage() {
   const [filterIsbn, setFilterIsbn] = useState('');
   const [filterCollection, setFilterCollection] = useState('');
   const [filterPublisher, setFilterPublisher] = useState('');
-  const [filterLaunchWindow, setFilterLaunchWindow] = useState<'ALL' | 'NOVELTY' | 'EXPIRING' | 'BACKLIST'>('ALL');
+  const [filterSituation, setFilterSituation] = useState<'ALL' | DbmProductSituationKey>('ALL');
   const [hideOutOfStock, setHideOutOfStock] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const u = getUser();
@@ -415,7 +424,7 @@ export default function DbmProductsSearchPage() {
     return 90;
   });
 
-  // Ordem das colunas da Planilha de Produtos (Movimentável e Salva por Usuário)
+  // Ordem e Visibilidade das colunas da Planilha de Produtos (Salvas por Usuário)
   const [columnOrder, setColumnOrder] = useState<ProductColumnKey[]>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -442,6 +451,24 @@ export default function DbmProductsSearchPage() {
       }
     }
     return DEFAULT_PRODUCT_COLUMNS;
+  });
+  const [visibleColumns, setVisibleColumns] = useState<Record<ProductColumnKey, boolean>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const visKey = `cronuz_dbm_products_visible_cols_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+        const raw = localStorage.getItem(visKey) || localStorage.getItem('cronuz_dbm_products_visible_cols');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            return { ...DEFAULT_VISIBLE_COLUMNS, ...parsed };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return DEFAULT_VISIBLE_COLUMNS;
   });
   const [dragColKey, setDragColKey] = useState<ProductColumnKey | null>(null);
   const [showColumnOrderModal, setShowColumnOrderModal] = useState<boolean>(false);
@@ -610,6 +637,7 @@ export default function DbmProductsSearchPage() {
         p.name?.toUpperCase().includes('E-BOOK')
       ),
       is_out_of_print: Boolean(p.is_out_of_print),
+      horus_situacao_item: evaluateProductSituation(p).label,
       out_of_print_date: p.out_of_print_date || '',
       external_link: p.external_link || '',
       royalty_company: p.royalty_company || p.brand || '',
@@ -906,6 +934,7 @@ export default function DbmProductsSearchPage() {
       const lDate = item.launch_date ? String(item.launch_date).slice(0, 10) : null;
       const parts = lDate ? lDate.split('-') : [];
 
+      const sitEval = evaluateProductSituation(item);
       const payload: Record<string, any> = {
         sku: item.sku,
         name: item.name,
@@ -915,7 +944,9 @@ export default function DbmProductsSearchPage() {
         units_per_box: item.units_per_box != null ? Number(item.units_per_box) : 0,
         launch_date: lDate ? new Date(`${lDate}T12:00:00`).toISOString() : null,
         launch_year: parts.length === 3 ? parseInt(parts[0], 10) : item.launch_year,
-        launch_month: parts.length === 3 ? parseInt(parts[1], 10) : item.launch_month
+        launch_month: parts.length === 3 ? parseInt(parts[1], 10) : item.launch_month,
+        horus_situacao_item: item.horus_situacao_item || sitEval.label,
+        is_out_of_print: sitEval.key === 'ESGOTADO' || sitEval.key === 'FORA_DE_CATALOGO',
       };
 
       const res = await fetch(`${apiUrl}/products/${item.id}`, {
@@ -1253,15 +1284,9 @@ export default function DbmProductsSearchPage() {
       if (filterPublisher && !item.brand?.toLowerCase().includes(filterPublisher.toLowerCase())) {
         return false;
       }
-      if (filterLaunchWindow !== 'ALL') {
-        const lw = evaluateLaunchWindow(item.launch_date);
-        if (filterLaunchWindow === 'NOVELTY' && lw.status !== 'ACTIVE_NOVELTY' && lw.status !== 'PRE_LAUNCH' && lw.status !== 'EXPIRING_SOON') {
-          return false;
-        }
-        if (filterLaunchWindow === 'EXPIRING' && lw.status !== 'EXPIRING_SOON') {
-          return false;
-        }
-        if (filterLaunchWindow === 'BACKLIST' && lw.status !== 'BACKLIST') {
+      if (filterSituation !== 'ALL') {
+        const sit = evaluateProductSituation(item);
+        if (sit.key !== filterSituation) {
           return false;
         }
       }
@@ -1288,18 +1313,26 @@ export default function DbmProductsSearchPage() {
     const dir = direction === 'asc' ? 1 : -1;
 
     return [...baseFiltered].sort((a, b) => {
-      if (key === 'name' || key === 'brand' || key === 'isbn') {
+      if (key === 'name' || key === 'brand' || key === 'isbn' || key === 'additional_isbns' || key === 'subject') {
         const valA =
           key === 'name'
             ? (a.name || '')
             : key === 'brand'
             ? (a.brand || '')
+            : key === 'additional_isbns'
+            ? (a.additional_isbns || '')
+            : key === 'subject'
+            ? (a.subject || a.category_name || '')
             : (a.ean_gtin || a.isbn || '');
         const valB =
           key === 'name'
             ? (b.name || '')
             : key === 'brand'
             ? (b.brand || '')
+            : key === 'additional_isbns'
+            ? (b.additional_isbns || '')
+            : key === 'subject'
+            ? (b.subject || b.category_name || '')
             : (b.ean_gtin || b.isbn || '');
         return valA.localeCompare(valB, 'pt-BR', { sensitivity: 'base', numeric: true }) * dir;
       }
@@ -1346,10 +1379,10 @@ export default function DbmProductsSearchPage() {
       }
       return 0;
     });
-  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, hideOutOfStock, quickSearchFooter, sortConfig]);
+  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterSituation, hideEbooks, hideOutOfStock, quickSearchFooter, sortConfig]);
 
   const handleSortProductColumn = (key: ProductColumnKey) => {
-    const isTextCol = key === 'name' || key === 'brand' || key === 'isbn';
+    const isTextCol = key === 'name' || key === 'brand' || key === 'isbn' || key === 'additional_isbns' || key === 'subject';
     setSortConfig(prev => {
       if (!prev || prev.key !== key) {
         return { key, direction: isTextCol ? 'asc' : 'desc' };
@@ -1380,7 +1413,7 @@ export default function DbmProductsSearchPage() {
   useEffect(() => {
     setCurrentPage(1);
     setSelectedIndex(filteredProducts.length > 0 ? 0 : -1);
-  }, [filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, hideOutOfStock, quickSearchFooter, pageSize]);
+  }, [filterTitle, filterIsbn, filterCollection, filterPublisher, filterSituation, hideEbooks, hideOutOfStock, quickSearchFooter, pageSize]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -1846,7 +1879,12 @@ export default function DbmProductsSearchPage() {
           ? parseInt(bookForm.units_per_box.trim(), 10)
           : 0,
         is_ebook: Boolean(bookForm.is_ebook || bookForm.binding_finish === 'E-book'),
-        is_out_of_print: Boolean(bookForm.is_out_of_print),
+        is_out_of_print: Boolean(
+          bookForm.is_out_of_print ||
+          bookForm.horus_situacao_item === 'Esgotado' ||
+          bookForm.horus_situacao_item === 'Fora de Catálogo'
+        ),
+        horus_situacao_item: bookForm.horus_situacao_item || 'Em Distribuição',
         out_of_print_date: bookForm.out_of_print_date.trim() || null,
         external_link: bookForm.external_link.trim() || null,
         royalty_company: bookForm.royalty_company.trim() || null,
@@ -1928,7 +1966,7 @@ export default function DbmProductsSearchPage() {
     setFilterIsbn('');
     setFilterCollection('');
     setFilterPublisher('');
-    setFilterLaunchWindow('ALL');
+    setFilterSituation('ALL');
     setQuickSearchFooter('');
     fetchProducts(false);
   };
@@ -1946,6 +1984,33 @@ export default function DbmProductsSearchPage() {
       }
     }
   };
+
+  const saveVisibleColumns = (nextVisible: Record<ProductColumnKey, boolean>) => {
+    setVisibleColumns(nextVisible);
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const visKey = `cronuz_dbm_products_visible_cols_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+        localStorage.setItem(visKey, JSON.stringify(nextVisible));
+        localStorage.setItem('cronuz_dbm_products_visible_cols', JSON.stringify(nextVisible));
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const handleToggleVisibleColumn = (colKey: ProductColumnKey) => {
+    const next = {
+      ...visibleColumns,
+      [colKey]: !visibleColumns[colKey],
+    };
+    saveVisibleColumns(next);
+  };
+
+  const activeVisibleColumns = useMemo(
+    () => columnOrder.filter((k) => visibleColumns[k] !== false),
+    [columnOrder, visibleColumns]
+  );
 
   const handleMoveColumnInOrder = (index: number, direction: -1 | 1) => {
     const targetIdx = index + direction;
@@ -1981,12 +2046,16 @@ export default function DbmProductsSearchPage() {
         return 'Cód Horus';
       case 'isbn':
         return 'ISBN Principal';
+      case 'additional_isbns':
+        return '2º ISBN (E-book)';
       case 'name':
         return 'Título da Obra';
       case 'brand':
         return 'Editora';
+      case 'subject':
+        return 'Assunto / Gênero';
       case 'launch_date':
-        return 'Lançamento / Status';
+        return 'Situação / Lanç.';
       case 'base_price':
         return 'Preço Capa';
       case 'stock_quantity':
@@ -2224,7 +2293,10 @@ export default function DbmProductsSearchPage() {
     }
   };
 
-  const formLaunchBadge = useMemo(() => evaluateLaunchWindow(bookForm.launch_date), [bookForm.launch_date]);
+  const formLaunchBadge = useMemo(
+    () => evaluateProductSituation(bookForm),
+    [bookForm.horus_situacao_item, bookForm.is_out_of_print]
+  );
 
   return (
     <div className="flex flex-col h-[calc(100vh-4.5rem)] bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/90 dark:border-slate-800 overflow-hidden shadow-xs select-none">
@@ -2270,7 +2342,7 @@ export default function DbmProductsSearchPage() {
           </button>
         </div>
 
-        {/* Botões Rápidos de Exportação, Importação, Sincronização Horus SQL + Novo Livro */}
+        {/* Botões Rápidos de Configurações, Exportação, Importação, Sincronização Horus SQL + Novo Livro */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
@@ -2280,6 +2352,16 @@ export default function DbmProductsSearchPage() {
           >
             <Keyboard className="w-3.5 h-3.5" />
             Atalhos Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowColumnOrderModal(true)}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Configurar quais colunas exibir no grid, alterar a ordem das colunas e preferências padrão"
+          >
+            <Settings2 className="w-3.5 h-3.5 text-indigo-600" />
+            Configurações
           </button>
 
           <button
@@ -2388,17 +2470,18 @@ export default function DbmProductsSearchPage() {
 
               <div className="md:col-span-2">
                 <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-                  Janela Lançamento (-9m/+6m)
+                  Situação do Item
                 </label>
                 <select
-                  value={filterLaunchWindow}
-                  onChange={(e) => setFilterLaunchWindow(e.target.value as any)}
+                  value={filterSituation}
+                  onChange={(e) => setFilterSituation(e.target.value as any)}
                   className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                 >
-                  <option value="ALL">Todos os Livros</option>
-                  <option value="NOVELTY">✨ Novidades (-9m a +6m)</option>
-                  <option value="EXPIRING">⏳ Expirando (&lt; 30 dias)</option>
-                  <option value="BACKLIST">📚 Fundo de Catálogo</option>
+                  <option value="ALL">Todas as Situações</option>
+                  <option value="EM_DISTRIBUICAO">Em Distribuição</option>
+                  <option value="LANCAMENTO">Lançamento</option>
+                  <option value="ESGOTADO">Esgotado</option>
+                  <option value="FORA_DE_CATALOGO">Fora de Catálogo</option>
                 </select>
               </div>
 
@@ -2412,7 +2495,7 @@ export default function DbmProductsSearchPage() {
                   Filtrar
                 </button>
 
-                {(filterTitle || filterIsbn || filterCollection || filterPublisher || filterLaunchWindow !== 'ALL') && (
+                {(filterTitle || filterIsbn || filterCollection || filterPublisher || filterSituation !== 'ALL') && (
                   <button
                     type="button"
                     onClick={handleClearFilters}
@@ -2503,16 +2586,6 @@ export default function DbmProductsSearchPage() {
                   />
                   <span className="text-slate-400">d ({formatProductDaysToMonths(generalSalesDays)})</span>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowColumnOrderModal(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer transition"
-                  title="Movimentar a ordem das colunas da grade (também é possível arrastar o título da coluna direto na tabela)"
-                >
-                  <Columns3 className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>Mover Colunas</span>
-                </button>
               </div>
 
               <div className="flex items-center gap-2 text-[11px] text-slate-500">
@@ -2529,21 +2602,25 @@ export default function DbmProductsSearchPage() {
           {/* Grade Principal Estilo Planilha Excel Moderna */}
           <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
             <table className="w-full border-collapse text-left table-fixed min-w-[1260px]">
-              <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider select-none">
+              <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-xs font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider select-none">
                 <tr>
                   <th className="w-9 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">#</th>
-                  {columnOrder.map((colKey) => {
+                  {activeVisibleColumns.map((colKey) => {
                     const widthClass =
                       colKey === 'cod_horus'
                         ? 'w-20'
                         : colKey === 'isbn'
                         ? 'w-32'
+                        : colKey === 'additional_isbns'
+                        ? 'w-32'
                         : colKey === 'name'
                         ? 'w-[24%]'
                         : colKey === 'brand'
                         ? 'w-28'
+                        : colKey === 'subject'
+                        ? 'w-28'
                         : colKey === 'launch_date'
-                        ? 'w-32 text-center'
+                        ? 'w-36 text-center'
                         : colKey === 'base_price'
                         ? 'w-24 text-right'
                         : colKey === 'stock_quantity'
@@ -2590,17 +2667,17 @@ export default function DbmProductsSearchPage() {
                   <th className="w-24 py-2 px-2 text-center">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800 text-xs">
+              <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800 text-[13px] font-bold">
                 {loading ? (
                   <tr>
-                    <td colSpan={columnOrder.length + 2} className="py-16 text-center text-slate-500">
+                    <td colSpan={activeVisibleColumns.length + 2} className="py-16 text-center text-slate-500">
                       <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
                       Carregando planilha de produtos DBM...
                     </td>
                   </tr>
                 ) : filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={columnOrder.length + 2} className="py-16 text-center text-slate-500">
+                    <td colSpan={activeVisibleColumns.length + 2} className="py-16 text-center text-slate-500">
                       Nenhum livro encontrado para este filtro. Use{' '}
                       <button
                         type="button"
@@ -2625,7 +2702,7 @@ export default function DbmProductsSearchPage() {
                     const idx = pageStartIdx + localIdx;
                     const isSelected = idx === selectedIndex;
                     const isZeroOrOut = item.is_out_of_print || item.stock_quantity <= 0;
-                    const launchInfo = evaluateLaunchWindow(item.launch_date);
+                    const sitInfo = evaluateProductSituation(item);
 
                     return (
                       <tr
@@ -2636,32 +2713,32 @@ export default function DbmProductsSearchPage() {
                             handleOpenProductInAccessForm(item, idx);
                           }
                         }}
-                        className={`transition-colors ${
+                        className={`transition-colors font-bold ${
                           isSelected
-                            ? 'bg-indigo-50/90 dark:bg-indigo-950/50 text-slate-900 dark:text-white font-medium ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
+                            ? 'bg-indigo-50/90 dark:bg-indigo-950/50 text-slate-900 dark:text-white ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
                             : isZeroOrOut
-                            ? 'bg-rose-50/35 dark:bg-rose-950/10 text-slate-700 dark:text-slate-300 hover:bg-slate-100/70'
+                            ? 'bg-rose-50/35 dark:bg-rose-950/10 text-slate-800 dark:text-slate-200 hover:bg-slate-100/70'
                             : idx % 2 === 0
-                            ? 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 hover:bg-slate-50'
-                            : 'bg-slate-50/50 dark:bg-slate-900/40 text-slate-800 dark:text-slate-200 hover:bg-slate-100/60'
+                            ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 hover:bg-slate-50'
+                            : 'bg-slate-50/50 dark:bg-slate-900/40 text-slate-900 dark:text-slate-100 hover:bg-slate-100/60'
                         } cursor-pointer`}
                       >
                         <td
-                          className={`py-1.5 px-1.5 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-[10px] ${
+                          className={`py-1.5 px-1.5 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-xs font-bold ${
                             isSelected
-                              ? 'bg-indigo-600 text-white font-bold'
-                              : 'bg-slate-100/70 dark:bg-slate-800/60 text-slate-400'
+                              ? 'bg-indigo-600 text-white'
+                              : 'bg-slate-100/70 dark:bg-slate-800/60 text-slate-500'
                           }`}
                         >
                           {isSelected ? '▶' : idx + 1}
                         </td>
 
-                        {columnOrder.map((colKey) => {
+                        {activeVisibleColumns.map((colKey) => {
                           if (colKey === 'cod_horus') {
                             return (
                               <td
                                 key={colKey}
-                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate"
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-xs font-bold text-slate-800 dark:text-slate-200 truncate"
                               >
                                 {item.horus_cod_item || item.sku}
                               </td>
@@ -2671,9 +2748,19 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate"
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-xs font-bold text-slate-800 dark:text-slate-200 truncate"
                               >
                                 {item.ean_gtin || item.isbn || '-'}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'additional_isbns') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300 truncate"
+                              >
+                                {item.additional_isbns || '-'}
                               </td>
                             );
                           }
@@ -2685,17 +2772,12 @@ export default function DbmProductsSearchPage() {
                                 title={item.name}
                               >
                                 <div className="flex items-center gap-1.5 truncate">
-                                  <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+                                  <span className="truncate font-bold text-[13px] text-slate-900 dark:text-white">
                                     {item.name}
                                   </span>
                                   {item.is_ebook && (
-                                    <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 text-[9px] font-bold rounded shrink-0">
+                                    <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 text-[10px] font-bold rounded shrink-0">
                                       E-book
-                                    </span>
-                                  )}
-                                  {item.is_out_of_print && (
-                                    <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[9px] font-bold rounded shrink-0">
-                                      Esgotado
                                     </span>
                                   )}
                                 </div>
@@ -2706,9 +2788,19 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-[11px] text-slate-600 dark:text-slate-400"
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-xs font-bold text-slate-700 dark:text-slate-300"
                               >
                                 {item.brand || '-'}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'subject') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-xs font-bold text-slate-700 dark:text-slate-300"
+                              >
+                                {item.subject || item.category_name || '-'}
                               </td>
                             );
                           }
@@ -2719,28 +2811,48 @@ export default function DbmProductsSearchPage() {
                                 className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center"
                               >
                                 {excelInlineEditMode ? (
-                                  <input
-                                    type="date"
-                                    value={item.launch_date ? String(item.launch_date).slice(0, 10) : ''}
-                                    onChange={(e) => handleInlineGridChange(item.id, 'launch_date', e.target.value)}
-                                    onKeyDown={(e) => {
-                                      if (e.key === 'Enter') {
-                                        e.preventDefault();
-                                        handleSaveInlineRow(item);
-                                      }
-                                    }}
-                                    className="w-full px-1 py-0.5 text-[11px] font-mono bg-white border border-slate-300 rounded"
-                                  />
+                                  <div className="flex flex-col gap-0.5">
+                                    <select
+                                      value={sitInfo.label}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        handleInlineGridChange(item.id, 'horus_situacao_item', val);
+                                        handleInlineGridChange(
+                                          item.id,
+                                          'is_out_of_print',
+                                          val === 'Esgotado' || val === 'Fora de Catálogo'
+                                        );
+                                      }}
+                                      className="w-full px-1 py-0.5 text-[11px] font-bold bg-white border border-slate-300 rounded"
+                                    >
+                                      <option value="Em Distribuição">Em Distribuição</option>
+                                      <option value="Lançamento">Lançamento</option>
+                                      <option value="Esgotado">Esgotado</option>
+                                      <option value="Fora de Catálogo">Fora de Catálogo</option>
+                                    </select>
+                                    <input
+                                      type="date"
+                                      value={item.launch_date ? String(item.launch_date).slice(0, 10) : ''}
+                                      onChange={(e) => handleInlineGridChange(item.id, 'launch_date', e.target.value)}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          e.preventDefault();
+                                          handleSaveInlineRow(item);
+                                        }
+                                      }}
+                                      className="w-full px-1 py-0.5 text-[11px] font-mono font-bold bg-white border border-slate-300 rounded"
+                                    />
+                                  </div>
                                 ) : (
                                   <div className="flex flex-col items-center justify-center leading-tight">
                                     <span
-                                      className={`inline-block px-1.5 py-0.5 rounded border text-[9px] font-semibold ${launchInfo.badgeClass}`}
-                                      title={launchInfo.detail}
+                                      className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-bold ${sitInfo.badgeClass}`}
+                                      title={sitInfo.detail}
                                     >
-                                      {launchInfo.label}
+                                      {sitInfo.label}
                                     </span>
                                     {item.launch_date && (
-                                      <span className="text-[9px] font-mono text-slate-400 mt-0.5">
+                                      <span className="text-[10px] font-mono font-bold text-slate-500 mt-0.5">
                                         {String(item.launch_date).slice(0, 10).split('-').reverse().join('/')}
                                       </span>
                                     )}
@@ -2753,14 +2865,14 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-medium"
+                                className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold text-slate-900 dark:text-white"
                               >
                                 {excelInlineEditMode ? (
                                   <CurrencyInput
                                     value={item.base_price}
                                     onChangeValue={(val) => handleInlineGridChange(item.id, 'base_price', val)}
                                     prefixStr="R$ "
-                                    className="w-full px-1.5 py-0.5 text-[11px] font-mono text-right bg-white border border-slate-300 rounded"
+                                    className="w-full px-1.5 py-0.5 text-xs font-mono font-bold text-right bg-white border border-slate-300 rounded"
                                   />
                                 ) : (
                                   item.base_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -2772,7 +2884,7 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-bold ${
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-extrabold ${
                                   item.stock_quantity > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600'
                                 }`}
                               >
@@ -2785,7 +2897,7 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold ${
                                   consigVal > 0 ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-400'
                                 }`}
                               >
@@ -2798,7 +2910,7 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold ${
                                   s365Val > 0 ? 'text-slate-800 dark:text-slate-200' : 'text-slate-400'
                                 }`}
                               >
@@ -2811,7 +2923,7 @@ export default function DbmProductsSearchPage() {
                             return (
                               <td
                                 key={colKey}
-                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold ${
                                   s90Val > 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'
                                 }`}
                               >
@@ -2822,7 +2934,7 @@ export default function DbmProductsSearchPage() {
                           return (
                             <td
                               key={colKey}
-                              className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-[11px] text-slate-600"
+                              className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-xs font-bold text-slate-700 dark:text-slate-300"
                             >
                               {excelInlineEditMode ? (
                                 <input
@@ -2837,7 +2949,7 @@ export default function DbmProductsSearchPage() {
                                       handleSaveInlineRow(item);
                                     }
                                   }}
-                                  className="w-full px-1 py-0.5 text-[11px] font-mono text-center bg-white border border-slate-300 rounded"
+                                  className="w-full px-1 py-0.5 text-xs font-mono font-bold text-center bg-white border border-slate-300 rounded"
                                 />
                               ) : (
                                 item.units_per_box || '-'
@@ -3381,11 +3493,11 @@ export default function DbmProductsSearchPage() {
                   </div>
                 </div>
 
-                {/* Linha 5: Data de Lançamento (Unificada) | Acabamento | Edição | Páginas | Unid/Caixa */}
+                {/* Linha 5: Data de Lançamento | Acabamento | Edição | Páginas | Unid/Caixa */}
                 <div className="grid grid-cols-2 md:grid-cols-12 gap-2.5">
                   <div className="col-span-2 md:col-span-4">
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Data de Lançamento (Regra -9m/+6m)
+                      Data de Lançamento
                     </label>
                     <input
                       type="date"
@@ -3608,8 +3720,31 @@ export default function DbmProductsSearchPage() {
                   </div>
                 </div>
 
-                {/* Controle de E-book e Obra Esgotada / Fora de Catálogo */}
+                {/* Controle de Situação do Item e E-book */}
                 <div className="pt-2 border-t border-slate-100 space-y-2.5">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Situação do Item
+                    </label>
+                    <select
+                      value={bookForm.horus_situacao_item || 'Em Distribuição'}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setBookForm(prev => ({
+                          ...prev,
+                          horus_situacao_item: val,
+                          is_out_of_print: val === 'Esgotado' || val === 'Fora de Catálogo',
+                        }));
+                      }}
+                      className="w-full px-2.5 py-1.5 text-xs font-bold bg-slate-50/70 border border-slate-200 rounded-lg text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="Em Distribuição">Em Distribuição</option>
+                      <option value="Lançamento">Lançamento</option>
+                      <option value="Esgotado">Esgotado</option>
+                      <option value="Fora de Catálogo">Fora de Catálogo</option>
+                    </select>
+                  </div>
+
                   <div className="flex items-center justify-between">
                     <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-indigo-800 dark:text-indigo-300">
                       <input
@@ -3634,26 +3769,12 @@ export default function DbmProductsSearchPage() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between">
-                    <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={bookForm.is_out_of_print}
-                        onChange={(e) => setBookForm(prev => ({ ...prev, is_out_of_print: e.target.checked }))}
-                        className="w-4 h-4 rounded text-rose-600 border-slate-300"
-                      />
-                      Obra Esgotada / Fora de Linha
-                    </label>
-                    {bookForm.is_out_of_print && (
-                      <span className="px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-bold rounded-full">
-                        Esgotado
-                      </span>
-                    )}
-                  </div>
-                  {bookForm.is_out_of_print && (
+                  {(bookForm.is_out_of_print ||
+                    bookForm.horus_situacao_item === 'Esgotado' ||
+                    bookForm.horus_situacao_item === 'Fora de Catálogo') && (
                     <div>
                       <label className="block text-[10px] font-bold text-rose-600 uppercase tracking-wider mb-1">
-                        Data de Esgotamento
+                        Data de Esgotamento / Saída
                       </label>
                       <input
                         type="text"
@@ -3703,9 +3824,9 @@ export default function DbmProductsSearchPage() {
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-auto max-h-[220px]">
-                  <table className="w-full border-collapse text-[11px] font-mono min-w-[820px]">
-                    <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-600 border-b border-slate-200 font-sans font-bold text-[10px] uppercase">
+                <div className="flex-1 overflow-auto max-h-[240px]">
+                  <table className="w-full border-collapse text-xs font-mono font-bold min-w-[820px]">
+                    <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-b border-slate-200 font-sans font-extrabold text-[11px] uppercase">
                       <tr>
                         <th className="w-8 py-1.5 px-1 border-r border-slate-200 text-center">#</th>
                         <th className="w-24 py-1.5 px-1.5 border-r border-slate-200 text-left">Data Tiragem</th>
@@ -4590,7 +4711,7 @@ export default function DbmProductsSearchPage() {
         )}
       </AnimatePresence>
 
-      {/* MODAL DE MOVIMENTAÇÃO / ORDEM DAS COLUNAS DA GRADE (SALVO POR USUÁRIO) */}
+      {/* MODAL DE CONFIGURAÇÕES DO GRID DE PRODUTOS (EXIBIÇÃO + ORDEM DAS COLUNAS, SALVO POR USUÁRIO) */}
       <AnimatePresence>
         {showColumnOrderModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
@@ -4602,13 +4723,13 @@ export default function DbmProductsSearchPage() {
             >
               <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Columns3 className="w-4 h-4 text-indigo-600" />
+                  <Settings2 className="w-4 h-4 text-indigo-600" />
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                      Ordem das Colunas da Planilha
+                      Configurações da Grade de Produtos
                     </h3>
                     <p className="text-[11px] text-slate-500">
-                      Arraste ou use as setas para movimentar as colunas (salvo automaticamente no seu usuário).
+                      Marque o que deseja exibir no grid e ordene as colunas (salvo no seu usuário).
                     </p>
                   </div>
                 </div>
@@ -4621,49 +4742,70 @@ export default function DbmProductsSearchPage() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-1.5 max-h-[60vh] overflow-y-auto">
-                {columnOrder.map((colKey, idx) => (
-                  <div
-                    key={colKey}
-                    draggable
-                    onDragStart={() => setDragColKey(colKey)}
-                    onDragOver={(e) => e.preventDefault()}
-                    onDrop={() => handleDropColumnHeader(colKey)}
-                    className="flex items-center justify-between gap-2 p-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50"
-                  >
-                    <div className="flex items-center gap-2">
-                      <GripVertical className="w-4 h-4 text-slate-400 cursor-grab" />
-                      <span className="w-5 text-center font-mono text-[10px] text-slate-400">{idx + 1}.</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-100">{getColumnLabel(colKey)}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={() => handleMoveColumnInOrder(idx, -1)}
-                        className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
-                        title="Mover para a esquerda / cima"
-                      >
-                        <ArrowUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === columnOrder.length - 1}
-                        onClick={() => handleMoveColumnInOrder(idx, 1)}
-                        className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
-                        title="Mover para a direita / baixo"
-                      >
-                        <ArrowDown className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
+              <div className="p-4 space-y-3 max-h-[65vh] overflow-y-auto">
+                <div className="space-y-1.5">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Colunas Exibidas no Grid & Ordem de Exibição
                   </div>
-                ))}
+                  {columnOrder.map((colKey, idx) => {
+                    const isVis = visibleColumns[colKey] !== false;
+                    return (
+                      <div
+                        key={colKey}
+                        draggable
+                        onDragStart={() => setDragColKey(colKey)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => handleDropColumnHeader(colKey)}
+                        className={`flex items-center justify-between gap-2 p-2 rounded-xl border transition-all ${
+                          isVis
+                            ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/40 dark:bg-indigo-950/30'
+                            : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 opacity-70'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          <GripVertical className="w-4 h-4 text-slate-400 cursor-grab" />
+                          <input
+                            type="checkbox"
+                            checked={isVis}
+                            onChange={() => handleToggleVisibleColumn(colKey)}
+                            className="w-4 h-4 rounded text-indigo-600 border-slate-300 cursor-pointer"
+                          />
+                          <span className="w-5 text-center font-mono text-[10px] text-slate-400">{idx + 1}.</span>
+                          <span className="font-bold text-slate-800 dark:text-slate-100">{getColumnLabel(colKey)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={() => handleMoveColumnInOrder(idx, -1)}
+                            className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
+                            title="Mover para a esquerda / cima"
+                          >
+                            <ArrowUp className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx === columnOrder.length - 1}
+                            onClick={() => handleMoveColumnInOrder(idx, 1)}
+                            className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
+                            title="Mover para a direita / baixo"
+                          >
+                            <ArrowDown className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <button
                   type="button"
-                  onClick={() => saveColumnOrder(DEFAULT_PRODUCT_COLUMNS)}
+                  onClick={() => {
+                    saveColumnOrder(DEFAULT_PRODUCT_COLUMNS);
+                    saveVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
+                  }}
                   className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
@@ -4674,7 +4816,7 @@ export default function DbmProductsSearchPage() {
                   onClick={() => setShowColumnOrderModal(false)}
                   className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
                 >
-                  Concluído
+                  Salvar e Fechar
                 </button>
               </div>
             </motion.div>
@@ -4697,10 +4839,10 @@ export default function DbmProductsSearchPage() {
               <div className="space-y-1.5">
                 <p>• <strong>Setas ↑ / ↓ / Home / End:</strong> Navega rapidamente pelas linhas da planilha.</p>
                 <p>• <strong>Enter ou Duplo Clique:</strong> Abre a Ficha de Cadastro do livro selecionado.</p>
-                <p>• <strong>Modo Edição Direta (Excel):</strong> Permite editar 2º ISBN, Data de Lançamento, Preço de Capa e Unid/Caixa direto na grade pressionando <code>Enter</code>.</p>
+                <p>• <strong>Modo Edição Direta (Excel):</strong> Permite editar Situação do Item, Data de Lançamento, Preço de Capa e Unid/Caixa direto na grade pressionando <code>Enter</code>.</p>
                 <p>• <strong>F2 (na Ficha):</strong> Salva imediatamente as alterações do livro.</p>
                 <p>• <strong>Alt + ← / → (na Ficha):</strong> Alterna para o livro anterior ou próximo sem sair da ficha.</p>
-                <p>• <strong>Janela de Novidades (-9m a +6m):</strong> Calculada automaticamente a partir da Data de Lançamento, sinalizando se o livro está em Pré-lançamento, Novidade vigente ou Expirando (&lt;30 dias).</p>
+                <p>• <strong>Situação do Item:</strong> Classifica a obra em <strong>Em Distribuição</strong>, <strong>Lançamento</strong>, <strong>Esgotado</strong> ou <strong>Fora de Catálogo</strong>.</p>
               </div>
               <div className="text-right pt-2">
                 <button
