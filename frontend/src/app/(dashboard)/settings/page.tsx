@@ -166,6 +166,7 @@ export default function SettingsPage() {
     inter_cert_path: '',
     inter_key_path: '',
     inter_account_number: '',
+    stock_alert_threshold: 0,
   });
 
   useEffect(() => {
@@ -284,6 +285,7 @@ export default function SettingsPage() {
         inter_key_path: data.inter_key_path || '',
         inter_account_number: data.inter_account_number || '',
         horus_sql_enabled: data.horus_sql_enabled || false,
+        stock_alert_threshold: Number(data.stock_alert_threshold ?? 0),
       }));
       const resPoints = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/print-points`, {
         headers: { 'Authorization': `Bearer ${token}` }
@@ -1234,25 +1236,66 @@ export default function SettingsPage() {
                       </div>
                     </div>
 
-                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40 mt-6 md:w-3/4 lg:w-2/3">
-                      <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">Visibilidade da Loja B2B / Storefront</h3>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Controle o nível de detalhes do seu estoque voltado para os clientes.</p>
-                      
-                      <label className="flex items-center gap-4 cursor-pointer">
-                          <div className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${settings.b2b_show_stock_quantity ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
-                              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.b2b_show_stock_quantity ? 'translate-x-6' : 'translate-x-1'}`} />
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-6">
+                      <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-6 dark:border-slate-800/60 dark:bg-slate-900/40">
+                        <h3 className="text-sm font-bold text-blue-600 tracking-wide uppercase mb-1">Visibilidade da Loja B2B / Storefront</h3>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-6">Controle o nível de detalhes do seu estoque voltado para os clientes.</p>
+                        
+                        <label className="flex items-center gap-4 cursor-pointer">
+                            <div className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${settings.b2b_show_stock_quantity ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'}`}>
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${settings.b2b_show_stock_quantity ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </div>
+                            <div className="flex flex-col">
+                                <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Exibir quantidade exata em estoque</span>
+                                <span className="text-xs text-slate-500">Se ativo, mostra &ldquo;Disponível: X un&rdquo;. Se inativo, exibe apenas se o produto está ou não disponível.</span>
+                            </div>
+                            <input
+                                type="checkbox"
+                                className="sr-only"
+                                checked={settings.b2b_show_stock_quantity}
+                                onChange={(e) => setSettings(prev => ({ ...prev, b2b_show_stock_quantity: e.target.checked }))}
+                            />
+                        </label>
+                      </div>
+
+                      <div className="rounded-2xl border border-rose-200/80 bg-rose-50/30 shadow-sm p-6 dark:border-rose-900/50 dark:bg-rose-950/10">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <h3 className="text-sm font-bold text-rose-600 dark:text-rose-400 tracking-wide uppercase">
+                            Alerta de Estoque (Visualização &amp; Orçamento)
+                          </h3>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-rose-100/90 border border-rose-200 text-rose-700 dark:bg-rose-950/60 dark:border-rose-800 dark:text-rose-300 text-[11px] font-mono font-extrabold">
+                            {Number(settings.stock_alert_threshold) > 0 ? `≤ ${settings.stock_alert_threshold} un.` : 'Desativado (0)'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                          Destaca suavemente em tom rosado/vermelho claro os itens cujo estoque disponível estiver <b>menor ou igual</b> à quantidade informada, tanto na <b>Pesquisa de Estoque / Produtos</b> quanto na <b>Mesa de Orçamento</b>.
+                        </p>
+
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                          <div className="relative flex-1 max-w-[220px]">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              placeholder="Ex: 250"
+                              value={settings.stock_alert_threshold ? String(settings.stock_alert_threshold) : ''}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/\D/g, '');
+                                setSettings(prev => ({ ...prev, stock_alert_threshold: raw ? parseInt(raw, 10) : 0 }));
+                              }}
+                              className="w-full bg-white border border-rose-200 rounded-xl px-3.5 py-2 text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-400 transition-all font-mono font-extrabold text-sm placeholder:text-slate-400 dark:bg-slate-900 dark:border-rose-800/70 dark:text-white"
+                            />
+                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-bold text-slate-400 pointer-events-none">
+                              unid.
+                            </span>
                           </div>
-                          <div className="flex flex-col">
-                              <span className="text-sm font-bold text-slate-800 dark:text-slate-200">Exibir quantidade exata em estoque</span>
-                              <span className="text-xs text-slate-500">Se ativo, mostra &ldquo;Disponível: X un&rdquo;. Se inativo, exibe apenas se o produto está ou não disponível.</span>
+                          <div className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                            <span className="text-[11px] text-slate-400">Prévia visual:</span>
+                            <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-rose-100/80 border border-rose-200/90 text-rose-700 dark:bg-rose-950/50 dark:border-rose-800 dark:text-rose-300 font-mono font-extrabold text-xs">
+                              {Number(settings.stock_alert_threshold) > 0 ? settings.stock_alert_threshold : 250}
+                            </span>
                           </div>
-                          <input
-                              type="checkbox"
-                              className="sr-only"
-                              checked={settings.b2b_show_stock_quantity}
-                              onChange={(e) => setSettings(prev => ({ ...prev, b2b_show_stock_quantity: e.target.checked }))}
-                          />
-                      </label>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -32,6 +32,7 @@ export default function ProductsPage() {
   
   const [coverBaseUrl, setCoverBaseUrl] = useState<string | null>(null);
   const [coverSecondaryBaseUrl, setCoverSecondaryBaseUrl] = useState<string | null>(null);
+  const [stockAlertThreshold, setStockAlertThreshold] = useState<number>(0);
   const [companyId, setCompanyId] = useState<number>(1);
   const [categoryId, setCategoryId] = useState<string>('');
   const [orderBy, setOrderBy] = useState<string>('name');
@@ -174,6 +175,9 @@ export default function ProductsPage() {
            const data = await res.json();
            setCoverBaseUrl(data.cover_image_base_url || null);
            setCoverSecondaryBaseUrl(data.cover_image_secondary_base_url || null);
+           if (data.stock_alert_threshold !== undefined && data.stock_alert_threshold !== null) {
+             setStockAlertThreshold(Math.max(0, Number(data.stock_alert_threshold) || 0));
+           }
         }
         
         // Load categories
@@ -708,13 +712,20 @@ export default function ProductsPage() {
                   </td>
                 </tr>
               ) : (
-                products.map((product) => (
+                products.map((product) => {
+                  const qty = Number(product.stock_quantity ?? product.stock ?? 0);
+                  const isLowStockAlert = stockAlertThreshold > 0 && qty <= stockAlertThreshold;
+                  return (
                   <motion.tr 
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
                     key={product.id}
                     onClick={() => router.push(`/products/${product.id}`)}
-                    className="hover:bg-slate-50/80 transition-colors group cursor-pointer dark:hover:bg-slate-800/50"
+                    className={`transition-colors group cursor-pointer ${
+                      isLowStockAlert
+                        ? 'bg-rose-50/70 hover:bg-rose-100/60 dark:bg-rose-950/20 dark:hover:bg-rose-950/35'
+                        : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/50'
+                    }`}
                   >
                     <td className="p-4 text-center">
                       <input type="checkbox" onClick={(e) => e.stopPropagation()} className="rounded border-slate-300 text-[var(--color-primary-base)] focus:ring-[var(--color-primary-base)] dark:border-slate-700 dark:bg-slate-950" />
@@ -793,9 +804,16 @@ export default function ProductsPage() {
                       </div>
                     </td>
                     <td className="p-4 text-center">
-                      {Number(product.stock_quantity ?? product.stock ?? 0) > 0 ? (
+                      {isLowStockAlert ? (
+                        <span
+                          className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-extrabold bg-rose-100/90 border border-rose-200 text-rose-700 dark:bg-rose-950/60 dark:border-rose-800 dark:text-rose-300"
+                          title={`Alerta de Estoque: Saldo (${qty}) ≤ Limite de Alerta (${stockAlertThreshold})`}
+                        >
+                          {qty} un.
+                        </span>
+                      ) : qty > 0 ? (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
-                          {Number(product.stock_quantity ?? product.stock ?? 0)} un.
+                          {qty} un.
                         </span>
                       ) : product.allow_purchase === true ? (
                         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
@@ -813,7 +831,8 @@ export default function ProductsPage() {
                       </span>
                     </td>
                   </motion.tr>
-                ))
+                  );
+                })
               )}
             </tbody>
           </table>

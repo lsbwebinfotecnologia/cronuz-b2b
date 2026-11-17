@@ -216,6 +216,9 @@ class CompanySettings(Base):
     ev_webhook_secret                 = Column(String(255), nullable=True)
     ev_preset_config                  = Column(JSON, nullable=True)
 
+    # ── Alerta Geral de Estoque Baixo (Visualização de Estoque & Orçamento) ──
+    stock_alert_threshold             = Column(Integer, default=0, nullable=False, server_default="0")
+
     # ────────────────────────────────────────────────────────────────────────────
 
     company = relationship("Company")

@@ -158,6 +158,8 @@ class CompanySettingsBase(BaseModel):
     meli_token_expires_at: Optional[datetime] = None
     meli_preset_config: Optional[Dict[str, Any]] = None
 
+    stock_alert_threshold: Optional[int] = 0
+
 
 class CompanySettingsUpdate(CompanySettingsBase):
     pass

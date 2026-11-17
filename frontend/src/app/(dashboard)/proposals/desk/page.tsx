@@ -298,6 +298,16 @@ export default function ProposalsDeskPage() {
   const [hideEbooksInSearch, setHideEbooksInSearch] = useState<boolean>(true);
   const [hideOutOfPrintInSearch, setHideOutOfPrintInSearch] = useState<boolean>(true);
   const [globalDiscountInput, setGlobalDiscountInput] = useState<number>(50.0);
+  const [stockAlertThreshold, setStockAlertThreshold] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cronuz_seller_stock_alert_threshold');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 0) return parsed;
+      }
+    }
+    return 0;
+  });
 
   // ── 3.2 Larguras de Colunas Estilo Excel (Persistidas por Usuário) ─────────
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>(DEFAULT_COLUMN_WIDTHS);
@@ -418,6 +428,25 @@ export default function ProposalsDeskPage() {
       }
     } catch (e) {
       console.error('Erro ao recuperar configurações salvas da mesa:', e);
+    }
+
+    // Carrega o Alerta de Estoque das Configurações Gerais do Seller (/companies/{id}/settings)
+    const u = getUser();
+    const cid = u?.company_id;
+    const token = getToken();
+    if (cid && token) {
+      fetch(`${API_URL}/companies/${cid}/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.stock_alert_threshold !== undefined && data.stock_alert_threshold !== null) {
+            const thresh = Math.max(0, Number(data.stock_alert_threshold) || 0);
+            setStockAlertThreshold(thresh);
+            localStorage.setItem('cronuz_seller_stock_alert_threshold', String(thresh));
+          }
+        })
+        .catch(() => {});
     }
   }, []);
 
@@ -2974,37 +3003,53 @@ export default function ProposalsDeskPage() {
 
                 {showManualDropdown && manualSuggestions.length > 0 && (
                   <div className="absolute left-0 right-0 mt-1 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl z-40 max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                    {manualSuggestions.map((sug, sIdx) => (
-                      <button
-                        key={`${sug.isbn}-${sug.horusCode}-${sIdx}`}
-                        type="button"
-                        onClick={() => handleSelectManualSuggestion(sug)}
-                        className={`w-full px-3 py-1.5 text-left text-xs flex items-center justify-between gap-2 transition-colors ${
-                          sIdx === selectedSuggestionIdx
-                            ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-950 dark:text-indigo-200 font-semibold'
-                            : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
-                        }`}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate font-sans font-medium text-slate-900 dark:text-white">
-                            {sug.title}
+                    {manualSuggestions.map((sug, sIdx) => {
+                      const sugStock = Number(sug.horusStock ?? 0);
+                      const isSugLowStock = stockAlertThreshold > 0 && sugStock <= stockAlertThreshold;
+                      return (
+                        <button
+                          key={`${sug.isbn}-${sug.horusCode}-${sIdx}`}
+                          type="button"
+                          onClick={() => handleSelectManualSuggestion(sug)}
+                          className={`w-full px-3 py-1.5 text-left text-xs flex items-center justify-between gap-2 transition-colors ${
+                            sIdx === selectedSuggestionIdx
+                              ? isSugLowStock
+                                ? 'bg-rose-100/85 dark:bg-rose-950/60 text-rose-950 dark:text-rose-200 font-semibold'
+                                : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-950 dark:text-indigo-200 font-semibold'
+                              : isSugLowStock
+                              ? 'bg-rose-50/70 dark:bg-rose-950/25 hover:bg-rose-100/60 text-slate-800 dark:text-slate-200'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-300'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-sans font-medium text-slate-900 dark:text-white">
+                              {sug.title}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-500 flex items-center gap-2">
+                              <span>ISBN: {sug.isbn}</span>
+                              <span>•</span>
+                              <span>{sug.subject || sug.publisher}</span>
+                            </div>
                           </div>
-                          <div className="text-[10px] font-mono text-slate-500 flex items-center gap-2">
-                            <span>ISBN: {sug.isbn}</span>
-                            <span>•</span>
-                            <span>{sug.subject || sug.publisher}</span>
+                          <div className="text-right font-mono shrink-0">
+                            <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
+                              {Number(sug.coverPrice || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold ${
+                                isSugLowStock
+                                  ? 'inline-block px-1.5 py-0.2 rounded bg-rose-100/90 border border-rose-200 text-rose-700 dark:bg-rose-900/50 dark:border-rose-800 dark:text-rose-300'
+                                  : sugStock > 0
+                                  ? 'text-emerald-600'
+                                  : 'text-rose-500'
+                              }`}
+                            >
+                              Est: {sugStock} un
+                            </span>
                           </div>
-                        </div>
-                        <div className="text-right font-mono shrink-0">
-                          <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
-                            {Number(sug.coverPrice || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                          </span>
-                          <span className={`text-[10px] font-bold ${Number(sug.horusStock || 0) > 0 ? 'text-emerald-600' : 'text-rose-500'}`}>
-                            Est: {sug.horusStock ?? 0} un
-                          </span>
-                        </div>
-                      </button>
-                    ))}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -3688,6 +3733,7 @@ export default function ProposalsDeskPage() {
                   const isSelected = selectedRowId === it.id;
                   const isChecked = Boolean(selectedCheckedIds[it.id]);
                   const isItemInOrder = it.tabCategory === 'pedido' || it.isAddedToOrder === true;
+                  const isLowStockAlert = stockAlertThreshold > 0 && it.horusStock <= stockAlertThreshold;
 
                   return (
                     <tr 
@@ -3695,14 +3741,18 @@ export default function ProposalsDeskPage() {
                       onClick={() => setSelectedRowId(it.id)}
                       className={`transition-colors border-b border-slate-100 dark:border-slate-800/80 cursor-pointer font-bold ${
                         isSelected
-                          ? 'bg-slate-100 dark:bg-slate-800 ring-1 ring-inset ring-slate-300 dark:ring-slate-600'
+                          ? isLowStockAlert
+                            ? 'bg-rose-100/85 dark:bg-rose-950/60 ring-1 ring-inset ring-rose-300 dark:ring-rose-700'
+                            : 'bg-slate-100 dark:bg-slate-800 ring-1 ring-inset ring-slate-300 dark:ring-slate-600'
                           : isChecked
                             ? 'bg-indigo-50/40 dark:bg-indigo-950/20'
-                            : it.situation === 'SEM_ESTOQUE' 
-                              ? 'bg-rose-50/20 dark:bg-rose-950/10 hover:bg-rose-50/40' 
-                              : isItemInOrder && activeTab !== 'pedido' && activeTab !== 'consolidado'
-                                ? 'bg-emerald-50/25 dark:bg-emerald-950/15 hover:bg-emerald-50/40'
-                                : idx % 2 === 1 ? 'bg-slate-50/40 dark:bg-slate-850/20 hover:bg-slate-100/60 dark:hover:bg-slate-800/60' : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/60'
+                            : isLowStockAlert
+                              ? 'bg-rose-50/75 dark:bg-rose-950/25 hover:bg-rose-100/60'
+                              : it.situation === 'SEM_ESTOQUE' 
+                                ? 'bg-rose-50/20 dark:bg-rose-950/10 hover:bg-rose-50/40' 
+                                : isItemInOrder && activeTab !== 'pedido' && activeTab !== 'consolidado'
+                                  ? 'bg-emerald-50/25 dark:bg-emerald-950/15 hover:bg-emerald-50/40'
+                                  : idx % 2 === 1 ? 'bg-slate-50/40 dark:bg-slate-850/20 hover:bg-slate-100/60 dark:hover:bg-slate-800/60' : 'hover:bg-slate-100/60 dark:hover:bg-slate-800/60'
                       }`}
                     >
                       {/* Checkbox de Seleção nas Abas de Pesquisa/Catálogo */}
@@ -3900,10 +3950,27 @@ export default function ProposalsDeskPage() {
                       </td>
 
                       {/* Disponível (Estoque Horus) */}
-                      <td className={`py-1 px-1.5 text-right font-mono text-xs font-extrabold border-r border-slate-100 dark:border-slate-800/60 ${
-                        it.horusStock === 0 ? 'text-rose-600 dark:text-rose-400' : 'text-slate-900 dark:text-white'
-                      }`}>
-                        {it.horusStock}
+                      <td
+                        className={`py-1 px-1.5 text-right font-mono text-xs font-extrabold border-r border-slate-100 dark:border-slate-800/60 ${
+                          isLowStockAlert
+                            ? 'bg-rose-100/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+                            : it.horusStock === 0
+                            ? 'text-rose-600 dark:text-rose-400'
+                            : 'text-slate-900 dark:text-white'
+                        }`}
+                        title={
+                          isLowStockAlert
+                            ? `Alerta de Estoque: Saldo (${it.horusStock}) ≤ Limite de Alerta (${stockAlertThreshold})`
+                            : undefined
+                        }
+                      >
+                        {isLowStockAlert ? (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-100/90 dark:bg-rose-900/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-extrabold">
+                            {it.horusStock}
+                          </span>
+                        ) : (
+                          it.horusStock
+                        )}
                       </td>
 
                       {/* Unid(CX) */}
@@ -4247,7 +4314,7 @@ export default function ProposalsDeskPage() {
                 </div>
 
                 {/* Parâmetros Padrão de Dias e Regra da Aba Reposição */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                   <div className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
                     <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">
                       Dias Vendas Cliente
@@ -4279,6 +4346,26 @@ export default function ProposalsDeskPage() {
                         className="w-16 rounded border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs font-bold font-mono text-emerald-600 text-center"
                       />
                       <span className="text-xs text-slate-400">dias</span>
+                    </div>
+                  </div>
+
+                  <div className="p-2 rounded-lg border border-rose-200 dark:border-rose-800/70 bg-rose-50/40 dark:bg-rose-950/20">
+                    <label className="text-[10px] uppercase font-bold text-rose-600 dark:text-rose-400 block mb-1">
+                      Alerta de Estoque (≤)
+                    </label>
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        placeholder="Ex: 250"
+                        value={stockAlertThreshold ? String(stockAlertThreshold) : ''}
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/\D/g, '');
+                          setStockAlertThreshold(raw ? parseInt(raw, 10) : 0);
+                        }}
+                        className="w-20 rounded border border-rose-300 dark:border-rose-700 bg-white dark:bg-slate-900 px-2 py-1 text-xs font-extrabold font-mono text-rose-700 dark:text-rose-300 text-center"
+                      />
+                      <span className="text-[11px] text-rose-600/80 dark:text-rose-300/80">unid.</span>
                     </div>
                   </div>
                 </div>
@@ -4459,6 +4546,20 @@ export default function ProposalsDeskPage() {
                       globalDiscountInput,
                       columnWidths
                     });
+                    localStorage.setItem('cronuz_seller_stock_alert_threshold', String(stockAlertThreshold || 0));
+                    const u = getUser();
+                    const cid = u?.company_id;
+                    const token = getToken();
+                    if (cid && token) {
+                      fetch(`${API_URL}/companies/${cid}/settings`, {
+                        method: 'PUT',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          Authorization: `Bearer ${token}`,
+                        },
+                        body: JSON.stringify({ stock_alert_threshold: Number(stockAlertThreshold || 0) }),
+                      }).catch(() => {});
+                    }
                     if (customer?.id) {
                       loadCustomerDeskData(customer.id);
                     }

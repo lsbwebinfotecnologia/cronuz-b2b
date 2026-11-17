@@ -222,6 +222,7 @@ try:
         _conn.execute(_sql_text("ALTER TABLE dbm_proposal ADD COLUMN IF NOT EXISTS subject VARCHAR(255)"))
         _conn.execute(_sql_text("ALTER TABLE dbm_proposal ADD COLUMN IF NOT EXISTS desk_snapshot_json JSON"))
         _conn.execute(_sql_text("ALTER TABLE usr_user ADD COLUMN IF NOT EXISTS sidebar_collapsed BOOLEAN NOT NULL DEFAULT FALSE"))
+        _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS stock_alert_threshold INTEGER NOT NULL DEFAULT 0"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 

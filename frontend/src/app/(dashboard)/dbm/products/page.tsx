@@ -521,10 +521,20 @@ export default function DbmProductsSearchPage() {
   const [importingHorus, setImportingHorus] = useState(false);
   const [horusSyncMessage, setHorusSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // URLs padrão e secundária de capas do Seller (mesma dinâmica do Storefront B2C)
+  // URLs padrão e secundária de capas do Seller (mesma dinâmica do Storefront B2C) + Alerta Geral de Estoque
   const [coverBaseUrl, setCoverBaseUrl] = useState<string>('');
   const [coverSecondaryBaseUrl, setCoverSecondaryBaseUrl] = useState<string>('');
   const [coverCandidateStep, setCoverCandidateStep] = useState<number>(0);
+  const [stockAlertThreshold, setStockAlertThreshold] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cronuz_seller_stock_alert_threshold');
+      if (saved !== null) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed) && parsed >= 0) return parsed;
+      }
+    }
+    return 0;
+  });
 
   // Estados da Importação de Planilha Excel (2 abas: Itens + Tiragens)
   const [showExcelImportModal, setShowExcelImportModal] = useState(false);
@@ -553,10 +563,40 @@ export default function DbmProductsSearchPage() {
           if (data.cover_image_secondary_base_url) {
             setCoverSecondaryBaseUrl(String(data.cover_image_secondary_base_url).replace(/\/$/, ''));
           }
+          if (data.stock_alert_threshold !== undefined && data.stock_alert_threshold !== null) {
+            const thresh = Math.max(0, Number(data.stock_alert_threshold) || 0);
+            setStockAlertThreshold(thresh);
+            if (typeof window !== 'undefined') {
+              localStorage.setItem('cronuz_seller_stock_alert_threshold', String(thresh));
+            }
+          }
         }
       })
       .catch(() => {});
   }, [companyId]);
+
+  const handleSaveStockAlertThreshold = async (newThreshold: number) => {
+    const cleanVal = Math.max(0, Math.floor(Number(newThreshold) || 0));
+    setStockAlertThreshold(cleanVal);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('cronuz_seller_stock_alert_threshold', String(cleanVal));
+    }
+    if (!companyId) return;
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      await fetch(`${apiUrl}/companies/${companyId}/settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ stock_alert_threshold: cleanVal }),
+      });
+    } catch {
+      // silencioso
+    }
+  };
 
   // Converte um ProductGridItem em DbmBookFormState para a Ficha de Cadastro
   const mapProductToForm = (p: ProductGridItem): DbmBookFormState => {
@@ -2688,6 +2728,8 @@ export default function DbmProductsSearchPage() {
                     const idx = pageStartIdx + localIdx;
                     const isSelected = idx === selectedIndex;
                     const isZeroOrOut = item.is_out_of_print || item.stock_quantity <= 0;
+                    const isLowStockAlert =
+                      stockAlertThreshold > 0 && item.stock_quantity <= stockAlertThreshold;
                     const sitInfo = evaluateProductSituation(item);
 
                     return (
@@ -2701,7 +2743,11 @@ export default function DbmProductsSearchPage() {
                         }}
                         className={`transition-colors font-bold ${
                           isSelected
-                            ? 'bg-indigo-50/90 dark:bg-indigo-950/50 text-slate-900 dark:text-white ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
+                            ? isLowStockAlert
+                              ? 'bg-rose-100/85 dark:bg-rose-950/60 text-slate-900 dark:text-white ring-1 ring-inset ring-rose-300 dark:ring-rose-700'
+                              : 'bg-indigo-50/90 dark:bg-indigo-950/50 text-slate-900 dark:text-white ring-1 ring-inset ring-indigo-300 dark:ring-indigo-700'
+                            : isLowStockAlert
+                            ? 'bg-rose-50/75 dark:bg-rose-950/25 text-slate-900 dark:text-slate-100 hover:bg-rose-100/60'
                             : isZeroOrOut
                             ? 'bg-rose-50/35 dark:bg-rose-950/10 text-slate-800 dark:text-slate-200 hover:bg-slate-100/70'
                             : idx % 2 === 0
@@ -2871,10 +2917,25 @@ export default function DbmProductsSearchPage() {
                               <td
                                 key={colKey}
                                 className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-extrabold ${
-                                  item.stock_quantity > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600'
+                                  isLowStockAlert
+                                    ? 'bg-rose-100/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+                                    : item.stock_quantity > 0
+                                    ? 'text-emerald-700 dark:text-emerald-400'
+                                    : 'text-rose-600'
                                 }`}
+                                title={
+                                  isLowStockAlert
+                                    ? `Alerta de Estoque: Saldo (${item.stock_quantity}) ≤ Limite de Alerta (${stockAlertThreshold})`
+                                    : undefined
+                                }
                               >
-                                {item.stock_quantity}
+                                {isLowStockAlert ? (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-100/90 dark:bg-rose-900/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-200 font-extrabold">
+                                    {item.stock_quantity}
+                                  </span>
+                                ) : (
+                                  item.stock_quantity
+                                )}
                               </td>
                             );
                           }
@@ -4729,6 +4790,35 @@ export default function DbmProductsSearchPage() {
               </div>
 
               <div className="p-4 space-y-3 max-h-[65vh] overflow-y-auto">
+                {/* Alerta de Estoque (Sincronizado com Configurações Gerais do Seller) */}
+                <div className="p-3 rounded-xl border border-rose-200/90 bg-rose-50/40 dark:border-rose-900/60 dark:bg-rose-950/20 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-extrabold uppercase tracking-wider text-rose-700 dark:text-rose-300">
+                      Alerta de Estoque (Geral &amp; Orçamento)
+                    </span>
+                    <span className="px-2 py-0.5 rounded bg-rose-100/90 border border-rose-200 text-rose-700 text-[10px] font-mono font-extrabold">
+                      {stockAlertThreshold > 0 ? `≤ ${stockAlertThreshold} un.` : 'Desativado'}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Destaca em tom rosado/vermelho suave os itens cujo saldo em estoque estiver menor ou igual a esta quantidade (sincronizado com as Configurações Gerais do Seller e Mesa de Orçamento).
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Ex: 250"
+                      value={stockAlertThreshold ? String(stockAlertThreshold) : ''}
+                      onChange={(e) => {
+                        const raw = e.target.value.replace(/\D/g, '');
+                        handleSaveStockAlertThreshold(raw ? parseInt(raw, 10) : 0);
+                      }}
+                      className="w-32 px-2.5 py-1.5 text-xs font-mono font-extrabold bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-400"
+                    />
+                    <span className="text-[11px] text-slate-500">unidades (0 = desativar)</span>
+                  </div>
+                </div>
+
                 <div className="space-y-1.5">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
                     Colunas Exibidas no Grid & Ordem de Exibição
