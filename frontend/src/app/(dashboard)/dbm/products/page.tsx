@@ -734,37 +734,21 @@ export default function DbmProductsSearchPage() {
     }
   };
 
-  // Enriquecimento em lote de VDS365 Geral, VDS(XM) Geral e Saldo Consignado Geral
+  // Enriquecimento em lote de VDS365 Geral, VDS(XM) Geral, Saldo Disponível e Saldo Consignado Geral (filtrado pela filial do seller)
   const batchEnrichCatalogMetrics = async (targetCompanyId?: number, salesDays?: number) => {
     const cid = targetCompanyId || companyId;
     const days = salesDays || generalSalesDays || 90;
     try {
       const token = getToken();
-      const configuredApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
-      const isProdBrowser =
-        typeof window !== 'undefined' &&
-        window.location.hostname !== 'localhost' &&
-        window.location.hostname !== '127.0.0.1';
-      const baseUrl = isProdBrowser ? '/api' : configuredApiUrl;
+      const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 
-      let res: Response;
-      try {
-        res = await fetch(
-          `${baseUrl}/dbm/products/batch-enrich-metrics?company_id=${cid}&general_sales_days=${days}`,
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-          }
-        );
-      } catch {
-        res = await fetch(
-          `${configuredApiUrl}/dbm/products/batch-enrich-metrics?company_id=${cid}&general_sales_days=${days}`,
-          {
-            method: 'POST',
-            headers: { Authorization: `Bearer ${token}` },
-          }
-        );
-      }
+      const res = await fetch(
+        `${apiUrl}/dbm/products/batch-enrich-metrics?company_id=${cid}&general_sales_days=${days}`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
 
       if (!res.ok) return;
       const data = await res.json();
@@ -779,6 +763,8 @@ export default function DbmProductsSearchPage() {
               consignment_stock: Number(m.consignment_stock ?? item.consignment_stock ?? 0),
               sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
               sales_90: Number(m.sales_90 ?? item.sales_90 ?? 0),
+              stock_quantity: m.stock_quantity != null ? Number(m.stock_quantity) : item.stock_quantity,
+              stock: m.stock_quantity != null ? Number(m.stock_quantity) : item.stock,
             };
           })
         );
@@ -899,6 +885,7 @@ export default function DbmProductsSearchPage() {
         long_description: exact.sinopse || prev.long_description,
         base_price: Number(exact.preco || prev.base_price || 0),
         stock_quantity: Number(exact.estoque ?? prev.stock_quantity),
+        consignment_stock: Number((exact as any).saldo_consignado ?? prev.consignment_stock),
         units_per_box: exact.qtd_caixa ? String(exact.qtd_caixa) : prev.units_per_box,
         launch_date: lDate,
         launch_year: parts.length === 3 ? parts[0] : prev.launch_year,

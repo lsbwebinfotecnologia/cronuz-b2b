@@ -575,7 +575,10 @@ def get_items_estoque_geral(
     except HorusSQLConfigError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    cod_filial = int(sql_client.cod_filial) if str(sql_client.cod_filial).isdigit() else 2
+    emp_str = str(getattr(settings, "horus_sql_cod_empresa", None) or getattr(settings, "horus_company", None) or getattr(sql_client, "cod_empresa", None) or "1").strip()
+    fil_str = str(getattr(settings, "horus_sql_cod_filial", None) or getattr(settings, "horus_branch", None) or getattr(sql_client, "cod_filial", None) or "2").strip()
+    cod_empresa = int(emp_str) if emp_str.isdigit() else 1
+    cod_filial = int(fil_str) if fil_str.isdigit() else 2
 
     where_clauses = ["1=1"]
     params = []
@@ -619,6 +622,7 @@ def get_items_estoque_geral(
                 ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS editora,
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
+                ISNULL(C.saldo_consignado, 0) AS saldo_consignado,
                 ISNULL(G.NOM_GENERO, '') AS assunto,
                 ISNULL(I.DESC_SINOPSE, '') AS sinopse,
                 ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
@@ -634,9 +638,15 @@ def get_items_estoque_geral(
             LEFT JOIN (
                 SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
                 FROM VW_SALDO_ITENS WITH (NOLOCK)
-                WHERE cod_filial = {cod_filial}
+                WHERE cod_empresa = {cod_empresa} AND cod_filial = {cod_filial}
                 GROUP BY cod_item
             ) S ON S.cod_item = I.COD_ITEM
+            LEFT JOIN (
+                SELECT COD_ITEM, SUM(ISNULL(SALDO, 0)) AS saldo_consignado
+                FROM VW_ITENS_CONSIGNACAO WITH (NOLOCK)
+                WHERE COD_EMPRESA = {cod_empresa} AND COD_FILIAL = {cod_filial} AND ISNULL(SALDO, 0) > 0
+                GROUP BY COD_ITEM
+            ) C ON C.COD_ITEM = I.COD_ITEM
             WHERE {where_sql}
             ORDER BY I.COD_ITEM ASC
         """
@@ -649,6 +659,7 @@ def get_items_estoque_geral(
                 ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS editora,
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
+                ISNULL(C.saldo_consignado, 0) AS saldo_consignado,
                 ISNULL(G.NOM_GENERO, '') AS assunto,
                 ISNULL(I.DESC_SINOPSE, '') AS sinopse,
                 ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
@@ -664,9 +675,15 @@ def get_items_estoque_geral(
             LEFT JOIN (
                 SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
                 FROM VW_SALDO_ITENS WITH (NOLOCK)
-                WHERE cod_filial = {cod_filial}
+                WHERE cod_empresa = {cod_empresa} AND cod_filial = {cod_filial}
                 GROUP BY cod_item
             ) S ON S.cod_item = I.COD_ITEM
+            LEFT JOIN (
+                SELECT COD_ITEM, SUM(ISNULL(SALDO, 0)) AS saldo_consignado
+                FROM VW_ITENS_CONSIGNACAO WITH (NOLOCK)
+                WHERE COD_EMPRESA = {cod_empresa} AND COD_FILIAL = {cod_filial} AND ISNULL(SALDO, 0) > 0
+                GROUP BY COD_ITEM
+            ) C ON C.COD_ITEM = I.COD_ITEM
             WHERE {where_sql}
             ORDER BY I.COD_ITEM ASC
             OFFSET {offset} ROWS
@@ -739,6 +756,7 @@ def get_items_estoque_geral(
             "editora": str(r.get("editora") or ""),
             "preco": float(r.get("preco") or 0.0),
             "estoque": int(r.get("estoque") or 0),
+            "saldo_consignado": int(r.get("saldo_consignado") or 0),
             "assunto": str(r.get("assunto") or ""),
             "sinopse": str(r.get("sinopse") or ""),
             "qtd_caixa": int(r.get("qtd_caixa") or 0),
@@ -837,6 +855,11 @@ def import_items_from_horus(
                 estoque = 0
 
             try:
+                saldo_consignado = int(float(item.get("saldo_consignado") or 0)) if item.get("saldo_consignado") is not None else None
+            except (ValueError, TypeError):
+                saldo_consignado = None
+
+            try:
                 qtd_caixa = int(float(item.get("qtd_caixa") or 0)) if item.get("qtd_caixa") else None
             except (ValueError, TypeError):
                 qtd_caixa = None
@@ -910,6 +933,8 @@ def import_items_from_horus(
                         existing_product.barcode = isbn
                 existing_product.base_price = preco
                 existing_product.stock_quantity = estoque
+                if saldo_consignado is not None:
+                    existing_product.consignment_stock = saldo_consignado
                 existing_product.horus_cod_item = horus_code_int
                 if not existing_product.cod_dbm:
                     existing_product.cod_dbm = str(existing_product.id or cod_item)
@@ -953,6 +978,7 @@ def import_items_from_horus(
                     cod_dbm=cod_item,
                     base_price=preco,
                     stock_quantity=estoque,
+                    consignment_stock=saldo_consignado or 0,
                     horus_cod_item=horus_code_int,
                     units_per_box=qtd_caixa,
                     launch_date=launch_dt,

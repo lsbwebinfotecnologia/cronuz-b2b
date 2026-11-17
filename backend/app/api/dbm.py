@@ -65,6 +65,60 @@ def _resolve_seller_id(current_user: User, company_id: Optional[int] = None) -> 
     return seller_id
 
 
+def _resolve_horus_empresa_filial(
+    settings: Optional[CompanySettings] = None,
+    sql_client: Optional[HorusSQLClient] = None,
+) -> tuple[int, int]:
+    """
+    Resolve COD_EMPRESA e COD_FILIAL configurados para o seller no Horus ERP / SQL Direct.
+    Garante isolamento estrito por filial em todas as consultas do DBM (estoque, consignado e notas fiscais).
+    """
+    emp_str = ""
+    fil_str = ""
+    if settings:
+        emp_str = str(getattr(settings, "horus_sql_cod_empresa", None) or getattr(settings, "horus_company", None) or "").strip()
+        fil_str = str(getattr(settings, "horus_sql_cod_filial", None) or getattr(settings, "horus_branch", None) or "").strip()
+    if not emp_str and sql_client:
+        emp_str = str(getattr(sql_client, "cod_empresa", None) or "").strip()
+    if not fil_str and sql_client:
+        fil_str = str(getattr(sql_client, "cod_filial", None) or "").strip()
+
+    cod_emp = int(emp_str) if (emp_str and emp_str.isdigit()) else 1
+    cod_fil = int(fil_str) if (fil_str and fil_str.isdigit()) else 2
+    return cod_emp, cod_fil
+
+
+def _get_or_create_customer_group(
+    db: Session,
+    seller_id: int,
+    raw_group_name: Optional[str],
+) -> tuple[Optional[int], bool]:
+    """
+    Busca ou cria automaticamente o grupo de cliente na tabela crm_customer_group do seller.
+    Retorna (group_id, created_new).
+    """
+    g_name = (raw_group_name or "").strip()
+    if not g_name:
+        return None, False
+    from app.models.customer_group import CustomerGroup
+
+    existing_grp = db.query(CustomerGroup).filter(
+        CustomerGroup.company_id == seller_id,
+        func.lower(CustomerGroup.name) == g_name.lower()
+    ).first()
+    if existing_grp:
+        return existing_grp.id, False
+
+    new_grp = CustomerGroup(
+        company_id=seller_id,
+        name=g_name[:100],
+        color="#4f46e5",
+    )
+    db.add(new_grp)
+    db.flush()
+    return new_grp.id, True
+
+
 
 def _sanitize_doc(doc: str) -> str:
     """Remove pontuação e espaços de CPF/CNPJ."""
@@ -551,6 +605,8 @@ def save_dbm_company(
 
     status_action = "updated" if existing_cust else "created"
     min_order_val = round(max(0.0, float(payload.min_order_total or 0.0)), 2)
+    clean_group_name = (payload.group_name or "").strip() or None
+    grp_id, _ = _get_or_create_customer_group(db, seller_id, clean_group_name) if clean_group_name else (None, False)
 
     if existing_cust:
         existing_cust.name = apelido
@@ -558,7 +614,9 @@ def save_dbm_company(
         existing_cust.document = clean_doc
         existing_cust.city = (payload.city or "").strip() or None
         existing_cust.state = (payload.state or "").strip().upper() or None
-        existing_cust.group_name = (payload.group_name or "").strip() or None
+        existing_cust.group_name = clean_group_name
+        if grp_id:
+            existing_cust.default_group_id = grp_id
         existing_cust.segment = (payload.segment or "").strip() or None
         existing_cust.notes_message = (payload.notes_message or "").strip() or None
         existing_cust.customer_account = (payload.customer_account or "").strip() or None
@@ -577,7 +635,8 @@ def save_dbm_company(
             document=clean_doc,
             city=(payload.city or "").strip() or None,
             state=(payload.state or "").strip().upper() or None,
-            group_name=(payload.group_name or "").strip() or None,
+            group_name=clean_group_name,
+            default_group_id=grp_id,
             segment=(payload.segment or "").strip() or None,
             notes_message=(payload.notes_message or "").strip() or None,
             customer_account=(payload.customer_account or "").strip() or None,
@@ -634,7 +693,8 @@ def download_dbm_import_template(
     wb = openpyxl.Workbook()
     ws = wb.active
 
-    if (mode or "").strip().lower() in ("apelido_only", "atualizar_apelido"):
+    mode_clean = (mode or "").strip().lower()
+    if mode_clean in ("apelido_only", "atualizar_apelido"):
         ws.title = "Atualizar Apelido"
         headers = [
             "codigo_horus",
@@ -649,6 +709,22 @@ def download_dbm_import_template(
         for r in sample_rows:
             ws.append(r)
         filename = "modelo_atualizar_apelido_horus.xlsx"
+    elif mode_clean in ("grupo_segmento", "atualizar_grupo_segmento"):
+        ws.title = "Grupo e Segmento"
+        headers = [
+            "codigo_horus",
+            "grupo",
+            "segmento",
+        ]
+        ws.append(headers)
+        sample_rows = [
+            [19, "Grupo Martins Fontes", "Livrarias"],
+            [11740, "Grupo Editorial", "Editoras"],
+            [2, "Rede Cultura", "Livrarias"],
+        ]
+        for r in sample_rows:
+            ws.append(r)
+        filename = "modelo_atualizar_grupo_segmento_horus.xlsx"
     else:
         ws.title = "Importacao DBM"
         headers = [
@@ -796,7 +872,7 @@ async def parse_dbm_companies_sheet(
             "codigo_horus": cod_horus_int,
             "apelido": apelido or None,
             "grupo": grupo or None,
-            "segmento": segmento or "Editoras",
+            "segmento": segmento or None,
             "obs_empresa": obs_empresa or None,
             "fechamento_roy": fechamento_roy or None,
             "account": account or None,
@@ -836,6 +912,8 @@ def process_dbm_companies_import_batch(
     import_mode = (payload.import_mode or "cliente").strip().lower()
     is_fornecedor_mode = (import_mode == "fornecedor")
     is_apelido_only_mode = import_mode in ("apelido_only", "atualizar_apelido")
+    is_grupo_segmento_mode = import_mode in ("grupo_segmento", "atualizar_grupo_segmento")
+    is_partial_local_mode = is_apelido_only_mode or is_grupo_segmento_mode
 
     # Identificar CompanySettings correspondente
     settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
@@ -854,10 +932,10 @@ def process_dbm_companies_import_batch(
         try:
             sql_client = HorusSQLClient(db, sql_company_id)
         except Exception as e:
-            if not is_apelido_only_mode:
+            if not is_partial_local_mode:
                 raise HTTPException(status_code=500, detail=f"Erro ao conectar ao banco Horus: {str(e)}")
-            log.warning(f"[DBM Batch Import] Conexão SQL indisponível em modo apelido_only (seguindo com base local): {e}")
-    elif not is_apelido_only_mode:
+            log.warning(f"[DBM Batch Import] Conexão SQL indisponível em modo parcial (seguindo com base local): {e}")
+    elif not is_partial_local_mode:
         raise HTTPException(status_code=400, detail="Nenhuma conexão Horus SQL configurada no sistema.")
 
     # Filial configurada nos dados da API (horus_branch)
@@ -955,6 +1033,98 @@ def process_dbm_companies_import_batch(
                     "message": f"Cód. Horus #{cod_horus}: Apelido atualizado de '{old_name}' para '{novo_apelido}'."
                 })
 
+            elif is_grupo_segmento_mode:
+                # ── MODO ATUALIZAR APENAS GRUPO E SEGMENTO (CÓD. HORUS + GRUPO + SEGMENTO) ──
+                novo_grupo = (item.grupo or "").strip()
+                novo_segmento = (item.segmento or "").strip()
+                if not novo_grupo and not novo_segmento:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": "",
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Cód. Horus #{cod_horus}: colunas 'grupo' e 'segmento' estão vazias na planilha (registro ignorado)."
+                    })
+                    continue
+
+                # 1. Busca direta na base do Seller pelo Cód. Cliente Horus ou Cód. Fornecedor Horus
+                existing_cust = db.query(Customer).filter(
+                    Customer.company_id == seller_id,
+                    Customer.horus_cod_cli == cod_horus
+                ).first()
+
+                if not existing_cust:
+                    existing_cust = db.query(Customer).filter(
+                        Customer.company_id == seller_id,
+                        Customer.horus_cod_fornecedor == cod_horus
+                    ).first()
+
+                # 2. Caso o cliente exista na base pelo CNPJ mas ainda não esteja com horus_cod_cli gravado,
+                # consulta rapidamente o CNPJ no Horus SQL para amarrar e atualizar só grupo/segmento
+                if not existing_cust and sql_client:
+                    try:
+                        rows_doc = sql_client.query(
+                            "SELECT TOP 1 CNPJ, CPF FROM CLIENTES WITH (NOLOCK) WHERE COD_CLI = %s",
+                            (cod_horus,),
+                            max_rows=1
+                        )
+                        if rows_doc and len(rows_doc) > 0:
+                            raw_doc = str(rows_doc[0].get("CNPJ") or rows_doc[0].get("CPF") or "").strip()
+                            clean_doc = _sanitize_doc(raw_doc)
+                            if clean_doc:
+                                existing_cust = db.query(Customer).filter(
+                                    Customer.company_id == seller_id,
+                                    or_(
+                                        func.regexp_replace(Customer.document, r"\D", "", "g") == clean_doc,
+                                        Customer.document == clean_doc
+                                    )
+                                ).first()
+                                if existing_cust and not existing_cust.horus_cod_cli:
+                                    existing_cust.horus_cod_cli = cod_horus
+                    except Exception as e_lookup:
+                        log.debug(f"[DBM Batch Grupo/Segmento] Aviso ao consultar CNPJ no Horus para #{cod_horus}: {e_lookup}")
+
+                if not existing_cust:
+                    results.append({
+                        "row_index": row_idx,
+                        "codigo_horus": cod_horus,
+                        "apelido": f"Horus #{cod_horus}",
+                        "status": "WARNING",
+                        "action": "SKIPPED",
+                        "message": f"Empresa com Cód. Horus #{cod_horus} não encontrada na base para atualizar Grupo/Segmento."
+                    })
+                    continue
+
+                changes_desc = []
+                if novo_grupo:
+                    grp_id, grp_created = _get_or_create_customer_group(db, seller_id, novo_grupo)
+                    existing_cust.group_name = novo_grupo
+                    if grp_id:
+                        existing_cust.default_group_id = grp_id
+                    if grp_created:
+                        changes_desc.append(f"Grupo='{novo_grupo}' (novo grupo criado no Cronuz)")
+                    else:
+                        changes_desc.append(f"Grupo='{novo_grupo}'")
+
+                if novo_segmento:
+                    existing_cust.segment = novo_segmento
+                    changes_desc.append(f"Segmento='{novo_segmento}'")
+
+                db.commit()
+
+                results.append({
+                    "row_index": row_idx,
+                    "codigo_horus": cod_horus,
+                    "apelido": existing_cust.name,
+                    "razao_social": existing_cust.corporate_name,
+                    "document": existing_cust.document,
+                    "company_id": existing_cust.id,
+                    "action": "UPDATED",
+                    "status": "SUCCESS",
+                    "message": f"Cód. Horus #{cod_horus} ({existing_cust.name}): {', '.join(changes_desc)}."
+                })
+
             elif is_fornecedor_mode:
                 # ── MODO FORNECEDOR: Consulta na tabela FORNECEDORES (Filial configurada) ──
                 sql_forn = f"""
@@ -1030,6 +1200,7 @@ def process_dbm_companies_import_batch(
 
                 razao_social = nom_forn or apelido
                 grupo = (item.grupo or "").strip() or None
+                grp_id, _ = _get_or_create_customer_group(db, seller_id, grupo) if grupo else (None, False)
                 segmento = (item.segmento or "").strip() or "Editoras"
                 obs = (item.obs_empresa or "").strip() or None
                 fechamento_roy = (item.fechamento_roy or "").strip() or None
@@ -1059,6 +1230,8 @@ def process_dbm_companies_import_batch(
                         existing_cust.state = uf_horus
                     if grupo:
                         existing_cust.group_name = grupo
+                    if grp_id:
+                        existing_cust.default_group_id = grp_id
                     if segmento:
                         existing_cust.segment = segmento
                     if obs:
@@ -1084,6 +1257,7 @@ def process_dbm_companies_import_batch(
                         city=city_horus,
                         state=uf_horus,
                         group_name=grupo,
+                        default_group_id=grp_id,
                         segment=segmento,
                         notes_message=obs,
                         customer_account=account,
@@ -1183,6 +1357,7 @@ def process_dbm_companies_import_batch(
 
                 razao_social = nom_cli or apelido
                 grupo = (item.grupo or "").strip() or None
+                grp_id, _ = _get_or_create_customer_group(db, seller_id, grupo) if grupo else (None, False)
                 segmento = (item.segmento or "").strip() or "Editoras"
                 obs = (item.obs_empresa or "").strip() or None
                 fechamento_roy = (item.fechamento_roy or "").strip() or None
@@ -1212,6 +1387,8 @@ def process_dbm_companies_import_batch(
                         existing_cust.state = uf_horus
                     if grupo:
                         existing_cust.group_name = grupo
+                    if grp_id:
+                        existing_cust.default_group_id = grp_id
                     if segmento:
                         existing_cust.segment = segmento
                     if obs:
@@ -1237,6 +1414,7 @@ def process_dbm_companies_import_batch(
                         city=city_horus,
                         state=uf_horus,
                         group_name=grupo,
+                        default_group_id=grp_id,
                         segment=segmento,
                         notes_message=obs,
                         customer_account=account,
@@ -1471,7 +1649,7 @@ async def get_proposals_desk_customer_context(
         sql_client = None
 
     cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
-    cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+    cod_empresa, cod_filial = _resolve_horus_empresa_filial(settings, sql_client)
     branch_cnpj = sql_client.get_branch_cnpj() if sql_client else None
     effective_cnpj_destino = branch_cnpj or _sanitize_doc(company.document or "") if company else ""
 
@@ -1562,12 +1740,14 @@ async def get_proposals_desk_customer_context(
         if consigned_units == 0:
             try:
                 consig_sql_rows = sql_client.query(
-                    """
+                    f"""
                     SELECT
                         ISNULL(SUM(V.SALDO), 0) AS total_pecas,
                         ISNULL(SUM(V.SALDO * ISNULL(V.VLR_VENDIDO, V.VLR_PRECO * (1.0 - ISNULL(V.VLR_DESCONTO, 0) / 100.0))), 0) AS total_valor
                     FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
                     WHERE V.COD_CLI = %s
+                      AND V.COD_EMPRESA = {cod_empresa}
+                      AND V.COD_FILIAL = {cod_filial}
                       AND ISNULL(V.SALDO, 0) > 0
                     """,
                     (cod_cli,),
@@ -1621,6 +1801,8 @@ async def get_proposals_desk_customer_context(
                     AND NFI.COD_FILIAL = NF.COD_FILIAL
                     AND NFI.COD_EMPRESA = NF.COD_EMPRESA
                 WHERE NF.COD_CLI = %s
+                  AND NF.COD_EMPRESA = {cod_empresa}
+                  AND NF.COD_FILIAL = {cod_filial}
                   AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                   AND {clean_cfop_expr} IN ({cfop_in})
                 GROUP BY NF.COD_NF, NF.NRO_NOTA_FISCAL, NF.DAT_EMISSAO_NF
@@ -1661,6 +1843,8 @@ async def get_proposals_desk_customer_context(
                     AND INF.COD_FILIAL = NE.COD_FILIAL
                     AND INF.COD_EMPRESA = NE.COD_EMPRESA
                 WHERE NE.COD_CLI = %s
+                  AND NE.COD_EMPRESA = {cod_empresa}
+                  AND NE.COD_FILIAL = {cod_filial}
                   AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
                   AND {clean_ne_cfop} IN ({dev_cfop_in})
                 GROUP BY NE.COD_NF_ENTRADA, NE.NRO_NOTA_FISCAL, NE.DAT_EMISSAO_NF
@@ -1806,6 +1990,7 @@ def _enrich_items_with_bi_metrics(
 
     # 1. Enriquecimento direto via Horus SQL Server (alta precisão em tempo real)
     if sql_client:
+        cod_empresa, cod_filial = _resolve_horus_empresa_filial(None, sql_client)
         try:
             cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
             clean_cfop_expr = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(NFI.COD_NATUREZA, NF.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
@@ -1828,7 +2013,9 @@ def _enrich_items_with_bi_metrics(
                             AND NF.COD_FILIAL = NFI.COD_FILIAL
                             AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                         INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
-                        WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                        WHERE NF.COD_EMPRESA = {cod_empresa}
+                          AND NF.COD_FILIAL = {cod_filial}
+                          AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                           AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
                           AND {clean_cfop_expr} IN ({cfop_sales_in})
                           AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
@@ -1857,6 +2044,8 @@ def _enrich_items_with_bi_metrics(
                         FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
                         INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
                         WHERE V.COD_CLI = %s
+                          AND V.COD_EMPRESA = {cod_empresa}
+                          AND V.COD_FILIAL = {cod_filial}
                           AND ISNULL(V.SALDO, 0) > 0
                           AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
                         GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, V.COD_ITEM
@@ -1881,7 +2070,9 @@ def _enrich_items_with_bi_metrics(
                             AND NF.COD_FILIAL = NFI.COD_FILIAL
                             AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                         INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
-                        WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                        WHERE NF.COD_EMPRESA = {cod_empresa}
+                          AND NF.COD_FILIAL = {cod_filial}
+                          AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                           AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
                           AND {clean_cfop_expr} IN ({cfop_sales_in})
                           AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
@@ -2485,7 +2676,7 @@ async def get_proposals_desk_replenishment_items(
         sql_init_error = f"{type(sql_exc).__name__}: {str(sql_exc)}"
 
     cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
-    cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+    cod_empresa, cod_filial = _resolve_horus_empresa_filial(settings, sql_client)
     branch_cnpj = sql_client.get_branch_cnpj() if sql_client else None
     effective_cnpj_destino = branch_cnpj or (_sanitize_doc(company.document or "") if company else "")
     clean_cli_doc = _sanitize_doc(customer.document or "")
@@ -2647,8 +2838,10 @@ async def get_proposals_desk_replenishment_items(
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
             LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = V.COD_ITEM
-            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = V.COD_ITEM AND S.cod_filial = {cod_filial}
+            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = V.COD_ITEM AND S.cod_empresa = {cod_empresa} AND S.cod_filial = {cod_filial}
             WHERE V.COD_CLI = %s
+              AND V.COD_EMPRESA = {cod_empresa}
+              AND V.COD_FILIAL = {cod_filial}
               AND ISNULL(V.SALDO, 0) > 0
             GROUP BY
                 V.COD_ITEM,
@@ -2724,8 +2917,10 @@ async def get_proposals_desk_replenishment_items(
             LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
             LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
             LEFT JOIN ITENS_ESTPRECO_ATUAL PA WITH (NOLOCK) ON PA.COD_ITEM = NFI.COD_ITEM
-            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = NFI.COD_ITEM AND S.cod_filial = {cod_filial}
+            LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = NFI.COD_ITEM AND S.cod_empresa = {cod_empresa} AND S.cod_filial = {cod_filial}
             WHERE NF.COD_CLI = %s
+              AND NF.COD_EMPRESA = {cod_empresa}
+              AND NF.COD_FILIAL = {cod_filial}
               AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
               AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
               AND {clean_cfop_expr} IN ({cfop_sales_in})
@@ -3028,7 +3223,7 @@ async def get_proposals_desk_last_operation_items(
         sql_client = None
 
     cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client)
-    cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+    cod_empresa, cod_filial = _resolve_horus_empresa_filial(settings, sql_client)
 
     items_out: list[dict] = []
     invoice_meta = {
@@ -3064,6 +3259,8 @@ async def get_proposals_desk_last_operation_items(
                 AND NFI.COD_FILIAL = NF.COD_FILIAL
                 AND NFI.COD_EMPRESA = NF.COD_EMPRESA
             WHERE NF.COD_CLI = %s
+              AND NF.COD_EMPRESA = {cod_empresa}
+              AND NF.COD_FILIAL = {cod_filial}
               AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
               AND {clean_cfop_expr} IN ({cfop_in})
             GROUP BY NF.COD_NF, NF.COD_EMPRESA, NF.COD_FILIAL, NF.NRO_NOTA_FISCAL, NF.DAT_EMISSAO_NF
@@ -4368,7 +4565,7 @@ async def enrich_dbm_product_from_horus(
         sql_client = None
 
     if sql_client and (cod_horus or isbn_clean):
-        cod_filial = int(sql_client.cod_filial) if str(sql_client.cod_filial).isdigit() else 2
+        cod_empresa, cod_filial = _resolve_horus_empresa_filial(settings, sql_client)
         try:
             # Descobre colunas extras existentes em ITENS_ESTOQUE_GERAL (peso, largura, altura, paginas, etc.)
             cols_info = sql_client.query(
@@ -4434,7 +4631,7 @@ async def enrich_dbm_product_from_horus(
                 LEFT JOIN (
                     SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
                     FROM VW_SALDO_ITENS WITH (NOLOCK)
-                    WHERE cod_filial = {cod_filial}
+                    WHERE cod_empresa = {cod_empresa} AND cod_filial = {cod_filial}
                     GROUP BY cod_item
                 ) S ON S.cod_item = I.COD_ITEM
                 WHERE {where_clause}
@@ -4538,14 +4735,17 @@ async def enrich_dbm_product_from_horus(
                             product.launch_year = l_dt.year
                         fields_updated.append("launch_date")
 
-            # Consulta Saldo Consignado Total da Obra (VW_ITENS_CONSIGNACAO) e Giro 90d / 365d
+            # Consulta Saldo Consignado Total da Obra (VW_ITENS_CONSIGNACAO) e Giro 90d / 365d na filial configurada
             if cod_horus:
                 try:
                     c_rows = sql_client.query(
-                        """
+                        f"""
                         SELECT ISNULL(SUM(SALDO), 0) AS total_consignado
                         FROM VW_ITENS_CONSIGNACAO WITH (NOLOCK)
-                        WHERE COD_ITEM = %s AND ISNULL(SALDO, 0) > 0
+                        WHERE COD_ITEM = %s
+                          AND COD_EMPRESA = {cod_empresa}
+                          AND COD_FILIAL = {cod_filial}
+                          AND ISNULL(SALDO, 0) > 0
                         """,
                         (int(cod_horus),),
                         max_rows=1
@@ -4572,6 +4772,8 @@ async def enrich_dbm_product_from_horus(
                             AND NF.COD_FILIAL = NFI.COD_FILIAL
                             AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                         WHERE NFI.COD_ITEM = %s
+                          AND NF.COD_EMPRESA = {cod_empresa}
+                          AND NF.COD_FILIAL = {cod_filial}
                           AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                           AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
                           AND {clean_cfop_expr} IN ({cfop_sales_in})
@@ -5455,8 +5657,19 @@ def batch_enrich_dbm_products_metrics(
     sales_365_map: dict[str, int] = {}
     sales_period_map: dict[str, int] = {}
     consig_map: dict[str, int] = {}
+    stock_map: dict[str, int] = {}
+    sql_consig_ok = False
+    sql_sales_ok = False
 
-    sql_client = _build_sql_client(settings) if settings else None
+    sql_client = None
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except Exception as sql_init_err:
+        log.warning(f"[DBM Products Batch Metrics] Conexão HorusSQLClient indisponível: {sql_init_err}")
+        sql_client = None
+
+    cod_empresa, cod_filial = _resolve_horus_empresa_filial(settings, sql_client)
+
     if sql_client:
         try:
             cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
@@ -5475,12 +5688,15 @@ def batch_enrich_dbm_products_metrics(
                     AND NF.COD_FILIAL = NFI.COD_FILIAL
                     AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                 INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
-                WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                WHERE NF.COD_EMPRESA = {cod_empresa}
+                  AND NF.COD_FILIAL = {cod_filial}
+                  AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                   AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
                   AND {clean_cfop_expr} IN ({cfop_sales_in})
                 GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
             """
             s_rows = sql_client.query(sql_sales_all, (general_sales_days,), max_rows=5000)
+            sql_sales_ok = True
             for sr in (s_rows or []):
                 q365 = int(float(sr.get("qty_365") or 0))
                 qper = int(float(sr.get("qty_period") or 0))
@@ -5493,7 +5709,7 @@ def batch_enrich_dbm_products_metrics(
             log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar vendas gerais SQL: {e}")
 
         try:
-            sql_consig_all = """
+            sql_consig_all = f"""
                 SELECT
                     RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
                     RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
@@ -5501,10 +5717,13 @@ def batch_enrich_dbm_products_metrics(
                     SUM(ISNULL(V.SALDO, 0)) AS saldo_consig
                 FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
                 INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
-                WHERE ISNULL(V.SALDO, 0) > 0
+                WHERE V.COD_EMPRESA = {cod_empresa}
+                  AND V.COD_FILIAL = {cod_filial}
+                  AND ISNULL(V.SALDO, 0) > 0
                 GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, V.COD_ITEM
             """
             c_rows = sql_client.query(sql_consig_all, (), max_rows=5000)
+            sql_consig_ok = True
             for cr in (c_rows or []):
                 cs_v = int(float(cr.get("saldo_consig") or 0))
                 for rk in (cr.get("cod_barra"), cr.get("cod_isbn"), cr.get("cod_item")):
@@ -5513,6 +5732,29 @@ def batch_enrich_dbm_products_metrics(
                         consig_map[k] = max(consig_map.get(k, 0), cs_v)
         except Exception as e:
             log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar consignado geral SQL: {e}")
+
+        try:
+            sql_stock_all = f"""
+                SELECT
+                    RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                    RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                    CAST(S.cod_item AS VARCHAR) AS cod_item,
+                    SUM(ISNULL(S.saldo_disponivel, 0)) AS saldo_disp
+                FROM VW_SALDO_ITENS S WITH (NOLOCK)
+                INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = S.cod_item
+                WHERE S.cod_empresa = {cod_empresa}
+                  AND S.cod_filial = {cod_filial}
+                GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, S.cod_item
+            """
+            st_rows = sql_client.query(sql_stock_all, (), max_rows=5000)
+            for strw in (st_rows or []):
+                st_v = max(0, int(float(strw.get("saldo_disp") or 0)))
+                for rk in (strw.get("cod_barra"), strw.get("cod_isbn"), strw.get("cod_item")):
+                    k = _clean_key(rk)
+                    if k:
+                        stock_map[k] = max(stock_map.get(k, 0), st_v)
+        except Exception as e:
+            log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar saldo disponivel SQL: {e}")
 
     # Complemento via HorusBISale local
     try:
@@ -5568,21 +5810,35 @@ def batch_enrich_dbm_products_metrics(
             if k in consig_map:
                 consig = max(consig, consig_map[k])
 
-        # Mantém valores já gravados no banco caso nenhuma fonte tenha retornado maior que zero e já exista valor salvo
-        final_s365 = s365 if (sales_365_map or s365 > 0) else int(p.sales_365 or 0)
-        final_sper = sper if (sales_period_map or sper > 0) else int(p.sales_90 or 0)
-        final_consig = consig if (consig_map or consig > 0) else int(p.consignment_stock or 0)
+        # Se a consulta SQL rodou com sucesso, usa o valor exato da filial no Horus; senão mantém fallback local
+        final_s365 = s365 if (sql_sales_ok or sales_365_map or s365 > 0) else int(p.sales_365 or 0)
+        final_sper = sper if (sql_sales_ok or sales_period_map or sper > 0) else int(p.sales_90 or 0)
+        final_consig = consig if (sql_consig_ok or consig_map or consig > 0) else int(p.consignment_stock or 0)
 
-        if p.sales_365 != final_s365 or p.sales_90 != final_sper or p.consignment_stock != final_consig:
+        new_stock = None
+        for k in keys_to_try:
+            if k in stock_map:
+                new_stock = stock_map[k]
+                break
+
+        if (
+            p.sales_365 != final_s365
+            or p.sales_90 != final_sper
+            or p.consignment_stock != final_consig
+            or (new_stock is not None and p.stock_quantity != new_stock)
+        ):
             p.sales_365 = final_s365
             p.sales_90 = final_sper
             p.consignment_stock = final_consig
+            if new_stock is not None:
+                p.stock_quantity = new_stock
             dirty = True
 
         metrics_out[str(p.id)] = {
             "consignment_stock": final_consig,
             "sales_365": final_s365,
             "sales_90": final_sper,
+            "stock_quantity": new_stock if new_stock is not None else int(p.stock_quantity or 0),
         }
 
     if dirty:

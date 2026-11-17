@@ -116,7 +116,7 @@ export default function DbmCompaniesSearchPage() {
 
   // Estados de Importação Inteligente de Planilha Excel
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [importMode, setImportMode] = useState<'cliente' | 'fornecedor' | 'apelido_only'>('cliente');
+  const [importMode, setImportMode] = useState<'cliente' | 'fornecedor' | 'apelido_only' | 'grupo_segmento'>('cliente');
   const [importStep, setImportStep] = useState<'upload' | 'preview' | 'processing' | 'done'>('upload');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [parsingLoading, setParsingLoading] = useState(false);
@@ -526,7 +526,7 @@ export default function DbmCompaniesSearchPage() {
     setImportLogs([]);
 
     const token = getToken();
-    const chunkSize = importMode === 'apelido_only' ? 50 : 10;
+    const chunkSize = (importMode === 'apelido_only' || importMode === 'grupo_segmento') ? 50 : 10;
     const totalItems = parsedRows.length;
     let localProcessed = 0;
     let localCreated = 0;
@@ -766,6 +766,7 @@ export default function DbmCompaniesSearchPage() {
                     <th className="py-2.5 px-3 w-40">CNPJ / CPF</th>
                     <th className="py-2.5 px-3">Fantasia (apelido)</th>
                     <th className="py-2.5 px-3">Razão Social</th>
+                    <th className="py-2.5 px-3 w-44">Grupo / Segmento</th>
                     <th className="py-2.5 px-3 w-36">Cidade / UF</th>
                     <th className="py-2.5 px-3 w-32 text-right">Mín. Faturamento</th>
                     <th className="py-2.5 px-3 w-36 text-center">Cód. Horus</th>
@@ -775,14 +776,14 @@ export default function DbmCompaniesSearchPage() {
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 font-mono text-xs font-bold">
                   {loading ? (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-slate-400">
+                      <td colSpan={9} className="py-12 text-center text-slate-400">
                         <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-indigo-500" />
                         Carregando empresas da base Cronuz...
                       </td>
                     </tr>
                   ) : companies.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="py-12 text-center text-slate-400">
+                      <td colSpan={9} className="py-12 text-center text-slate-400">
                         <Building2 className="h-8 w-8 mx-auto mb-2 opacity-30" />
                         Nenhuma empresa localizada com os filtros selecionados.
                       </td>
@@ -814,6 +815,22 @@ export default function DbmCompaniesSearchPage() {
                           </td>
                           <td className="py-2 px-3 font-sans font-bold text-slate-700 dark:text-slate-300 truncate max-w-xs text-[13px]">
                             {c.razao_social || '—'}
+                          </td>
+                          <td className="py-2 px-3 font-sans text-xs">
+                            <div className="flex flex-col gap-0.5">
+                              {c.group_name ? (
+                                <span className="font-extrabold text-indigo-700 dark:text-indigo-300 truncate max-w-[160px]" title={c.group_name}>
+                                  {c.group_name}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 font-normal text-[11px]">Sem grupo</span>
+                              )}
+                              {c.segment && (
+                                <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 truncate max-w-[160px]">
+                                  {c.segment}
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="py-2 px-3 font-sans font-bold text-slate-700 dark:text-slate-300 text-xs">
                             {c.city ? `${c.city} - ${c.state || ''}` : c.state || '—'}
@@ -1166,29 +1183,47 @@ export default function DbmCompaniesSearchPage() {
                   </label>
                   <input
                     type="text"
+                    list="dbm-groups-datalist"
                     placeholder="Ex: Grupo Leitura..."
                     value={formData.group_name || ''}
                     onChange={(e) => setFormData({ ...formData, group_name: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 font-bold text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                   />
+                  <datalist id="dbm-groups-datalist">
+                    {Array.from(new Set(companies.map(c => c.group_name).filter(Boolean))).map((g) => (
+                      <option key={g} value={g!} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div className="lg:col-span-2">
                   <label className="block text-[11px] font-bold text-slate-600 dark:text-slate-300 mb-1">
                     Segmento:
                   </label>
-                  <select
-                    value={formData.segment || 'Editoras'}
+                  <input
+                    type="text"
+                    list="dbm-segments-datalist"
+                    placeholder="Ex: Livrarias, Editoras..."
+                    value={formData.segment || ''}
                     onChange={(e) => setFormData({ ...formData, segment: e.target.value })}
-                    className="w-full rounded-xl border border-slate-200 bg-white px-2.5 py-2 text-slate-900 font-medium focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                  >
-                    <option value="Editoras">Editoras</option>
-                    <option value="Livrarias">Livrarias</option>
-                    <option value="Distribuidores">Distribuidores</option>
-                    <option value="Gráficas">Gráficas</option>
-                    <option value="Escolas">Escolas</option>
-                    <option value="Outros">Outros</option>
-                  </select>
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 font-bold focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                  />
+                  <datalist id="dbm-segments-datalist">
+                    {Array.from(
+                      new Set([
+                        'Editoras',
+                        'Livrarias',
+                        'Distribuidores',
+                        'Gráficas',
+                        'Escolas',
+                        'Papelarias',
+                        'Outros',
+                        ...companies.map(c => c.segment).filter(Boolean) as string[],
+                      ])
+                    ).map((seg) => (
+                      <option key={seg} value={seg} />
+                    ))}
+                  </datalist>
                 </div>
 
                 <div className="lg:col-span-2">
@@ -1300,12 +1335,12 @@ export default function DbmCompaniesSearchPage() {
                 {/* ── PASSO 1: UPLOAD ────────────────────────────────────────── */}
                 {importStep === 'upload' && (
                   <div className="space-y-4">
-                    {/* Seleção do Modo de Importação: Cliente, Fornecedor ou Só Apelido */}
+                    {/* Seleção do Modo de Importação: Cliente, Fornecedor, Só Apelido ou Grupo e Segmento */}
                     <div>
                       <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 mb-2">
-                        Como deseja realizar a busca e o vínculo no Horus ERP?
+                        Como deseja realizar a busca e a atualização no Horus ERP / DBM?
                       </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         {/* Opção Cliente */}
                         <div
                           onClick={() => setImportMode('cliente')}
@@ -1391,11 +1426,42 @@ export default function DbmCompaniesSearchPage() {
                               </span>
                             </div>
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300">
-                              Rápido
+                              Cód + Apelido
                             </span>
                           </div>
                           <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
                             Informe apenas o <strong>Código do Horus</strong> e o <strong>Apelido</strong> na planilha para atualizar só essa informação.
+                          </p>
+                        </div>
+
+                        {/* Opção Atualizar Grupo e Segmento */}
+                        <div
+                          onClick={() => setImportMode('grupo_segmento')}
+                          className={`cursor-pointer rounded-xl border p-3 transition-all flex flex-col justify-between ${
+                            importMode === 'grupo_segmento'
+                              ? 'border-purple-600 bg-purple-50/70 dark:border-purple-500 dark:bg-purple-950/30 ring-2 ring-purple-500/20'
+                              : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-2 mb-1.5">
+                            <div className="flex items-center gap-2">
+                              <div className={`p-1.5 rounded-lg ${
+                                importMode === 'grupo_segmento'
+                                  ? 'bg-purple-600 text-white dark:bg-purple-500'
+                                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                              }`}>
+                                <Building2 className="h-4 w-4" />
+                              </div>
+                              <span className="text-xs font-bold text-slate-900 dark:text-white">
+                                Atualizar Grupo e Segmento
+                              </span>
+                            </div>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300">
+                              Cria Grupo
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug">
+                            Informe <strong>Cód. Horus</strong>, <strong>Grupo</strong> e <strong>Segmento</strong>. Se o grupo não existir no Cronuz, ele é criado automaticamente.
                           </p>
                         </div>
                       </div>
@@ -1404,14 +1470,20 @@ export default function DbmCompaniesSearchPage() {
                     <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-3.5 text-xs text-indigo-950 dark:border-indigo-900/40 dark:bg-indigo-950/20 dark:text-indigo-300 space-y-1.5">
                       <div className="flex items-center gap-2 font-bold text-indigo-700 dark:text-indigo-400">
                         <Database className="h-4 w-4" />
-                        {importMode === 'apelido_only'
-                          ? 'Modo Atualizar Apenas Apelido (Cód. Horus + Apelido):'
-                          : importMode === 'fornecedor'
-                            ? 'Modo Fornecedor (Filial ERP):'
-                            : 'Modo Cliente:'}
+                        {importMode === 'grupo_segmento'
+                          ? 'Modo Atualizar Grupo e Segmento (Cód. Horus + Grupo + Segmento):'
+                          : importMode === 'apelido_only'
+                            ? 'Modo Atualizar Apenas Apelido (Cód. Horus + Apelido):'
+                            : importMode === 'fornecedor'
+                              ? 'Modo Fornecedor (Filial ERP):'
+                              : 'Modo Cliente:'}
                       </div>
                       <p className="text-[11px] leading-relaxed">
-                        {importMode === 'apelido_only' ? (
+                        {importMode === 'grupo_segmento' ? (
+                          <>
+                            Envie uma planilha com as colunas <strong>codigo_horus</strong>, <strong>grupo</strong> e <strong>segmento</strong>. O sistema localiza a empresa pelo Código do Horus, <strong>cria automaticamente o Grupo no Cronuz DBM caso ainda não exista</strong>, e atualiza exclusivamente o Grupo e o Segmento da empresa.
+                          </>
+                        ) : importMode === 'apelido_only' ? (
                           <>
                             Basta uma planilha com 2 colunas: <strong>codigo_horus</strong> e <strong>apelido</strong>. O sistema localizará cada empresa pelo Código do Horus e atualizará <strong>exclusivamente o Apelido (Nome Fantasia)</strong>, mantendo Razão Social, CNPJ, Grupo, Segmento e demais dados intactos.
                           </>
@@ -1437,9 +1509,11 @@ export default function DbmCompaniesSearchPage() {
                         className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 hover:underline"
                       >
                         <Download className="h-3.5 w-3.5" />
-                        {importMode === 'apelido_only'
-                          ? 'Baixar Modelo Cód. Horus + Apelido (.xlsx)'
-                          : 'Baixar Modelo (.xlsx)'}
+                        {importMode === 'grupo_segmento'
+                          ? 'Baixar Modelo Cód. Horus + Grupo + Segmento (.xlsx)'
+                          : importMode === 'apelido_only'
+                            ? 'Baixar Modelo Cód. Horus + Apelido (.xlsx)'
+                            : 'Baixar Modelo (.xlsx)'}
                       </button>
                     </div>
 
@@ -1517,7 +1591,7 @@ export default function DbmCompaniesSearchPage() {
                       <div className="col-span-2 sm:col-span-1 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/60">
                         <div className="text-[10px] font-bold uppercase text-slate-500">Lotes de Envio</div>
                         <div className="text-lg font-black text-indigo-600 dark:text-indigo-400">
-                          {Math.ceil(parsedRows.length / (importMode === 'apelido_only' ? 50 : 10))} ({importMode === 'apelido_only' ? '50' : '10'} por vez)
+                          {Math.ceil(parsedRows.length / (importMode === 'apelido_only' || importMode === 'grupo_segmento' ? 50 : 10))} ({importMode === 'apelido_only' || importMode === 'grupo_segmento' ? '50' : '10'} por vez)
                         </div>
                       </div>
                     </div>
@@ -1545,13 +1619,20 @@ export default function DbmCompaniesSearchPage() {
                         <span>Amostra das Primeiras Linhas:</span>
                         <div className="flex items-center gap-2">
                           <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                            importMode === 'apelido_only'
-                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                              : importMode === 'fornecedor'
-                                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
+                            importMode === 'grupo_segmento'
+                              ? 'bg-purple-100 text-purple-800 dark:bg-purple-950/60 dark:text-purple-300'
+                              : importMode === 'apelido_only'
+                                ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                                : importMode === 'fornecedor'
+                                  ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+                                  : 'bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300'
                           }`}>
-                            {importMode === 'apelido_only' ? (
+                            {importMode === 'grupo_segmento' ? (
+                              <>
+                                <Building2 className="h-3 w-3" />
+                                Modo: Atualizar Grupo e Segmento
+                              </>
+                            ) : importMode === 'apelido_only' ? (
                               <>
                                 <Edit3 className="h-3 w-3" />
                                 Modo: Atualizar Só Apelido (Cód. Horus + Apelido)
@@ -1579,7 +1660,9 @@ export default function DbmCompaniesSearchPage() {
                               <th className="px-3 py-2">
                                 {importMode === 'fornecedor' ? 'Cód. Fornecedor' : 'Cód. Horus'}
                               </th>
-                              <th className="px-3 py-2">Fantasia (Apelido)</th>
+                              {importMode !== 'grupo_segmento' && (
+                                <th className="px-3 py-2">Fantasia (Apelido)</th>
+                              )}
                               {importMode !== 'apelido_only' && (
                                 <>
                                   <th className="px-3 py-2">Grupo</th>
@@ -1593,11 +1676,13 @@ export default function DbmCompaniesSearchPage() {
                               <tr key={i} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30">
                                 <td className="px-3 py-2 font-mono text-[11px] text-slate-400">#{r.row_index}</td>
                                 <td className="px-3 py-2 font-bold text-indigo-600 dark:text-indigo-400">{r.codigo_horus || '-'}</td>
-                                <td className="px-3 py-2 text-slate-900 dark:text-white font-bold">{r.apelido || '-'}</td>
+                                {importMode !== 'grupo_segmento' && (
+                                  <td className="px-3 py-2 text-slate-900 dark:text-white font-bold">{r.apelido || '-'}</td>
+                                )}
                                 {importMode !== 'apelido_only' && (
                                   <>
-                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400">{r.grupo || '-'}</td>
-                                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400">{r.segmento || '-'}</td>
+                                    <td className="px-3 py-2 text-slate-800 dark:text-slate-200 font-semibold">{r.grupo || '-'}</td>
+                                    <td className="px-3 py-2 text-slate-700 dark:text-slate-300 font-medium">{r.segmento || '-'}</td>
                                   </>
                                 )}
                               </tr>
