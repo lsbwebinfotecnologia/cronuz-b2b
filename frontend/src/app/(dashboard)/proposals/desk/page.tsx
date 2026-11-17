@@ -540,8 +540,13 @@ export default function ProposalsDeskPage() {
   const [items, setItems] = useState<DbmItem[]>([]);
   const [proposalId, setProposalId] = useState<number | null>(null);
   const [proposalLocalId, setProposalLocalId] = useState<number | null>(null);
+  const [proposalSubject, setProposalSubject] = useState<string>('');
   const [isSavingProposal, setIsSavingProposal] = useState(false);
   const urlInitializedRef = useRef(false);
+  const itemsRef = useRef<DbmItem[]>([]);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   // ── 8. Controles de Layout e Navegação Estilo Access ───────────────────────
   const [isGridMaximized, setIsGridMaximized] = useState(false);
@@ -592,6 +597,53 @@ export default function ProposalsDeskPage() {
     };
   }, []);
 
+  const normalizeSavedDbmItem = useCallback((raw: any, fallbackDisc: number): DbmItem => {
+    const tabCat: TabCategory = (raw.tabCategory as TabCategory) || 'pedido';
+    const originCat: TabCategory = (raw.originCategory as TabCategory) || tabCat;
+    const stock = Math.max(0, Number(raw.horusStock ?? raw.stockAvailable ?? 0));
+    const reqQty = Math.max(0, Number(raw.requestedQty ?? raw.requested_qty ?? raw.quantity ?? 0));
+    const rawApp = raw.approvedQty ?? raw.approved_qty;
+    const appQty = rawApp !== undefined && rawApp !== null ? Math.max(0, Number(rawApp)) : Math.min(reqQty, stock);
+    const disc = Number(raw.discountPercent ?? raw.discountPct ?? fallbackDisc);
+    const sit: DbmItem['situation'] = stock <= 0
+      ? 'SEM_ESTOQUE'
+      : (reqQty > 0 && appQty < reqQty)
+        ? 'PARCIAL'
+        : (raw.situation as DbmItem['situation']) || 'DISPONIVEL';
+
+    return {
+      id: String(raw.id || `${tabCat}-${raw.isbn}-${Math.random().toString(36).slice(2, 7)}`),
+      isbn: String(raw.isbn || '').trim(),
+      sku: String(raw.sku || raw.isbn || '').trim(),
+      title: String(raw.title || `Item ${raw.isbn}`),
+      publisher: String(raw.publisher || 'Editora'),
+      subject: String(raw.subject || 'Catálogo'),
+      coverPrice: Number(raw.coverPrice ?? raw.cover_price ?? 0),
+      discountPercent: disc,
+      requestedQty: reqQty,
+      approvedQty: appQty,
+      consignedQty: Number(raw.consignedQty ?? raw.consignedBalance ?? 0),
+      clientSalesX: Number(raw.clientSalesX ?? raw.clientSalesPeriod ?? 0),
+      horusStock: stock,
+      boxUnits: Number(raw.boxUnits ?? raw.boxQty ?? 12),
+      generalSales365: Number(raw.generalSales365 ?? raw.clientSales365d ?? 0),
+      generalSalesX: Number(raw.generalSalesX ?? raw.generalSalesPeriod ?? 0),
+      situation: sit,
+      tabCategory: tabCat,
+      originCategory: originCat,
+      isAddedToOrder: tabCat === 'pedido' ? true : (raw.isAddedToOrder !== undefined ? Boolean(raw.isAddedToOrder) : reqQty > 0),
+      lastSaleQty: raw.lastSaleQty ?? (raw.lastOperationQty ? Number(raw.lastOperationQty) : undefined),
+      lastSaleDate: raw.lastSaleDate || undefined,
+      replenishmentReason: raw.replenishmentReason || undefined,
+      notes: raw.notes || undefined,
+      launchDate: raw.launchDate || null,
+      launchMonthYear: raw.launchMonthYear || null,
+      daysToExpire: raw.daysToExpire ?? null,
+      launchStatus: raw.launchStatus || null,
+      launchLabel: raw.launchLabel || null,
+    };
+  }, []);
+
   // Carrega dados híbridos do cliente (4 cards + Novidades e Fundo) ao selecionar no Autocomplete
   // Se custId for vazio, carrega apenas Novidades e Fundo de Catálogo gerais do Seller
   const loadCustomerDeskData = useCallback(async (custId?: string | number, fallbackCustObj?: any, savedProposalItems?: DbmItem[]) => {
@@ -602,6 +654,9 @@ export default function ProposalsDeskPage() {
     setReplenishmentMeta(null);
 
     let resolvedDisc = globalDiscountInput;
+    let baseSavedItems: DbmItem[] = savedProposalItems
+      ? savedProposalItems.map(it => normalizeSavedDbmItem(it, resolvedDisc))
+      : itemsRef.current.filter(it => it.tabCategory === 'pedido');
 
     if (!custId) {
       setCustomer(null);
@@ -663,6 +718,33 @@ export default function ProposalsDeskPage() {
       } finally {
         setIsLoadingCustomerContext(false);
       }
+
+      // Se já houver itens na aba Pedidos, enriquece saldo, consignado e cli(Xd) para o cliente selecionado
+      if (baseSavedItems.length > 0) {
+        try {
+          const resEnrich = await fetch(`${API_URL}/dbm/proposals-desk/enrich-items`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${getToken()}`
+            },
+            body: JSON.stringify({
+              customer_id: Number(custId),
+              client_sales_days: clientSalesDays,
+              general_sales_days: generalSalesDays,
+              items: baseSavedItems,
+            })
+          });
+          if (resEnrich.ok) {
+            const dataEnrich = await resEnrich.json();
+            if (Array.isArray(dataEnrich.items)) {
+              baseSavedItems = dataEnrich.items.map((it: any) => normalizeSavedDbmItem(it, resolvedDisc));
+            }
+          }
+        } catch (err) {
+          console.error('Erro ao enriquecer itens do pedido:', err);
+        }
+      }
     }
 
     try {
@@ -674,10 +756,10 @@ export default function ProposalsDeskPage() {
       if (resCat.ok) {
         const dataCat = await resCat.json();
         const savedOrderIsbns = new Set(
-          (savedProposalItems || []).filter(it => it.tabCategory === 'pedido').map(it => it.isbn)
+          (baseSavedItems || []).filter(it => it.tabCategory === 'pedido').map(it => it.isbn)
         );
         const savedByIsbn = new Map<string, DbmItem>();
-        for (const sItem of (savedProposalItems || [])) {
+        for (const sItem of (baseSavedItems || [])) {
           if (sItem.isbn && sItem.tabCategory !== 'pedido') {
             savedByIsbn.set(sItem.isbn, sItem);
           }
@@ -726,7 +808,7 @@ export default function ProposalsDeskPage() {
           }
         }
 
-        const savedPedidoOnly = (savedProposalItems || []).filter(it => it.tabCategory === 'pedido');
+        const savedPedidoOnly = (baseSavedItems || []).filter(it => it.tabCategory === 'pedido');
         const remainingSavedOther = Array.from(savedByIsbn.values());
         setItems([...savedPedidoOnly, ...remainingSavedOther, ...novList, ...fndList]);
       } else {
@@ -738,22 +820,23 @@ export default function ProposalsDeskPage() {
           // ignore
         }
         toast.error(`Falha ao carregar abas de catálogo (${errDetail})`);
-        setItems(savedProposalItems || []);
+        setItems(baseSavedItems || []);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error('Erro ao carregar abas de catálogo:', e);
       toast.error(`Erro ao carregar abas de catálogo (${msg})`);
-      setItems(savedProposalItems || []);
+      setItems(baseSavedItems || []);
     } finally {
       setIsLoadingCatalog(false);
       setTimeout(() => {
         manualSearchInputRef.current?.focus();
       }, 150);
     }
-  }, [clientSalesDays, generalSalesDays, globalDiscountInput, hideEbooksInSearch, hideOutOfPrintInSearch, mapApiItemToDbmItem]);
+  }, [clientSalesDays, generalSalesDays, globalDiscountInput, hideEbooksInSearch, hideOutOfPrintInSearch, mapApiItemToDbmItem, normalizeSavedDbmItem]);
 
   // Inicializa cliente ou proposta salva via parâmetros da URL (?customer_id= ou ?proposal_id=)
+  // Quando abre uma proposta já salva (?proposal_id=), restaura a cópia salva no Cronuz SEM recalcular rotinas pesadas!
   useEffect(() => {
     if (urlInitializedRef.current || typeof window === 'undefined') return;
     urlInitializedRef.current = true;
@@ -772,16 +855,113 @@ export default function ProposalsDeskPage() {
             const p = await res.json();
             setProposalId(p.id);
             setProposalLocalId(p.local_id || p.id);
+            setProposalSubject(p.subject || p.desk_snapshot?.subject || '');
             if (p.status_id) {
               setCurrentStatusId(p.status_id);
             }
-            const restoredItems: DbmItem[] = Array.isArray(p.items) ? p.items : [];
+            const savedDisc = Number(p.global_discount || p.desk_snapshot?.globalDiscountInput || globalDiscountInput || 35);
+            if (savedDisc > 0) {
+              setGlobalDiscountInput(savedDisc);
+              setManualDiscount(savedDisc);
+            }
             if (p.customer_id) {
               setSelectedCustomerId(String(p.customer_id));
-              await loadCustomerDeskData(p.customer_id, undefined, restoredItems);
-              if (restoredItems.length > 0) {
-                setActiveTab('consolidado');
+            }
+
+            const restoredOrderItems: DbmItem[] = Array.isArray(p.items)
+              ? p.items.map((it: any) => normalizeSavedDbmItem(it, savedDisc))
+              : [];
+
+            // Abre na aba Pedidos preenchida com os itens do pedido
+            setActiveTab('pedido');
+
+            // Se possui desk_snapshot salvo no Cronuz, restaura instantaneamente sem recalcular rotinas Hórus
+            if (p.desk_snapshot && typeof p.desk_snapshot === 'object') {
+              const snap = p.desk_snapshot;
+              if (snap.customer) {
+                setCustomer(snap.customer);
+              } else if (p.customer_id) {
+                setCustomer({
+                  id: p.customer_id,
+                  name: p.customer_name || 'Cliente',
+                  corporate_name: p.customer_corporate_name || p.customer_name || 'Cliente',
+                  document: p.customer_document || '—',
+                  nickname: p.customer_name || 'Cliente',
+                  minOrderValue: Number(p.min_order_value || 0),
+                  creditLimit: 0,
+                  openDebts: 0,
+                  overdueDebt: 0,
+                  consignedTotalUnits: 0,
+                  consignedTotalValue: 0,
+                  paymentCondition: '30 DDL',
+                  commercialPolicy: 'Tabela Comercial Padrão',
+                  city: '—',
+                  state: '—',
+                  horus_cod_cli: p.customer_horus_cod_cli || '—',
+                  observations: p.notes || ''
+                });
               }
+              if (snap.operationsMetrics) {
+                setOperationsMetrics(snap.operationsMetrics);
+              }
+              if (snap.replenishmentMeta) {
+                setReplenishmentMeta(snap.replenishmentMeta);
+              }
+              if (snap.lastOpInvoiceMeta) {
+                setLastOpInvoiceMeta(snap.lastOpInvoiceMeta);
+              }
+              if (snap.lastOpTypeSelected) {
+                setLastOpTypeSelected(snap.lastOpTypeSelected);
+              }
+              if (typeof snap.clientSalesDays === 'number') setClientSalesDays(snap.clientSalesDays);
+              if (typeof snap.generalSalesDays === 'number') setGeneralSalesDays(snap.generalSalesDays);
+              if (typeof snap.replenishmentSalesDays === 'number') setReplenishmentSalesDays(snap.replenishmentSalesDays);
+
+              const snapAll: DbmItem[] = Array.isArray(snap.allItems)
+                ? snap.allItems.map((it: any) => normalizeSavedDbmItem(it, savedDisc))
+                : [];
+              if (snapAll.length > 0) {
+                // Garante que qualquer item salvo em p.items esteja sincronizado
+                const orderByIsbn = new Map<string, DbmItem>();
+                for (const oIt of restoredOrderItems) {
+                  if (oIt.isbn) orderByIsbn.set(oIt.isbn, oIt);
+                }
+                const mergedAll = snapAll.map(sIt => {
+                  const match = sIt.isbn ? orderByIsbn.get(sIt.isbn) : undefined;
+                  if (match) {
+                    orderByIsbn.delete(sIt.isbn);
+                    return match;
+                  }
+                  return sIt;
+                });
+                setItems([...Array.from(orderByIsbn.values()), ...mergedAll]);
+              } else {
+                setItems(restoredOrderItems);
+              }
+            } else {
+              // Proposta legada sem desk_snapshot: exibe imediatamente os itens salvos na aba Pedidos
+              if (p.customer_id) {
+                setCustomer({
+                  id: p.customer_id,
+                  name: p.customer_name || 'Cliente',
+                  corporate_name: p.customer_corporate_name || p.customer_name || 'Cliente',
+                  document: p.customer_document || '—',
+                  nickname: p.customer_name || 'Cliente',
+                  minOrderValue: Number(p.min_order_value || 0),
+                  creditLimit: 0,
+                  openDebts: 0,
+                  overdueDebt: 0,
+                  consignedTotalUnits: 0,
+                  consignedTotalValue: 0,
+                  paymentCondition: '30 DDL',
+                  commercialPolicy: 'Tabela Comercial Padrão',
+                  city: '—',
+                  state: '—',
+                  horus_cod_cli: p.customer_horus_cod_cli || '—',
+                  observations: p.notes || ''
+                });
+              }
+              setItems(restoredOrderItems);
             }
           }
         } catch (err) {
@@ -794,7 +974,7 @@ export default function ProposalsDeskPage() {
     } else {
       loadCustomerDeskData('');
     }
-  }, [loadCustomerDeskData]);
+  }, [loadCustomerDeskData, normalizeSavedDbmItem]);
 
   // ── 4.3 Busca Sob Demanda da Aba REPOSIÇÃO (Consignado API + Histórico de Vendas nos Últimos X Dias) ─
   const handleFetchReplenishment = async () => {
@@ -1159,13 +1339,13 @@ export default function ProposalsDeskPage() {
       }
     }
 
-    // Consolidado reúne todos os itens do Pedido + todos os itens adicionados das outras abas
+  // Consolidado reúne todos os itens do Pedido + todos os itens adicionados das outras abas
     const allExclusive = [
       ...pedidoList,
+      ...ultimoAcertoList,
       ...reposicaoList,
       ...novidadesList,
       ...fundoList,
-      ...ultimoAcertoList,
     ];
 
     const consolidadoList = allExclusive.filter(
@@ -1174,10 +1354,10 @@ export default function ProposalsDeskPage() {
 
     return {
       pedido: pedidoList,
+      ultimo_acerto: ultimoAcertoList,
       reposicao: reposicaoList,
       novidades: novidadesList,
       fundo: fundoList,
-      ultimo_acerto: ultimoAcertoList,
       consolidado: consolidadoList,
     };
   }, [items]);
@@ -1745,6 +1925,7 @@ export default function ProposalsDeskPage() {
   const handleNewProposalInDesk = () => {
     setProposalId(null);
     setProposalLocalId(null);
+    setProposalSubject('');
     setSelectedCustomerId('');
     setCustomer(null);
     setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
@@ -1776,12 +1957,30 @@ export default function ProposalsDeskPage() {
     const statusToSave = overrideStatus || activeStatus;
     setIsSavingProposal(true);
     try {
+      const cleanSubj = proposalSubject.trim();
+      const deskSnapshot = {
+        customer,
+        operationsMetrics,
+        allItems: items,
+        replenishmentMeta,
+        lastOpInvoiceMeta,
+        lastOpTypeSelected,
+        clientSalesDays,
+        generalSalesDays,
+        replenishmentSalesDays,
+        globalDiscountInput,
+        subject: cleanSubj,
+        savedAt: new Date().toISOString(),
+      };
+
       const payload = {
         id: proposalId || undefined,
         customer_id: Number(customer.id),
         customer_name: customer.name || customer.corporate_name || 'Cliente',
+        customer_corporate_name: customer.corporate_name || customer.name || 'Cliente',
         customer_document: customer.document !== '—' ? customer.document : null,
-        horus_cod_cli: customer.horus_cod_cli && customer.horus_cod_cli !== '—' ? Number(customer.horus_cod_cli) : null,
+        customer_horus_cod_cli: customer.horus_cod_cli && customer.horus_cod_cli !== '—' ? Number(customer.horus_cod_cli) : null,
+        subject: cleanSubj || null,
         status_id: statusToSave.id,
         status_name: statusToSave.name,
         status_phase: statusToSave.phase,
@@ -1794,6 +1993,7 @@ export default function ProposalsDeskPage() {
         global_discount: Number(globalDiscountInput || 0),
         min_order_value: Number(summary.minOrder || 0),
         items: proposalItems,
+        desk_snapshot: deskSnapshot,
         notes: customer.observations || null,
       };
 
@@ -1984,78 +2184,125 @@ export default function ProposalsDeskPage() {
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* 2. BARRA DE DADOS DO CLIENTE & MINI CARDS DE HISTÓRICO EXPANDIDOS   */}
+      {/* 2. BARRA DE DADOS DO CLIENTE, CAMPO ASSUNTO & MINI CARDS EXPANDIDOS */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {!customer ? (
-        <div className="bg-white dark:bg-slate-900 px-4 py-3.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0">
-              {isLoadingCustomerContext ? <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" /> : <Search className="h-4 w-4" />}
+        <div className="bg-white dark:bg-slate-900 px-4 py-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 shadow-2xs space-y-2.5">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0">
+                {isLoadingCustomerContext ? <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" /> : <Search className="h-4 w-4" />}
+              </div>
+              <div>
+                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                  {isLoadingCustomerContext ? 'Carregando dados híbridos do cliente (Hórus + Cronuz)...' : 'Selecione um cliente acima para iniciar a análise comercial'}
+                </h2>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Assim que o cliente for selecionado, os cards de Última Remessa, Venda, Acerto, Devolução e as abas serão preenchidos.
+                </p>
+              </div>
             </div>
-            <div>
-              <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                {isLoadingCustomerContext ? 'Carregando dados híbridos do cliente (Hórus + Cronuz)...' : 'Selecione um cliente acima para iniciar a análise comercial'}
-              </h2>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Assim que o cliente for selecionado, os cards de Última Remessa, Venda, Acerto, Devolução e as abas de catálogo serão preenchidos automaticamente.
-              </p>
-            </div>
+            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+              Aguardando seleção de cliente
+            </span>
           </div>
-          <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
-            Aguardando seleção de cliente
-          </span>
+
+          {/* Campo Assunto abaixo da identificação do cliente */}
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
+            <label htmlFor="proposal-subject-empty" className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 shrink-0">
+              Assunto:
+            </label>
+            <input
+              id="proposal-subject-empty"
+              type="text"
+              value={proposalSubject}
+              onChange={(e) => setProposalSubject(e.target.value)}
+              placeholder="Escreva o assunto / identificação deste orçamento (pode ser pesquisado depois na lista de propostas)..."
+              className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 text-xs text-slate-800 dark:text-slate-100 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none"
+            />
+          </div>
         </div>
       ) : (
         <div className="space-y-2">
-          {/* Faixa do Cliente */}
-          <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-y-2 text-xs">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-              <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
-                <span className="text-[10px] uppercase font-bold text-slate-400">Cliente:</span>
-                <span className="truncate max-w-[200px] sm:max-w-xs">{customer.corporate_name || customer.name}</span>
-                {isLoadingCustomerContext && (
-                  <RefreshCw className="h-3 w-3 animate-spin text-indigo-600 ml-1" />
+          {/* Faixa do Cliente + Campo Assunto logo abaixo */}
+          <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-y-2">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Cliente:</span>
+                  <span className="truncate max-w-[200px] sm:max-w-xs">{customer.corporate_name || customer.name}</span>
+                  {isLoadingCustomerContext && (
+                    <RefreshCw className="h-3 w-3 animate-spin text-indigo-600 ml-1" />
+                  )}
+                </div>
+
+                <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">CNPJ:</span>
+                  <span>{customer.document}</span>
+                </div>
+
+                <div className="flex items-center gap-1 text-[11px] text-indigo-700 dark:text-indigo-400 font-medium">
+                  <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">Apelido:</span>
+                  <span className="truncate max-w-[150px]">{customer.nickname || customer.name}</span>
+                </div>
+
+                <div className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800">
+                  <Scale className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+                  <span className="text-[10px] font-bold uppercase text-indigo-900 dark:text-indigo-300">Ped. Mín:</span>
+                  <span className="font-bold text-indigo-950 dark:text-white font-mono">
+                    {customer.minOrderValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                  <span className={`text-[9px] font-black px-1 rounded ${
+                    summary.minOrderReached ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
+                  }`}>
+                    {summary.minOrderReached ? '✓ OK' : 'PENDENTE'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {proposalId && (
+                  <button
+                    type="button"
+                    disabled={isLoadingCustomerContext || isLoadingCatalog}
+                    onClick={() => loadCustomerDeskData(customer.id, customer, items.filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder))}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 transition-colors disabled:opacity-50"
+                    title="Recalcular saldos e métricas deste orçamento diretamente no Hórus"
+                  >
+                    <RefreshCw className={`h-3 w-3 ${isLoadingCustomerContext || isLoadingCatalog ? 'animate-spin' : ''}`} />
+                    <span>Recalcular Hórus</span>
+                  </button>
                 )}
-              </div>
 
-              <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">CNPJ:</span>
-                <span>{customer.document}</span>
-              </div>
+                <button
+                  type="button"
+                  onClick={() => setShowHistoryCards(!showHistoryCards)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors border border-slate-300 dark:border-slate-700 shadow-2xs"
+                  title={showHistoryCards ? "Recolher cards para dar espaço total à grade" : "Expandir cards de histórico"}
+                >
+                  {showHistoryCards ? <EyeOff className="h-3.5 w-3.5 text-slate-500" /> : <Eye className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />}
+                  <span>{showHistoryCards ? "Ocultar Cards (Foco na Grade)" : "Exibir Cards de Histórico"}</span>
+                </button>
 
-              <div className="flex items-center gap-1 text-[11px] text-indigo-700 dark:text-indigo-400 font-medium">
-                <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">Apelido:</span>
-                <span className="truncate max-w-[150px]">{customer.nickname || customer.name}</span>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800">
-                <Scale className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
-                <span className="text-[10px] font-bold uppercase text-indigo-900 dark:text-indigo-300">Ped. Mín:</span>
-                <span className="font-bold text-indigo-950 dark:text-white font-mono">
-                  {customer.minOrderValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </span>
-                <span className={`text-[9px] font-black px-1 rounded ${
-                  summary.minOrderReached ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
-                }`}>
-                  {summary.minOrderReached ? '✓ OK' : 'PENDENTE'}
-                </span>
+                <div className="text-[11px] text-slate-400 font-medium hidden lg:block">
+                  {customer.city} / {customer.state} • Cód. #{customer.horus_cod_cli} • {customer.paymentCondition}
+                </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowHistoryCards(!showHistoryCards)}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors border border-slate-300 dark:border-slate-700 shadow-2xs"
-                title={showHistoryCards ? "Recolher cards para dar espaço total à grade" : "Expandir cards de histórico"}
-              >
-                {showHistoryCards ? <EyeOff className="h-3.5 w-3.5 text-slate-500" /> : <Eye className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />}
-                <span>{showHistoryCards ? "Ocultar Cards (Foco na Grade)" : "Exibir Cards de Histórico"}</span>
-              </button>
-
-              <div className="text-[11px] text-slate-400 font-medium hidden lg:block">
-                {customer.city} / {customer.state} • Cód. #{customer.horus_cod_cli} • {customer.paymentCondition}
-              </div>
+            {/* Linha Abaixo do Cliente: Campo Assunto Pesquisável */}
+            <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
+              <label htmlFor="proposal-subject-input" className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 shrink-0">
+                Assunto:
+              </label>
+              <input
+                id="proposal-subject-input"
+                type="text"
+                value={proposalSubject}
+                onChange={(e) => setProposalSubject(e.target.value)}
+                placeholder="Escreva o assunto / identificação deste orçamento para pesquisar depois (ex: Reposição Mensal, Feira, Campanha)..."
+                className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 text-xs text-slate-900 dark:text-white font-medium focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none"
+              />
             </div>
           </div>
 
@@ -2479,8 +2726,8 @@ export default function ProposalsDeskPage() {
 
         </div>
 
-        {/* Barra 2: Abas Comerciais na Nova Sequência Oficial (Regra 1):
-            1. Pedidos -> 2. Reposição -> 3. Novidades -> 4. Fundo de Catálogo -> 5. Último Acerto / Venda -> 6. Pedido Consolidado */}
+        {/* Barra 2: Abas Comerciais na Nova Sequência Oficial:
+            1. Pedidos -> 2. Último Acerto / Venda -> 3. Reposição -> 4. Novidades -> 5. Fundo de Catálogo -> 6. Pedido Consolidado */}
         <div className="px-3 pt-2 bg-slate-50/80 dark:bg-slate-850/50 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2 overflow-x-auto">
           <div className="flex items-center gap-1 shrink-0">
             
@@ -2505,7 +2752,33 @@ export default function ProposalsDeskPage() {
               </span>
             </button>
 
-            {/* 2. Reposição */}
+            {/* 2. Último Acerto / Venda */}
+            <button
+              type="button"
+              onClick={() => setActiveTab('ultimo_acerto')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-t-md border-t-2 border-x transition-all shrink-0 ${
+                activeTab === 'ultimo_acerto'
+                  ? 'bg-white dark:bg-slate-900 border-slate-800 dark:border-indigo-400 text-slate-900 dark:text-white border-b-white dark:border-b-slate-900 -mb-px shadow-2xs'
+                  : 'bg-transparent border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100/60'
+              }`}
+            >
+              <History className="h-3.5 w-3.5 text-slate-500" />
+              <span>Último Acerto / Venda</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                activeTab === 'ultimo_acerto'
+                  ? 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
+                  : 'bg-slate-200/60 text-slate-600 dark:bg-slate-800/80 dark:text-slate-400'
+              }`}>
+                {exclusiveItemsByTab.ultimo_acerto.length}
+              </span>
+              {exclusiveItemsByTab.ultimo_acerto.filter(it => it.isAddedToOrder).length > 0 && (
+                <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 font-mono font-bold border border-emerald-200 dark:border-emerald-800" title="Itens adicionados ao pedido desta aba">
+                  ✓ {exclusiveItemsByTab.ultimo_acerto.filter(it => it.isAddedToOrder).length}
+                </span>
+              )}
+            </button>
+
+            {/* 3. Reposição */}
             <button
               type="button"
               onClick={() => setActiveTab('reposicao')}
@@ -2531,7 +2804,7 @@ export default function ProposalsDeskPage() {
               )}
             </button>
 
-            {/* 3. Novidades */}
+            {/* 4. Novidades */}
             <button
               type="button"
               onClick={() => setActiveTab('novidades')}
@@ -2557,7 +2830,7 @@ export default function ProposalsDeskPage() {
               )}
             </button>
 
-            {/* 4. Fundo de Catálogo */}
+            {/* 5. Fundo de Catálogo */}
             <button
               type="button"
               onClick={() => setActiveTab('fundo')}
@@ -2579,32 +2852,6 @@ export default function ProposalsDeskPage() {
               {exclusiveItemsByTab.fundo.filter(it => it.isAddedToOrder).length > 0 && (
                 <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 font-mono font-bold border border-emerald-200 dark:border-emerald-800" title="Itens adicionados ao pedido desta aba">
                   ✓ {exclusiveItemsByTab.fundo.filter(it => it.isAddedToOrder).length}
-                </span>
-              )}
-            </button>
-
-            {/* 5. Último Acerto / Venda */}
-            <button
-              type="button"
-              onClick={() => setActiveTab('ultimo_acerto')}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-t-md border-t-2 border-x transition-all shrink-0 ${
-                activeTab === 'ultimo_acerto'
-                  ? 'bg-white dark:bg-slate-900 border-slate-800 dark:border-indigo-400 text-slate-900 dark:text-white border-b-white dark:border-b-slate-900 -mb-px shadow-2xs'
-                  : 'bg-transparent border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100/60'
-              }`}
-            >
-              <History className="h-3.5 w-3.5 text-slate-500" />
-              <span>Último Acerto / Venda</span>
-              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
-                activeTab === 'ultimo_acerto'
-                  ? 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-200'
-                  : 'bg-slate-200/60 text-slate-600 dark:bg-slate-800/80 dark:text-slate-400'
-              }`}>
-                {exclusiveItemsByTab.ultimo_acerto.length}
-              </span>
-              {exclusiveItemsByTab.ultimo_acerto.filter(it => it.isAddedToOrder).length > 0 && (
-                <span className="px-1.5 py-0.2 rounded text-[9px] bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 font-mono font-bold border border-emerald-200 dark:border-emerald-800" title="Itens adicionados ao pedido desta aba">
-                  ✓ {exclusiveItemsByTab.ultimo_acerto.filter(it => it.isAddedToOrder).length}
                 </span>
               )}
             </button>
@@ -3110,6 +3357,9 @@ export default function ProposalsDeskPage() {
                   Pedidos: <b>{proposalItems.filter(i => (i.originCategory || i.tabCategory) === 'pedido').length}</b>
                 </span>
                 <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-medium">
+                  Últ. Acerto/Venda: <b>{proposalItems.filter(i => (i.originCategory || i.tabCategory) === 'ultimo_acerto').length}</b>
+                </span>
+                <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-medium">
                   Reposição: <b>{proposalItems.filter(i => (i.originCategory || i.tabCategory) === 'reposicao').length}</b>
                 </span>
                 <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-medium">
@@ -3117,9 +3367,6 @@ export default function ProposalsDeskPage() {
                 </span>
                 <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-medium">
                   Fundo: <b>{proposalItems.filter(i => (i.originCategory || i.tabCategory) === 'fundo').length}</b>
-                </span>
-                <span className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-mono font-medium">
-                  Últ. Acerto/Venda: <b>{proposalItems.filter(i => (i.originCategory || i.tabCategory) === 'ultimo_acerto').length}</b>
                 </span>
               </div>
             </div>

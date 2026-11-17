@@ -24,6 +24,9 @@ class ProductBase(BaseModel):
     brand_id: Optional[int] = None
     status: Optional[str] = ProductStatus.ACTIVE.value
     stock_quantity: int = 0
+    consignment_stock: Optional[int] = 0
+    sales_90: Optional[int] = 0
+    sales_365: Optional[int] = 0
     allow_purchase: Optional[bool] = None
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None
@@ -77,6 +80,9 @@ class ProductUpdate(BaseModel):
     brand_id: Optional[int] = None
     status: Optional[str] = None
     stock_quantity: Optional[int] = None
+    consignment_stock: Optional[int] = None
+    sales_90: Optional[int] = None
+    sales_365: Optional[int] = None
     allow_purchase: Optional[bool] = None
     stock_status_label: Optional[str] = None
     cover_url: Optional[str] = None

@@ -43,6 +43,9 @@ class Product(Base):
     
     # Internal stock metrics (in the future we might expand to prd_stock)
     stock_quantity = Column(Integer, default=0, nullable=False)
+    consignment_stock = Column(Integer, default=0, nullable=True, server_default="0")
+    sales_90 = Column(Integer, default=0, nullable=True, server_default="0")
+    sales_365 = Column(Integer, default=0, nullable=True, server_default="0")
     
     # Condition Flags
     is_pre_sale = Column(Boolean, default=False, nullable=False)

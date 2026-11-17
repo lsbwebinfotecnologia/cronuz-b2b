@@ -344,7 +344,9 @@ def list_products(
         "items": items,
         "total": local_total,
         "page": (skip // limit) + 1,
-        "pages": max(1, (local_total + limit - 1) // limit)
+        "pages": max(1, (local_total + limit - 1) // limit),
+        "cover_image_base_url": settings.cover_image_base_url if settings else None,
+        "cover_image_secondary_base_url": settings.cover_image_secondary_base_url if settings else None,
     }
 
 def _resolve_or_import_product(db: Session, company_id: int, product_id_str: str) -> Optional[Product]:

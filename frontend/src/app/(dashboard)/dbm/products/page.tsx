@@ -29,7 +29,8 @@ import {
   Trash2,
   ExternalLink,
   Sparkles,
-  Keyboard
+  Keyboard,
+  Upload
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import CurrencyInput from '@/components/CurrencyInput';
@@ -376,7 +377,42 @@ export default function DbmProductsSearchPage() {
   const [importingHorus, setImportingHorus] = useState(false);
   const [horusSyncMessage, setHorusSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // URLs padrão e secundária de capas do Seller (mesma dinâmica do Storefront B2C)
+  const [coverBaseUrl, setCoverBaseUrl] = useState<string>('');
+  const [coverSecondaryBaseUrl, setCoverSecondaryBaseUrl] = useState<string>('');
+  const [coverCandidateStep, setCoverCandidateStep] = useState<number>(0);
+
+  // Estados da Importação de Planilha Excel (2 abas: Itens + Tiragens)
+  const [showExcelImportModal, setShowExcelImportModal] = useState(false);
+  const [excelImportFile, setExcelImportFile] = useState<File | null>(null);
+  const [excelCreateMissing, setExcelCreateMissing] = useState(false);
+  const [importingExcel, setImportingExcel] = useState(false);
+  const [excelImportResult, setExcelImportResult] = useState<any | null>(null);
+  const [excelImportError, setExcelImportError] = useState<string | null>(null);
+
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  // Carrega configurações de URL de capa do seller
+  useEffect(() => {
+    if (!companyId) return;
+    const token = getToken();
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    fetch(`${apiUrl}/companies/${companyId}/settings`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    })
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (data) {
+          if (data.cover_image_base_url) {
+            setCoverBaseUrl(String(data.cover_image_base_url).replace(/\/$/, ''));
+          }
+          if (data.cover_image_secondary_base_url) {
+            setCoverSecondaryBaseUrl(String(data.cover_image_secondary_base_url).replace(/\/$/, ''));
+          }
+        }
+      })
+      .catch(() => {});
+  }, [companyId]);
 
   // Converte um ProductGridItem em DbmBookFormState para a Ficha de Cadastro
   const mapProductToForm = (p: ProductGridItem): DbmBookFormState => {
@@ -496,6 +532,12 @@ export default function DbmProductsSearchPage() {
 
       if (res.ok) {
         const data = await res.json();
+        if (data?.cover_image_base_url) {
+          setCoverBaseUrl(String(data.cover_image_base_url).replace(/\/$/, ''));
+        }
+        if (data?.cover_image_secondary_base_url) {
+          setCoverSecondaryBaseUrl(String(data.cover_image_secondary_base_url).replace(/\/$/, ''));
+        }
         const rawList = Array.isArray(data) ? data : (data.items || []);
 
         const mapped: ProductGridItem[] = rawList.map((p: any) => {
@@ -562,6 +604,34 @@ export default function DbmProductsSearchPage() {
     try {
       const token = getToken();
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
+      if (bookForm.id) {
+        const enrichRes = await fetch(
+          `${apiUrl}/dbm/products/${bookForm.id}/enrich-from-horus?company_id=${companyId}`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({ company_id: companyId, force_overwrite_dimensions: true })
+          }
+        );
+        if (enrichRes.ok) {
+          const enrichData = await enrichRes.json();
+          if (enrichData?.product) {
+            const p = enrichData.product;
+            setBookForm(mapProductToForm(p));
+            await fetchProducts(false);
+            setSaveFeedback({
+              type: 'success',
+              message: `✓ Dados atualizados do Horus e salvos automaticamente! (Disponível: ${p.stock_quantity || 0} un. • Consignado: ${p.consignment_stock || 0} un. • Estoque Total: ${(p.stock_quantity || 0) + (p.consignment_stock || 0)} un.)`
+            });
+            return;
+          }
+        }
+      }
+
       const params = new URLSearchParams({ search: queryKey, q: queryKey, limit: '5', offset: '0' });
       const res = await fetch(`${apiUrl}/companies/${companyId}/horus-sql/items-estoque-geral?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` }
@@ -865,11 +935,128 @@ export default function DbmProductsSearchPage() {
       if (res.ok) {
         const p = await res.json();
         setBookForm(mapProductToForm(p));
+        autoEnrichProductOnOpen(productId);
       }
     } catch (e) {
       console.error('Erro ao carregar ficha do livro DBM:', e);
     }
   };
+
+  // Auto-enriquecimento e auto-salvamento silencioso ao abrir uma ficha no DBM
+  // Busca no Horus (SQL + API) saldo disponível, saldo consignado, giro, peso, dimensões e capa se faltarem e já salva no banco
+  const autoEnrichProductOnOpen = async (productId?: number) => {
+    if (!productId || productId <= 0) return;
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const res = await fetch(
+        `${apiUrl}/dbm/products/${productId}/enrich-from-horus?company_id=${companyId}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({ company_id: companyId })
+        }
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.cover_image_base_url) {
+        setCoverBaseUrl(String(data.cover_image_base_url).replace(/\/$/, ''));
+      }
+      if (data?.cover_image_secondary_base_url) {
+        setCoverSecondaryBaseUrl(String(data.cover_image_secondary_base_url).replace(/\/$/, ''));
+      }
+      if (data?.product && data.product.id === productId) {
+        const enrichedProd = data.product;
+        setBookForm(prev => {
+          if (prev.id !== productId) return prev;
+          const mappedEnriched = mapProductToForm(enrichedProd);
+          return {
+            ...mappedEnriched,
+            // Mantém cover_url se já preenchida ou usa a resolvida pelo backend
+            cover_url: mappedEnriched.cover_url || prev.cover_url
+          };
+        });
+        // Atualiza também na lista em memória para refletir saldo/consignado/peso/dimensões sem recarregar tudo
+        setProducts(prev =>
+          prev.map(item =>
+            item.id === productId
+              ? {
+                  ...item,
+                  ...enrichedProd,
+                  isbn: enrichedProd.ean_gtin || item.isbn,
+                  stock_quantity: Number(enrichedProd.stock_quantity ?? item.stock_quantity),
+                  consignment_stock: Number(enrichedProd.consignment_stock ?? item.consignment_stock),
+                  sales_90: Number(enrichedProd.sales_90 ?? item.sales_90),
+                  sales_365: Number(enrichedProd.sales_365 ?? item.sales_365),
+                  weight_kg: enrichedProd.weight_kg ?? item.weight_kg,
+                  width_cm: enrichedProd.width_cm ?? item.width_cm,
+                  height_cm: enrichedProd.height_cm ?? item.height_cm,
+                  cover_url: enrichedProd.cover_url || item.cover_url
+                }
+              : item
+          )
+        );
+      }
+    } catch (e) {
+      console.debug('Auto-enriquecimento DBM silencioso ignorado:', e);
+    }
+  };
+
+  // Cascata de URLs candidatas da capa (mesma dinâmica da Storefront B2C)
+  const coverCandidates = useMemo(() => {
+    const list: string[] = [];
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const wrapProxyIfNeeded = (rawUrl: string) => {
+      if (
+        rawUrl.startsWith('http://') &&
+        !rawUrl.startsWith('http://localhost') &&
+        !rawUrl.startsWith('http://127.0.0.1')
+      ) {
+        return `${apiUrl}/b2c/public/cover-proxy?url=${encodeURIComponent(rawUrl)}`;
+      }
+      return rawUrl;
+    };
+    const addUnique = (url: string | null | undefined) => {
+      if (!url) return;
+      const trimmed = url.trim();
+      if (!trimmed) return;
+      const absUrl = trimmed.startsWith('http') || trimmed.startsWith('data:') ? trimmed : `${apiUrl}${trimmed.startsWith('/') ? '' : '/'}${trimmed}`;
+      const finalUrl = wrapProxyIfNeeded(absUrl);
+      if (!list.includes(finalUrl)) list.push(finalUrl);
+    };
+
+    if (bookForm.cover_url) {
+      addUnique(bookForm.cover_url);
+    }
+    const cleanIsbn = String(bookForm.ean_gtin || bookForm.barcode || '').trim().replace(/[^0-9Xx]/g, '');
+    if (cleanIsbn) {
+      if (coverBaseUrl) {
+        addUnique(`${coverBaseUrl.replace(/\/$/, '')}/${cleanIsbn}.jpg`);
+      }
+      if (coverSecondaryBaseUrl) {
+        addUnique(`${coverSecondaryBaseUrl.replace(/\/$/, '')}/${cleanIsbn}.jpg`);
+      }
+      if (companyId) {
+        addUnique(`/uploads/covers/${companyId}/${cleanIsbn}.jpg`);
+      }
+    }
+    return list;
+  }, [bookForm.cover_url, bookForm.ean_gtin, bookForm.barcode, coverBaseUrl, coverSecondaryBaseUrl, companyId]);
+
+  useEffect(() => {
+    setCoverCandidateStep(0);
+    // Se o campo URL da Capa estiver vazio na ficha, preenche automaticamente com a URL padrão do seller + ISBN
+    const cleanIsbn = String(bookForm.ean_gtin || bookForm.barcode || '').trim().replace(/[^0-9Xx]/g, '');
+    if (!bookForm.cover_url && cleanIsbn && (coverBaseUrl || coverSecondaryBaseUrl)) {
+      const defaultCover = coverBaseUrl
+        ? `${coverBaseUrl.replace(/\/$/, '')}/${cleanIsbn}.jpg`
+        : `${coverSecondaryBaseUrl.replace(/\/$/, '')}/${cleanIsbn}.jpg`;
+      setBookForm(prev => (prev.cover_url ? prev : { ...prev, cover_url: defaultCover }));
+    }
+  }, [bookForm.id, bookForm.ean_gtin, coverBaseUrl, coverSecondaryBaseUrl]);
 
   // Filtragem local complementar (incluindo filtro de Janela de Novidades -9m a +6m)
   const filteredProducts = useMemo(() => {
@@ -991,6 +1178,9 @@ export default function DbmProductsSearchPage() {
     setSaveFeedback(null);
     setBookForm(mapProductToForm(item));
     setActiveAccessTab('FORM');
+    if (item.id) {
+      autoEnrichProductOnOpen(item.id);
+    }
   };
 
   const handleNewBookInAccessForm = () => {
@@ -1009,7 +1199,11 @@ export default function DbmProductsSearchPage() {
     const bounded = Math.max(0, Math.min(newIdx, filteredProducts.length - 1));
     setSelectedIndex(bounded);
     setSaveFeedback(null);
-    setBookForm(mapProductToForm(filteredProducts[bounded]));
+    const targetItem = filteredProducts[bounded];
+    setBookForm(mapProductToForm(targetItem));
+    if (targetItem?.id) {
+      autoEnrichProductOnOpen(targetItem.id);
+    }
   };
 
   const handleFormFooterSearch = (term: string) => {
@@ -1105,12 +1299,28 @@ export default function DbmProductsSearchPage() {
     if (bookForm.contract_signed_date && bookForm.contract_validity_years) {
       const years = parseInt(bookForm.contract_validity_years, 10);
       if (!isNaN(years) && years > 0) {
-        const parts = bookForm.contract_signed_date.includes('/')
-          ? bookForm.contract_signed_date.split('/').reverse()
-          : bookForm.contract_signed_date.split('-');
-        if (parts.length === 3 && parts[0].length === 4) {
-          const expYear = parseInt(parts[0], 10) + years;
-          const computed = `${parts[2]}/${parts[1]}/${expYear}`;
+        const s = bookForm.contract_signed_date.trim();
+        let day = 0;
+        let month = 0;
+        let yr = 0;
+        if (s.includes('/')) {
+          const p = s.split('/');
+          if (p.length === 3 && p[2].length === 4) {
+            day = parseInt(p[0], 10);
+            month = parseInt(p[1], 10);
+            yr = parseInt(p[2], 10);
+          }
+        } else if (s.includes('-')) {
+          const p = s.slice(0, 10).split('-');
+          if (p.length === 3 && p[0].length === 4) {
+            yr = parseInt(p[0], 10);
+            month = parseInt(p[1], 10);
+            day = parseInt(p[2], 10);
+          }
+        }
+        if (day > 0 && month > 0 && yr >= 1900) {
+          const expYear = yr + years;
+          const computed = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${expYear}`;
           if (bookForm.contract_expires_date !== computed) {
             setBookForm(prev => ({ ...prev, contract_expires_date: computed }));
           }
@@ -1118,6 +1328,88 @@ export default function DbmProductsSearchPage() {
       }
     }
   }, [bookForm.contract_signed_date, bookForm.contract_validity_years]);
+
+  // Máscara automática DD/MM/AAAA ao digitar Data de Assinatura
+  const handleContractSignedDateChange = (rawVal: string) => {
+    const digits = rawVal.replace(/\D/g, '').slice(0, 8);
+    let formatted = rawVal;
+    if (/^\d+$/.test(rawVal.replace(/\//g, ''))) {
+      if (digits.length <= 2) {
+        formatted = digits;
+      } else if (digits.length <= 4) {
+        formatted = `${digits.slice(0, 2)}/${digits.slice(2)}`;
+      } else {
+        formatted = `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4, 8)}`;
+      }
+    }
+    setBookForm(prev => ({ ...prev, contract_signed_date: formatted }));
+  };
+
+  // Importação de Planilha Excel de 2 Abas (Itens + Tiragens)
+  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] || null;
+    setExcelImportError(null);
+    setExcelImportResult(null);
+    if (!f) {
+      setExcelImportFile(null);
+      return;
+    }
+    // Regra Mandatória #1: Limite rígido de 10 MB para planilhas no Frontend
+    const maxBytes = 10 * 1024 * 1024;
+    if (f.size > maxBytes) {
+      setExcelImportError('O arquivo excede o limite máximo permitido de 10 MB para planilhas de importação.');
+      setExcelImportFile(null);
+      e.target.value = '';
+      return;
+    }
+    if (!f.name.toLowerCase().endsWith('.xlsx') && !f.name.toLowerCase().endsWith('.xlsm')) {
+      setExcelImportError('Formato inválido. Selecione uma planilha Excel (.xlsx).');
+      setExcelImportFile(null);
+      e.target.value = '';
+      return;
+    }
+    setExcelImportFile(f);
+  };
+
+  const handleUploadExcelLancamentos = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!excelImportFile) {
+      setExcelImportError('Selecione a planilha Excel (.xlsx) antes de importar.');
+      return;
+    }
+    setImportingExcel(true);
+    setExcelImportError(null);
+    setExcelImportResult(null);
+    try {
+      const token = getToken();
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const formData = new FormData();
+      formData.append('file', excelImportFile);
+      formData.append('company_id', String(companyId));
+      formData.append('create_missing', excelCreateMissing ? 'true' : 'false');
+
+      const res = await fetch(`${apiUrl}/dbm/products/import-excel-lancamentos`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`
+        },
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || 'Erro ao processar planilha de itens e tiragens.');
+      }
+      setExcelImportResult(data);
+      await fetchProducts(false);
+      if (bookForm.id) {
+        await loadSingleProductIntoForm(bookForm.id);
+      }
+    } catch (err: any) {
+      setExcelImportError(err.message || 'Falha ao importar planilha Excel.');
+    } finally {
+      setImportingExcel(false);
+    }
+  };
 
   // Sincroniza automaticamente Mês e Ano quando a Data de Lançamento é alterada
   const handleLaunchDateChange = (newDate: string) => {
@@ -1208,6 +1500,9 @@ export default function DbmProductsSearchPage() {
         contract_expires_date: bookForm.contract_expires_date.trim() || null,
         cover_url: bookForm.cover_url.trim() || null,
         stock_quantity: Number(bookForm.stock_quantity || 0),
+        consignment_stock: Number(bookForm.consignment_stock || 0),
+        sales_90: Number(bookForm.sales_90 || 0),
+        sales_365: Number(bookForm.sales_365 || 0),
         dbm_tiragens: JSON.stringify(bookForm.tiragens || [])
       };
 
@@ -1352,6 +1647,20 @@ export default function DbmProductsSearchPage() {
           >
             <Keyboard className="w-3.5 h-3.5" />
             Atalhos Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setExcelImportError(null);
+              setExcelImportResult(null);
+              setShowExcelImportModal(true);
+            }}
+            className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Importar planilha Excel de 2 abas (Planilha1: Itens + TIRAGENS) cruzando por ISBN e Cód. Produto"
+          >
+            <Upload className="w-3.5 h-3.5 text-indigo-600" />
+            Importar Excel (Itens + Tiragens)
           </button>
 
           <button
@@ -1929,12 +2238,15 @@ export default function DbmProductsSearchPage() {
               <div className="lg:col-span-2 flex flex-col gap-2.5">
                 <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col items-center">
                   <div className="w-full aspect-[3/4] max-w-[145px] bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center overflow-hidden relative">
-                    {bookForm.cover_url ? (
+                    {coverCandidates.length > 0 && coverCandidateStep < coverCandidates.length ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={bookForm.cover_url}
+                        src={coverCandidates[coverCandidateStep]}
                         alt={bookForm.name}
                         className="w-full h-full object-contain"
+                        onError={() => {
+                          setCoverCandidateStep(prev => prev + 1);
+                        }}
                       />
                     ) : (
                       <div className="text-center p-3 text-slate-400">
@@ -1948,14 +2260,17 @@ export default function DbmProductsSearchPage() {
                     <input
                       type="text"
                       value={bookForm.cover_url}
-                      onChange={(e) => setBookForm(prev => ({ ...prev, cover_url: e.target.value }))}
+                      onChange={(e) => {
+                        setCoverCandidateStep(0);
+                        setBookForm(prev => ({ ...prev, cover_url: e.target.value }));
+                      }}
                       placeholder="https://..."
                       className="w-full px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded-md text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
                     />
                   </div>
                 </div>
 
-                {/* Resumo Rápido de Estoque & Giro no Horus */}
+                {/* Resumo Rápido de Estoque Disponível, Saldo Consignado e Estoque Total no Horus */}
                 <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-1.5 text-xs">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                     Indicadores Horus
@@ -1972,7 +2287,13 @@ export default function DbmProductsSearchPage() {
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-slate-500">Consignado:</span>
-                    <span className="font-mono font-semibold text-slate-700">{bookForm.consignment_stock} un.</span>
+                    <span className="font-mono font-semibold text-amber-700">{bookForm.consignment_stock} un.</span>
+                  </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-slate-100 bg-indigo-50/50 -mx-1.5 px-1.5 py-1 rounded">
+                    <span className="text-indigo-900 font-bold text-[11px]">Estoque Total:</span>
+                    <span className="font-mono font-bold text-indigo-700">
+                      {(Number(bookForm.stock_quantity || 0) + Number(bookForm.consignment_stock || 0))} un.
+                    </span>
                   </div>
                   <div className="flex items-center justify-between pt-1 border-t border-slate-100">
                     <span className="text-slate-500">Giro 90d / 12m:</span>
@@ -2209,9 +2530,13 @@ export default function DbmProductsSearchPage() {
                     >
                       <option value="Brochura">Brochura</option>
                       <option value="Capa dura">Capa dura</option>
+                      <option value="Capa Dura">Capa Dura</option>
+                      <option value="Cartonado">Cartonado</option>
                       <option value="E-book">E-book</option>
                       <option value="Espiral">Espiral</option>
                       <option value="Grampeado">Grampeado</option>
+                      <option value="Flexível">Flexível</option>
+                      <option value="Box / Kit">Box / Kit</option>
                     </select>
                   </div>
 
@@ -2332,7 +2657,10 @@ export default function DbmProductsSearchPage() {
                     className="w-full px-2.5 py-1.5 text-xs bg-slate-50/70 border border-slate-200 rounded-lg text-slate-900 focus:bg-white focus:outline-none focus:border-indigo-500"
                   >
                     <option value="Sem Royalties">Sem Royalties</option>
+                    <option value="Royalties">Royalties</option>
+                    <option value="Coedição">Coedição</option>
                     <option value="Com Royalties">Com Royalties</option>
+                    <option value="Royalties % Capa">Royalties % Capa</option>
                     <option value="% Capa">% Sobre Preço de Capa</option>
                     <option value="% Líquido">% Sobre Receita Líquida</option>
                   </select>
@@ -2373,7 +2701,7 @@ export default function DbmProductsSearchPage() {
                     <input
                       type="text"
                       value={bookForm.contract_signed_date}
-                      onChange={(e) => setBookForm(prev => ({ ...prev, contract_signed_date: e.target.value }))}
+                      onChange={(e) => handleContractSignedDateChange(e.target.value)}
                       placeholder="dd/mm/aaaa"
                       className="w-full px-2 py-1.5 text-[11px] font-mono bg-slate-50/70 border border-slate-200 rounded-lg text-slate-900"
                     />
@@ -2385,12 +2713,13 @@ export default function DbmProductsSearchPage() {
                     <input
                       type="text"
                       value={bookForm.contract_validity_years}
-                      onChange={(e) => setBookForm(prev => ({ ...prev, contract_validity_years: e.target.value }))}
+                      onChange={(e) => setBookForm(prev => ({ ...prev, contract_validity_years: e.target.value.replace(/\D/g, '') }))}
+                      placeholder="Ex: 5"
                       className="w-full px-2 py-1.5 text-[11px] font-mono text-center bg-slate-50/70 border border-slate-200 rounded-lg text-slate-900"
                     />
                   </div>
                   <div className="col-span-4">
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                    <label className="block text-[10px] font-bold text-indigo-700 uppercase tracking-wider mb-1">
                       Vencimento
                     </label>
                     <input
@@ -2398,7 +2727,7 @@ export default function DbmProductsSearchPage() {
                       value={bookForm.contract_expires_date}
                       onChange={(e) => setBookForm(prev => ({ ...prev, contract_expires_date: e.target.value }))}
                       placeholder="dd/mm/aaaa"
-                      className="w-full px-2 py-1.5 text-[11px] font-mono bg-slate-50/70 border border-slate-200 rounded-lg text-slate-900"
+                      className="w-full px-2 py-1.5 text-[11px] font-mono font-bold bg-indigo-50/40 border border-indigo-200 rounded-lg text-slate-900"
                     />
                   </div>
                 </div>
@@ -3085,6 +3414,148 @@ export default function DbmProductsSearchPage() {
                   Fechar
                 </button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE IMPORTAÇÃO DE PLANILHA EXCEL (2 ABAS: ITENS + TIRAGENS) */}
+      <AnimatePresence>
+        {showExcelImportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 select-text">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden"
+            >
+              <div className="bg-slate-900 text-white px-5 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
+                  <div>
+                    <h3 className="text-sm font-bold">
+                      Importar Planilha Excel (Itens + Tiragens) → Cadastro DBM
+                    </h3>
+                    <p className="text-[11px] text-slate-300">
+                      Atualiza dados editoriais, link do site, contrato autoral e todas as tiragens cruzando pelo ISBN e Cod_Prod.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowExcelImportModal(false)}
+                  className="text-slate-400 hover:text-white p-1 cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleUploadExcelLancamentos} className="p-5 space-y-4 text-xs text-slate-700">
+                <div className="p-3 bg-indigo-50/70 border border-indigo-200 rounded-xl space-y-1.5 text-indigo-950">
+                  <div className="font-bold flex items-center gap-1.5 text-indigo-900">
+                    <Info className="w-4 h-4 text-indigo-600 shrink-0" />
+                    Como funciona o cruzamento automático (2 Abas):
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-indigo-900/90">
+                    • <strong>Aba 1 (Planilha1 / Itens):</strong> Cruza cada livro pelo <code>ISBN</code> (ou <code>CodProdHorus</code>) e preenche Data de Lançamento, Páginas, Edição, Assunto, Sinopse, Dimensões (Largura × Altura), Peso (gramas), Acabamento, Unidades/Caixa, Link da Obra (<code>LinkGGbrasil</code>), Contrato Autoral (Assinatura, Anos de Validade e Vencimento automático) e % Royalties E-book.
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-indigo-900/90">
+                    • <strong>Aba 2 (TIRAGENS):</strong> Cruza pelo <code>Cod_Prod == cod_prod</code> e preenche todas as linhas na <strong>Planilha de Tiragens &amp; Custos de Produção</strong> de cada livro (inclusive quando houver mais de uma tiragem para o mesmo título).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Selecione a Planilha Excel (.XLSX — máx. 10 MB)
+                  </label>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xlsm"
+                    onChange={handleExcelFileChange}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-xl text-slate-800 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer"
+                  />
+                  {excelImportFile && (
+                    <p className="mt-1.5 text-[11px] text-emerald-700 font-semibold">
+                      Arquivo selecionado: {excelImportFile.name} ({(excelImportFile.size / 1024).toFixed(1)} KB)
+                    </p>
+                  )}
+                </div>
+
+                <label className="inline-flex items-center gap-2 cursor-pointer select-none font-semibold text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 w-full">
+                  <input
+                    type="checkbox"
+                    checked={excelCreateMissing}
+                    onChange={(e) => setExcelCreateMissing(e.target.checked)}
+                    className="rounded border-slate-300 text-indigo-600 w-4 h-4"
+                  />
+                  <span>Criar automaticamente no DBM os livros da planilha que ainda não estiverem cadastrados</span>
+                </label>
+
+                {excelImportError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-900 font-semibold">
+                    {excelImportError}
+                  </div>
+                )}
+
+                {excelImportResult && (
+                  <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-950 space-y-1.5">
+                    <div className="font-bold text-emerald-900 flex items-center gap-1.5">
+                      <Check className="w-4 h-4 text-emerald-600" />
+                      {excelImportResult.message}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px] font-mono">
+                      <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                        <span className="text-slate-500 block text-[10px]">Atualizados</span>
+                        <strong className="text-emerald-800 text-sm">{excelImportResult.updated_products_count}</strong>
+                      </div>
+                      <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                        <span className="text-slate-500 block text-[10px]">Criados</span>
+                        <strong className="text-indigo-800 text-sm">{excelImportResult.created_products_count}</strong>
+                      </div>
+                      <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                        <span className="text-slate-500 block text-[10px]">Obras c/ Tiragens</span>
+                        <strong className="text-emerald-800 text-sm">{excelImportResult.matched_tiragens_books}</strong>
+                      </div>
+                      <div className="bg-white/80 p-2 rounded border border-emerald-200">
+                        <span className="text-slate-500 block text-[10px]">Total Tiragens</span>
+                        <strong className="text-emerald-800 text-sm">{excelImportResult.matched_tiragens_rows}</strong>
+                      </div>
+                    </div>
+                    {excelImportResult.not_found_count > 0 && (
+                      <p className="text-[11px] text-amber-800 pt-1">
+                        • {excelImportResult.not_found_count} linha(s) da planilha não encontraram ISBN/Cód. Horus correspondente no banco (marque a opção acima se quiser cadastrá-las).
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setShowExcelImportModal(false)}
+                    className="px-4 py-1.5 bg-white hover:bg-slate-100 text-slate-700 font-semibold rounded-lg border border-slate-200 cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={importingExcel || !excelImportFile}
+                    className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-lg flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {importingExcel ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Importando Planilha...
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-3.5 h-3.5" />
+                        Processar e Atualizar Dados
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
             </motion.div>
           </div>
         )}

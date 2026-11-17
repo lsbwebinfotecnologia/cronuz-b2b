@@ -39,6 +39,7 @@ interface DbmProposalRow {
   customer_corporate_name?: string | null;
   customer_document?: string | null;
   customer_horus_cod_cli?: number | null;
+  subject?: string | null;
   status_id: string;
   status_name: string;
   status_phase: string;
@@ -406,7 +407,7 @@ export default function DbmProposalsListPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar por cliente, apelido, CNPJ ou nº do orçamento..."
+              placeholder="Buscar por cliente, assunto, apelido, CNPJ ou nº do orçamento..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full rounded-xl border border-slate-200 bg-slate-50/60 pl-9 pr-8 py-2 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -450,6 +451,7 @@ export default function DbmProposalsListPage() {
                 <th className="py-2.5 px-3 w-20 text-center">Nº</th>
                 <th className="py-2.5 px-3 w-36">Data</th>
                 <th className="py-2.5 px-3">Cliente / Empresa</th>
+                <th className="py-2.5 px-3">Assunto</th>
                 <th className="py-2.5 px-3 w-32 text-center">Itens / Peças</th>
                 <th className="py-2.5 px-3 w-32 text-right">Total Líquido</th>
                 <th className="py-2.5 px-3 w-48 text-center">Status</th>
@@ -459,14 +461,14 @@ export default function DbmProposalsListPage() {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60 text-[12px]">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
                     <RefreshCw className="h-5 w-5 animate-spin mx-auto mb-2 text-indigo-500" />
                     Carregando orçamentos e propostas...
                   </td>
                 </tr>
               ) : proposals.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 space-y-1.5">
+                  <td colSpan={8} className="py-12 text-center text-slate-400 space-y-1.5">
                     <FileText className="h-8 w-8 mx-auto opacity-30" />
                     <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
                       Nenhum orçamento encontrado.
@@ -520,6 +522,17 @@ export default function DbmProposalsListPage() {
                             </span>
                           )}
                         </div>
+                      </td>
+
+                      {/* Assunto */}
+                      <td className="py-2.5 px-3 text-slate-700 dark:text-slate-300 max-w-xs">
+                        {prop.subject ? (
+                          <span className="font-medium truncate block" title={prop.subject}>
+                            {prop.subject}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic text-[11px]">—</span>
+                        )}
                       </td>
 
                       {/* Itens / Peças */}

@@ -195,6 +195,9 @@ try:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS cover_image_secondary_base_url VARCHAR(500)"))
         _conn.execute(_sql_text("ALTER TABLE crm_customer ADD COLUMN IF NOT EXISTS min_order_total DOUBLE PRECISION NOT NULL DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS is_ebook BOOLEAN NOT NULL DEFAULT FALSE"))
+        _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS consignment_stock INTEGER DEFAULT 0"))
+        _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS sales_90 INTEGER DEFAULT 0"))
+        _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS sales_365 INTEGER DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_mercadolivre BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_estantevirtual BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS meli_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
@@ -216,6 +219,8 @@ try:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS ev_token_expires_at TIMESTAMPTZ"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS ev_webhook_secret VARCHAR(255)"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS ev_preset_config JSON"))
+        _conn.execute(_sql_text("ALTER TABLE dbm_proposal ADD COLUMN IF NOT EXISTS subject VARCHAR(255)"))
+        _conn.execute(_sql_text("ALTER TABLE dbm_proposal ADD COLUMN IF NOT EXISTS desk_snapshot_json JSON"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 

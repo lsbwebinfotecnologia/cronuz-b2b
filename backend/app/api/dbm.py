@@ -1675,7 +1675,11 @@ def _enrich_items_with_bi_metrics(
     from datetime import timedelta
     from app.models.horus_bi_sale import HorusBISale
 
-    isbns = list({str(it.get("isbn") or "").strip().replace("-", "").replace(" ", "") for it in items_list if it.get("isbn")})
+    isbns = list({
+        str(it.get("isbn") or it.get("sku") or "").strip().replace("-", "").replace(" ", "")
+        for it in items_list
+        if (it.get("isbn") or it.get("sku"))
+    })
     if not isbns:
         return items_list
 
@@ -1689,6 +1693,9 @@ def _enrich_items_with_bi_metrics(
     gen_period_map: dict[str, int] = {}
     consig_map: dict[str, int] = {}
 
+    def _clean_key(val: Any) -> str:
+        return str(val or "").strip().replace("-", "").replace(" ", "")
+
     # 1. Enriquecimento direto via Horus SQL Server (alta precisão em tempo real)
     if sql_client:
         try:
@@ -1701,7 +1708,9 @@ def _enrich_items_with_bi_metrics(
                 if cod_cli:
                     sql_batch_giro = f"""
                         SELECT
-                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(NFI.COD_ITEM AS VARCHAR))))) AS isbn,
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                            RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                            CAST(NFI.COD_ITEM AS VARCHAR) AS cod_item,
                             SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS gen_qty,
                             SUM(CASE WHEN NF.COD_CLI = %s AND NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS cli_365,
                             SUM(CASE WHEN NF.COD_CLI = %s AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS cli_win
@@ -1714,39 +1723,49 @@ def _enrich_items_with_bi_metrics(
                         WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                           AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
                           AND {clean_cfop_expr} IN ({cfop_sales_in})
-                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
                         GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
                     """
-                    params = (general_sales_days, cod_cli, cod_cli, client_sales_days) + tuple(chunk) + tuple(chunk)
-                    g_rows = sql_client.query(sql_batch_giro, params, max_rows=300)
+                    params = (general_sales_days, cod_cli, cod_cli, client_sales_days) + tuple(chunk) + tuple(chunk) + tuple(chunk)
+                    g_rows = sql_client.query(sql_batch_giro, params, max_rows=400)
                     for gr in (g_rows or []):
-                        k = str(gr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
-                        if k:
-                            gen_period_map[k] = int(float(gr.get("gen_qty") or 0))
-                            cli_365_map[k] = int(float(gr.get("cli_365") or 0))
-                            cli_period_map[k] = int(float(gr.get("cli_win") or 0))
+                        gen_v = int(float(gr.get("gen_qty") or 0))
+                        c365_v = int(float(gr.get("cli_365") or 0))
+                        cwin_v = int(float(gr.get("cli_win") or 0))
+                        for raw_k in (gr.get("cod_barra"), gr.get("cod_isbn"), gr.get("cod_item")):
+                            k = _clean_key(raw_k)
+                            if k:
+                                gen_period_map[k] = max(gen_period_map.get(k, 0), gen_v)
+                                cli_365_map[k] = max(cli_365_map.get(k, 0), c365_v)
+                                cli_period_map[k] = max(cli_period_map.get(k, 0), cwin_v)
 
                     # Saldo consignado ativo por item na VW_ITENS_CONSIGNACAO
                     sql_batch_consig = f"""
                         SELECT
-                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(V.COD_ITEM AS VARCHAR))))) AS isbn,
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                            RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                            CAST(V.COD_ITEM AS VARCHAR) AS cod_item,
                             SUM(ISNULL(V.SALDO, 0)) AS saldo_consig
                         FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
                         INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
                         WHERE V.COD_CLI = %s
                           AND ISNULL(V.SALDO, 0) > 0
-                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
                         GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, V.COD_ITEM
                     """
-                    c_rows = sql_client.query(sql_batch_consig, (cod_cli,) + tuple(chunk) + tuple(chunk), max_rows=300)
+                    c_rows = sql_client.query(sql_batch_consig, (cod_cli,) + tuple(chunk) + tuple(chunk) + tuple(chunk), max_rows=400)
                     for cr in (c_rows or []):
-                        k = str(cr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
-                        if k:
-                            consig_map[k] = int(float(cr.get("saldo_consig") or 0))
+                        cs_v = int(float(cr.get("saldo_consig") or 0))
+                        for raw_k in (cr.get("cod_barra"), cr.get("cod_isbn"), cr.get("cod_item")):
+                            k = _clean_key(raw_k)
+                            if k:
+                                consig_map[k] = max(consig_map.get(k, 0), cs_v)
                 else:
                     sql_batch_gen_only = f"""
                         SELECT
-                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, CAST(NFI.COD_ITEM AS VARCHAR))))) AS isbn,
+                            RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                            RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                            CAST(NFI.COD_ITEM AS VARCHAR) AS cod_item,
                             SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS gen_qty
                         FROM NF_ITENS NFI WITH (NOLOCK)
                         INNER JOIN NF_MESTRE NF WITH (NOLOCK)
@@ -1757,15 +1776,17 @@ def _enrich_items_with_bi_metrics(
                         WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                           AND NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
                           AND {clean_cfop_expr} IN ({cfop_sales_in})
-                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}))
+                          AND (I.COD_BARRA_ITEM IN ({ph}) OR I.COD_ISBN_ITEM IN ({ph}) OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph}))
                         GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
                     """
-                    params_gen = (general_sales_days, general_sales_days) + tuple(chunk) + tuple(chunk)
-                    g_rows = sql_client.query(sql_batch_gen_only, params_gen, max_rows=300)
+                    params_gen = (general_sales_days, general_sales_days) + tuple(chunk) + tuple(chunk) + tuple(chunk)
+                    g_rows = sql_client.query(sql_batch_gen_only, params_gen, max_rows=400)
                     for gr in (g_rows or []):
-                        k = str(gr.get("isbn") or "").strip().replace("-", "").replace(" ", "")
-                        if k:
-                            gen_period_map[k] = int(float(gr.get("gen_qty") or 0))
+                        gen_v = int(float(gr.get("gen_qty") or 0))
+                        for raw_k in (gr.get("cod_barra"), gr.get("cod_isbn"), gr.get("cod_item")):
+                            k = _clean_key(raw_k)
+                            if k:
+                                gen_period_map[k] = max(gen_period_map.get(k, 0), gen_v)
         except Exception as e:
             log.warning(f"[DBM Desk] Aviso ao enriquecer giro via Horus SQL em lote: {e}")
 
@@ -1781,7 +1802,7 @@ def _enrich_items_with_bi_metrics(
             HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
         ).group_by(HorusBISale.ean).all()
         for r in gen_rows:
-            k = str(r.ean).strip().replace("-", "").replace(" ", "")
+            k = _clean_key(r.ean)
             if k not in gen_period_map:
                 gen_period_map[k] = int(r.qty or 0)
 
@@ -1802,7 +1823,7 @@ def _enrich_items_with_bi_metrics(
                 HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
             ).group_by(HorusBISale.ean).all()
             for r in cli_365_rows:
-                k = str(r.ean).strip().replace("-", "").replace(" ", "")
+                k = _clean_key(r.ean)
                 if k not in cli_365_map:
                     cli_365_map[k] = int(r.qty or 0)
 
@@ -1817,23 +1838,36 @@ def _enrich_items_with_bi_metrics(
                 HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
             ).group_by(HorusBISale.ean).all()
             for r in cli_win_rows:
-                k = str(r.ean).strip().replace("-", "").replace(" ", "")
+                k = _clean_key(r.ean)
                 if k not in cli_period_map:
                     cli_period_map[k] = int(r.qty or 0)
     except Exception as e:
         log.warning(f"[DBM Desk] Aviso ao enriquecer giro BI em lote: {e}")
 
     for it in items_list:
-        isbn = str(it.get("isbn") or "").strip().replace("-", "").replace(" ", "")
-        if isbn:
-            if not it.get("clientSalesPeriod"):
-                it["clientSalesPeriod"] = cli_period_map.get(isbn, 0)
-            if not it.get("clientSales365d"):
-                it["clientSales365d"] = cli_365_map.get(isbn, 0)
-            if not it.get("generalSalesPeriod"):
-                it["generalSalesPeriod"] = gen_period_map.get(isbn, 0)
-            if not it.get("consignedBalance") and isbn in consig_map:
-                it["consignedBalance"] = consig_map[isbn]
+        isbn = _clean_key(it.get("isbn"))
+        sku = _clean_key(it.get("sku"))
+        c_per = cli_period_map.get(isbn, cli_period_map.get(sku, 0))
+        c_365 = cli_365_map.get(isbn, cli_365_map.get(sku, 0))
+        g_per = gen_period_map.get(isbn, gen_period_map.get(sku, 0))
+        cs_bal = consig_map.get(isbn, consig_map.get(sku, 0))
+
+        if not it.get("clientSalesPeriod"):
+            it["clientSalesPeriod"] = c_per
+        if not it.get("clientSalesX"):
+            it["clientSalesX"] = c_per
+        if not it.get("clientSales365d"):
+            it["clientSales365d"] = c_365
+        if not it.get("generalSales365"):
+            it["generalSales365"] = c_365
+        if not it.get("generalSalesPeriod"):
+            it["generalSalesPeriod"] = g_per
+        if not it.get("generalSalesX"):
+            it["generalSalesX"] = g_per
+        if not it.get("consignedBalance") and cs_bal > 0:
+            it["consignedBalance"] = cs_bal
+        if not it.get("consignedQty") and cs_bal > 0:
+            it["consignedQty"] = cs_bal
 
     return items_list
 
@@ -3323,6 +3357,7 @@ async def lookup_proposals_desk_product(
         items_list=results,
         client_sales_days=client_sales_days,
         general_sales_days=general_sales_days,
+        sql_client=sql_client,
     )
 
     return {"items": results}
@@ -3596,6 +3631,7 @@ async def import_proposals_desk_order(
         items_list=items_out,
         client_sales_days=client_sales_days,
         general_sales_days=general_sales_days,
+        sql_client=sql_client,
     )
 
     return {
@@ -3603,6 +3639,110 @@ async def import_proposals_desk_order(
         "source": source_label,
         "items": items_out,
     }
+
+
+class DbmEnrichItemsPayload(BaseModel):
+    customer_id: Optional[int] = None
+    company_id: Optional[int] = None
+    client_sales_days: int = 30
+    general_sales_days: int = 90
+    items: List[dict] = []
+
+
+@router.post("/proposals-desk/enrich-items")
+def enrich_proposals_desk_items(
+    payload: DbmEnrichItemsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Enriquece em lote uma lista de itens (ex.: itens já importados na aba Pedidos)
+    com Estoque Disponível, Saldo Consignado no Cliente (CONSIG), Vendas Cliente X dias (CLI(Xd)),
+    Vendas 365 dias (365D) e Vendas Gerais (GER(Yd)).
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    customer = db.query(Customer).filter(
+        Customer.id == payload.customer_id,
+        Customer.company_id == seller_id
+    ).first() if payload.customer_id else None
+
+    sql_client = None
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except Exception:
+        sql_client = None
+
+    cod_cli = _resolve_customer_horus_cod_cli(db, customer, sql_client) if customer else None
+    cod_filial = int(sql_client.cod_filial) if (sql_client and str(sql_client.cod_filial).isdigit()) else 2
+
+    items_copy = [dict(it) for it in (payload.items or []) if isinstance(it, dict)]
+    if not items_copy:
+        return {"items": []}
+
+    # Se algum item estiver sem saldo de estoque, enriquece via VW_SALDO_ITENS
+    if sql_client:
+        try:
+            keys_to_check = list({
+                str(it.get("isbn") or it.get("sku") or "").strip().replace("-", "").replace(" ", "")
+                for it in items_copy
+                if (it.get("isbn") or it.get("sku"))
+            })
+            stock_map: dict[str, int] = {}
+            for c_start in range(0, len(keys_to_check), 150):
+                chunk = keys_to_check[c_start:c_start + 150]
+                ph = ", ".join(["%s"] * len(chunk))
+                sql_st = f"""
+                    SELECT
+                        RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                        RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                        CAST(I.COD_ITEM AS VARCHAR) AS cod_item,
+                        ISNULL(S.saldo_disponivel, 0) AS estoque
+                    FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+                    LEFT JOIN VW_SALDO_ITENS S WITH (NOLOCK) ON S.cod_item = I.COD_ITEM AND S.cod_filial = {cod_filial}
+                    WHERE I.COD_BARRA_ITEM IN ({ph})
+                       OR I.COD_ISBN_ITEM IN ({ph})
+                       OR CAST(I.COD_ITEM AS VARCHAR) IN ({ph})
+                """
+                s_rows = sql_client.query(sql_st, tuple(chunk + chunk + chunk), max_rows=400)
+                for sr in (s_rows or []):
+                    est_v = max(0, int(float(sr.get("estoque") or 0)))
+                    for raw_k in (sr.get("cod_barra"), sr.get("cod_isbn"), sr.get("cod_item")):
+                        k = str(raw_k or "").strip().replace("-", "").replace(" ", "")
+                        if k:
+                            stock_map[k] = max(stock_map.get(k, 0), est_v)
+            for it in items_copy:
+                k_isbn = str(it.get("isbn") or "").strip().replace("-", "").replace(" ", "")
+                k_sku = str(it.get("sku") or "").strip().replace("-", "").replace(" ", "")
+                st_val = stock_map.get(k_isbn, stock_map.get(k_sku))
+                if st_val is not None:
+                    it["stockAvailable"] = st_val
+                    it["horusStock"] = st_val
+        except Exception as e:
+            log.warning(f"[DBM Desk] Aviso ao enriquecer estoque em enrich-items: {e}")
+
+    # Reseta campos de métricas do cliente antes de recalcular para o cliente selecionado
+    for it in items_copy:
+        it["clientSalesPeriod"] = 0
+        it["clientSalesX"] = 0
+        it["clientSales365d"] = 0
+        it["generalSales365"] = 0
+        it["generalSalesPeriod"] = 0
+        it["generalSalesX"] = 0
+        it["consignedBalance"] = 0
+        it["consignedQty"] = 0
+
+    _enrich_items_with_bi_metrics(
+        db=db,
+        seller_id=seller_id,
+        customer=customer,
+        cod_cli=cod_cli,
+        items_list=items_copy,
+        client_sales_days=payload.client_sales_days,
+        general_sales_days=payload.general_sales_days,
+        sql_client=sql_client,
+    )
+
+    return {"items": items_copy}
 
 
 # ── DBM Orçamentos & Propostas (Persistência Isolada DBM) ─────────────────────
@@ -3615,6 +3755,7 @@ class DbmProposalSavePayload(BaseModel):
     customer_corporate_name: Optional[str] = None
     customer_document: Optional[str] = None
     customer_horus_cod_cli: Optional[int] = None
+    subject: Optional[str] = None
     status_id: str = "st-2"
     status_name: str = "Aguardando Análise Comercial"
     status_phase: str = "EM_ANALISE"
@@ -3629,6 +3770,7 @@ class DbmProposalSavePayload(BaseModel):
     horus_order_number: Optional[str] = None
     notes: Optional[str] = None
     items: List[dict] = []
+    desk_snapshot: Optional[dict] = None
 
 
 class DbmProposalStatusPatchPayload(BaseModel):
@@ -3721,8 +3863,10 @@ def list_dbm_proposals(
             DbmProposal.customer_name.ilike(term),
             DbmProposal.customer_corporate_name.ilike(term),
             DbmProposal.customer_document.ilike(term),
+            DbmProposal.subject.ilike(term),
             DbmProposal.status_name.ilike(term),
             DbmProposal.horus_order_number.ilike(term),
+            DbmProposal.notes.ilike(term),
         ]
         if clean_num and clean_num.isdigit():
             num_val = int(clean_num)
@@ -3752,6 +3896,7 @@ def list_dbm_proposals(
             "customer_corporate_name": p.customer_corporate_name or p.customer_name,
             "customer_document": p.customer_document or "",
             "customer_horus_cod_cli": p.customer_horus_cod_cli,
+            "subject": getattr(p, "subject", None) or "",
             "status_id": p.status_id,
             "status_name": p.status_name,
             "status_phase": p.status_phase,
@@ -3785,7 +3930,7 @@ def get_dbm_proposal(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Retorna os dados completos de um orçamento/proposta do DBM (incluindo os itens da grade).
+    Retorna os dados completos de um orçamento/proposta do DBM (incluindo os itens da grade e o snapshot salvo).
     """
     from app.models.dbm_proposal import DbmProposal
 
@@ -3797,7 +3942,48 @@ def get_dbm_proposal(
     if not prop:
         raise HTTPException(status_code=404, detail="Orçamento não encontrado.")
 
-    calc = _compute_proposal_totals_from_items(prop.items_json) if (not prop.total_titles or not prop.total_net_value) and prop.items_json else None
+    saved_items = list(prop.items_json or [])
+    saved_snapshot = getattr(prop, "desk_snapshot_json", None)
+
+    # Backfill único para propostas antigas que foram salvas sem consignado/cliXdias
+    if saved_items and saved_snapshot is None:
+        needs_one_time_enrich = all(
+            int(it.get("consignedQty") or it.get("consignedBalance") or 0) == 0
+            and int(it.get("clientSalesX") or it.get("clientSalesPeriod") or 0) == 0
+            and int(it.get("generalSales365") or it.get("clientSales365d") or 0) == 0
+            and int(it.get("generalSalesX") or it.get("generalSalesPeriod") or 0) == 0
+            for it in saved_items
+            if isinstance(it, dict)
+        )
+        if needs_one_time_enrich:
+            try:
+                cust_obj = db.query(Customer).filter(
+                    Customer.id == prop.customer_id,
+                    Customer.company_id == seller_id
+                ).first() if prop.customer_id else None
+                sql_client = None
+                try:
+                    sql_client = HorusSQLClient(db, seller_id)
+                except Exception:
+                    sql_client = None
+                cod_cli = prop.customer_horus_cod_cli or (_resolve_customer_horus_cod_cli(db, cust_obj, sql_client) if cust_obj else None)
+                saved_items = _enrich_items_with_bi_metrics(
+                    db=db,
+                    seller_id=seller_id,
+                    customer=cust_obj,
+                    cod_cli=cod_cli,
+                    items_list=[dict(it) for it in saved_items if isinstance(it, dict)],
+                    client_sales_days=30,
+                    general_sales_days=90,
+                    sql_client=sql_client,
+                )
+                prop.items_json = saved_items
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                log.warning(f"[DBM] Aviso no backfill único de métricas do orçamento #{prop.id}: {e}")
+
+    calc = _compute_proposal_totals_from_items(saved_items) if (not prop.total_titles or not prop.total_net_value) and saved_items else None
 
     return {
         "id": prop.id,
@@ -3807,6 +3993,7 @@ def get_dbm_proposal(
         "customer_corporate_name": prop.customer_corporate_name or prop.customer_name,
         "customer_document": prop.customer_document or "",
         "customer_horus_cod_cli": prop.customer_horus_cod_cli,
+        "subject": getattr(prop, "subject", None) or "",
         "status_id": prop.status_id,
         "status_name": prop.status_name,
         "status_phase": prop.status_phase,
@@ -3820,7 +4007,8 @@ def get_dbm_proposal(
         "min_order_value": round(float(prop.min_order_value or 0.0), 2),
         "horus_order_number": prop.horus_order_number,
         "notes": prop.notes,
-        "items": prop.items_json or [],
+        "items": saved_items,
+        "desk_snapshot": saved_snapshot,
         "created_at": prop.created_at.isoformat() if prop.created_at else None,
         "updated_at": prop.updated_at.isoformat() if prop.updated_at else None,
     }
@@ -3833,7 +4021,7 @@ def save_dbm_proposal(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Salva ou atualiza um orçamento/proposta da Mesa DBM.
+    Salva ou atualiza um orçamento/proposta da Mesa DBM (incluindo o snapshot completo no Cronuz).
     """
     from app.models.dbm_proposal import DbmProposal
 
@@ -3852,6 +4040,8 @@ def save_dbm_proposal(
     cust_cod_cli = payload.customer_horus_cod_cli or (cust.horus_cod_cli if cust else None)
     if isinstance(cust_cod_cli, str):
         cust_cod_cli = int(cust_cod_cli) if cust_cod_cli.isdigit() else None
+
+    clean_subject = (payload.subject or "").strip() or None
 
     existing = None
     if payload.id and payload.id > 0:
@@ -3875,6 +4065,8 @@ def save_dbm_proposal(
         existing.customer_corporate_name = cust_corp
         existing.customer_document = cust_doc
         existing.customer_horus_cod_cli = cust_cod_cli
+        if payload.subject is not None:
+            existing.subject = clean_subject
         existing.status_id = payload.status_id
         existing.status_name = payload.status_name
         existing.status_phase = payload.status_phase
@@ -3891,6 +4083,8 @@ def save_dbm_proposal(
         if payload.notes is not None:
             existing.notes = payload.notes
         existing.items_json = payload.items or []
+        if payload.desk_snapshot is not None:
+            existing.desk_snapshot_json = payload.desk_snapshot
         existing.updated_at = datetime.now(timezone.utc)
         target = existing
         action = "updated"
@@ -3908,6 +4102,7 @@ def save_dbm_proposal(
             customer_corporate_name=cust_corp,
             customer_document=cust_doc,
             customer_horus_cod_cli=cust_cod_cli,
+            subject=clean_subject,
             status_id=payload.status_id,
             status_name=payload.status_name,
             status_phase=payload.status_phase,
@@ -3922,6 +4117,7 @@ def save_dbm_proposal(
             horus_order_number=payload.horus_order_number,
             notes=payload.notes,
             items_json=payload.items or [],
+            desk_snapshot_json=payload.desk_snapshot,
             created_by_user_id=user_id,
         )
         db.add(new_prop)
@@ -3940,6 +4136,7 @@ def save_dbm_proposal(
             "local_id": target.local_id,
             "customer_id": target.customer_id,
             "customer_name": target.customer_name,
+            "subject": getattr(target, "subject", None) or "",
             "status_id": target.status_id,
             "status_name": target.status_name,
             "status_phase": target.status_phase,
@@ -4000,6 +4197,1049 @@ def delete_dbm_proposal(
     db.delete(prop)
     db.commit()
     return {"success": True, "deleted_id": proposal_id}
+
+
+# ── Enriquecimento Automático de Produto DBM (Horus SQL + API + Capas) ────────
+
+class DbmProductEnrichPayload(BaseModel):
+    company_id: Optional[int] = None
+    force_overwrite_dimensions: bool = False
+
+
+@router.post("/products/{product_id}/enrich-from-horus")
+async def enrich_dbm_product_from_horus(
+    product_id: int,
+    payload: Optional[DbmProductEnrichPayload] = None,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Ao selecionar/abrir um item na Ficha de Cadastro do DBM (/dbm/products):
+    1. Carrega URLs padrão e secundária de capas das configurações do seller.
+    2. Consulta Horus SQL (ITENS_ESTOQUE_GERAL, VW_SALDO_ITENS, VW_ITENS_CONSIGNACAO, NF_ITENS/NF_MESTRE)
+       e API REST Horus (Busca_Acervo) para buscar saldo disponível, saldo consignado total, giro 90d/365d,
+       peso, largura, altura, páginas, unidades/caixa, sinopse, autor, editora, assunto e preço de capa.
+    3. Preenche os campos faltantes (peso, dimensões, capa, sinopse, unid/caixa, etc.) e atualiza os
+       indicadores do Horus (saldo disponível, consignado, giro) salvando imediatamente em prd_product.
+    """
+    from app.models.product import Product
+    from app.models.company import Company
+    from app.schemas.product import ProductResponse
+    from app.integrators.horus_products import HorusProducts
+    from app.api.storefront import parse_horus_price
+    from app.api.upload import STATIC_DIR
+
+    eff_company_id = (payload.company_id if payload and payload.company_id else None) or company_id
+    seller_id = _resolve_seller_id(current_user, eff_company_id)
+
+    product = db.query(Product).filter(
+        Product.id == product_id,
+        Product.company_id == seller_id
+    ).first()
+    if not product:
+        raise HTTPException(status_code=404, detail="Produto não encontrado no cadastro DBM.")
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    company = db.query(Company).filter(Company.id == seller_id).first()
+
+    cover_primary_base = (settings.cover_image_base_url or "").strip().rstrip("/") if settings else ""
+    cover_secondary_base = (settings.cover_image_secondary_base_url or "").strip().rstrip("/") if settings else ""
+
+    isbn_clean = re.sub(r"[^0-9Xx]", "", str(product.ean_gtin or product.barcode or "").strip())
+    cod_horus = product.horus_cod_item
+    if not cod_horus and str(product.sku or "").strip().isdigit() and len(str(product.sku).strip()) < 10:
+        cod_horus = int(str(product.sku).strip())
+
+    fields_updated: list[str] = []
+
+    # 1. Consulta Horus SQL Server (Saldo Disponível, Saldo Consignado Total da Obra, Giro 90d/365d e Metadados)
+    sql_client = None
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except Exception:
+        sql_client = None
+
+    if sql_client and (cod_horus or isbn_clean):
+        cod_filial = int(sql_client.cod_filial) if str(sql_client.cod_filial).isdigit() else 2
+        try:
+            # Descobre colunas extras existentes em ITENS_ESTOQUE_GERAL (peso, largura, altura, paginas, etc.)
+            cols_info = sql_client.query(
+                "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'ITENS_ESTOQUE_GERAL'",
+                max_rows=200
+            )
+            avail_cols = {str(c.get("COLUMN_NAME") or "").upper() for c in (cols_info or [])}
+
+            def _pick_col(candidates: list[str], default_sql: str = "NULL") -> str:
+                present = [f"I.{c}" for c in candidates if c in avail_cols]
+                if not present:
+                    return default_sql
+                return f"COALESCE({', '.join(present)})" if len(present) > 1 else present[0]
+
+            peso_expr = _pick_col(["PESO_ITEM", "PESO_BRUTO", "PESO_LIQ", "PESO", "VLR_PESO"], "0")
+            larg_expr = _pick_col(["LARGURA_ITEM", "LARGURA", "VLR_LARGURA"], "0")
+            alt_expr = _pick_col(["ALTURA_ITEM", "ALTURA", "VLR_ALTURA"], "0")
+            comp_expr = _pick_col(["COMPRIMENTO_ITEM", "COMPRIMENTO", "ESPESSURA", "PROFUNDIDADE"], "0")
+            pag_expr = _pick_col(["QTD_PAGINAS", "NRO_PAGINAS", "PAGINAS"], "0")
+            ed_num_expr = _pick_col(["NRO_EDICAO", "EDICAO"], "NULL")
+            autor_expr = _pick_col(["NOM_AUTOR", "AUTOR"], "NULL")
+            launch_expr = _pick_col(["DAT_LANCAMENTO", "DAT_EXP_LANCTO", "DAT_EDICAO", "DAT_CADASTRO", "DAT_VAL_ESTGRUPO"], "NULL")
+
+            where_parts = []
+            sql_params = []
+            if cod_horus:
+                where_parts.append("I.COD_ITEM = %s")
+                sql_params.append(int(cod_horus))
+            if isbn_clean:
+                where_parts.append("I.COD_BARRA_ITEM = %s")
+                where_parts.append("I.COD_ISBN_ITEM = %s")
+                sql_params.extend([isbn_clean, isbn_clean])
+
+            where_clause = " OR ".join(where_parts)
+            sql_item = f"""
+                SELECT TOP 1
+                    I.COD_ITEM AS cod_item,
+                    RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS isbn,
+                    RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS nome_item,
+                    RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS editora,
+                    I.COD_EDITORA AS cod_editora,
+                    RTRIM(LTRIM(ISNULL(G.NOM_GENERO, ''))) AS assunto,
+                    ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco_capa,
+                    ISNULL(S.saldo_disponivel, 0) AS saldo_disponivel,
+                    ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
+                    ISNULL(I.DESC_SINOPSE, '') AS sinopse,
+                    {peso_expr} AS peso_val,
+                    {larg_expr} AS largura_val,
+                    {alt_expr} AS altura_val,
+                    {comp_expr} AS comp_val,
+                    {pag_expr} AS paginas_val,
+                    {ed_num_expr} AS edicao_val,
+                    {autor_expr} AS autor_val,
+                    {launch_expr} AS data_lancamento
+                FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+                LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+                LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+                LEFT JOIN (
+                    SELECT COD_ITEM, MAX(VLR_CAPA) AS VLR_CAPA
+                    FROM ITENS_ESTPRECO_ATUAL WITH (NOLOCK)
+                    GROUP BY COD_ITEM
+                ) PA ON PA.COD_ITEM = I.COD_ITEM
+                LEFT JOIN (
+                    SELECT cod_item, SUM(ISNULL(saldo_disponivel, 0)) AS saldo_disponivel
+                    FROM VW_SALDO_ITENS WITH (NOLOCK)
+                    WHERE cod_filial = {cod_filial}
+                    GROUP BY cod_item
+                ) S ON S.cod_item = I.COD_ITEM
+                WHERE {where_clause}
+                ORDER BY CASE WHEN I.COD_ITEM = %s THEN 0 ELSE 1 END, I.COD_ITEM ASC
+            """
+            sql_params.append(int(cod_horus) if cod_horus else -1)
+            rows_it = sql_client.query(sql_item, tuple(sql_params), max_rows=1)
+
+            if rows_it and len(rows_it) > 0:
+                r = rows_it[0]
+                found_cod = int(r["cod_item"]) if str(r.get("cod_item") or "").isdigit() else cod_horus
+                if found_cod and not product.horus_cod_item:
+                    product.horus_cod_item = found_cod
+                    cod_horus = found_cod
+                    fields_updated.append("horus_cod_item")
+                if found_cod and not product.cod_dbm:
+                    product.cod_dbm = str(found_cod)
+                    fields_updated.append("cod_dbm")
+
+                found_isbn = str(r.get("isbn") or "").strip()
+                if found_isbn and not product.ean_gtin:
+                    product.ean_gtin = found_isbn
+                    isbn_clean = re.sub(r"[^0-9Xx]", "", found_isbn)
+                    fields_updated.append("ean_gtin")
+                if found_isbn and not product.barcode:
+                    product.barcode = found_isbn
+                    fields_updated.append("barcode")
+
+                # Saldo disponível sempre atualizado do Horus
+                new_stock = max(0, int(float(r.get("saldo_disponivel") or 0)))
+                if product.stock_quantity != new_stock:
+                    product.stock_quantity = new_stock
+                    fields_updated.append("stock_quantity")
+
+                # Preço de capa se zerado
+                preco_h = float(r.get("preco_capa") or 0.0)
+                if preco_h > 0 and (not product.base_price or product.base_price <= 0):
+                    product.base_price = round(preco_h, 2)
+                    fields_updated.append("base_price")
+
+                # Editora, código editora, assunto, sinopse, autor, unid/caixa, páginas, edição
+                if r.get("editora") and not product.brand:
+                    product.brand = str(r["editora"]).strip()[:100]
+                    fields_updated.append("brand")
+                if r.get("cod_editora") and not product.publisher_code:
+                    product.publisher_code = str(r["cod_editora"]).strip()[:100]
+                    fields_updated.append("publisher_code")
+                if r.get("assunto") and not product.subject:
+                    product.subject = str(r["assunto"]).strip()[:150]
+                    fields_updated.append("subject")
+                if r.get("sinopse") and not product.long_description:
+                    product.long_description = str(r["sinopse"]).strip()
+                    fields_updated.append("long_description")
+                if r.get("autor_val") and not product.short_description:
+                    product.short_description = str(r["autor_val"]).strip()[:400]
+                    fields_updated.append("short_description")
+
+                qtd_cx = int(float(r.get("qtd_caixa") or 0))
+                if qtd_cx > 0 and (not product.units_per_box or product.units_per_box <= 0):
+                    product.units_per_box = qtd_cx
+                    fields_updated.append("units_per_box")
+
+                pags = int(float(r.get("paginas_val") or 0))
+                if pags > 0 and (not product.pages or product.pages <= 0):
+                    product.pages = pags
+                    fields_updated.append("pages")
+
+                if r.get("edicao_val") and (not product.edition_number or product.edition_number == "0"):
+                    product.edition_number = str(r["edicao_val"]).strip()[:50]
+                    fields_updated.append("edition_number")
+
+                # Peso e dimensões se faltantes
+                peso_raw = float(r.get("peso_val") or 0.0)
+                if peso_raw > 0 and (not product.weight_kg or product.weight_kg <= 0):
+                    product.weight_kg = round(peso_raw / 1000.0, 3) if peso_raw > 15 else round(peso_raw, 3)
+                    fields_updated.append("weight_kg")
+
+                larg_raw = float(r.get("largura_val") or 0.0)
+                if larg_raw > 0 and (not product.width_cm or product.width_cm <= 0):
+                    product.width_cm = round(larg_raw, 2)
+                    fields_updated.append("width_cm")
+
+                alt_raw = float(r.get("altura_val") or 0.0)
+                if alt_raw > 0 and (not product.height_cm or product.height_cm <= 0):
+                    product.height_cm = round(alt_raw, 2)
+                    fields_updated.append("height_cm")
+
+                comp_raw = float(r.get("comp_val") or 0.0)
+                if comp_raw > 0 and (not product.length_cm or product.length_cm <= 0):
+                    product.length_cm = round(comp_raw, 2)
+                    fields_updated.append("length_cm")
+
+                # Data de lançamento se faltante
+                if r.get("data_lancamento") and not product.launch_date:
+                    l_dt = _parse_any_datetime(r["data_lancamento"])
+                    if l_dt:
+                        product.launch_date = l_dt
+                        if not product.launch_month:
+                            product.launch_month = l_dt.month
+                        if not product.launch_year:
+                            product.launch_year = l_dt.year
+                        fields_updated.append("launch_date")
+
+            # Consulta Saldo Consignado Total da Obra (VW_ITENS_CONSIGNACAO) e Giro 90d / 365d
+            if cod_horus:
+                try:
+                    c_rows = sql_client.query(
+                        """
+                        SELECT ISNULL(SUM(SALDO), 0) AS total_consignado
+                        FROM VW_ITENS_CONSIGNACAO WITH (NOLOCK)
+                        WHERE COD_ITEM = %s AND ISNULL(SALDO, 0) > 0
+                        """,
+                        (int(cod_horus),),
+                        max_rows=1
+                    )
+                    if c_rows and len(c_rows) > 0:
+                        total_consig = max(0, int(float(c_rows[0].get("total_consignado") or 0)))
+                        if product.consignment_stock != total_consig:
+                            product.consignment_stock = total_consig
+                            fields_updated.append("consignment_stock")
+                except Exception as ce:
+                    log.debug(f"[DBM Enrich] Aviso VW_ITENS_CONSIGNACAO item #{cod_horus}: {ce}")
+
+                try:
+                    cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
+                    clean_cfop_expr = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(NFI.COD_NATUREZA, NF.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
+                    g_rows = sql_client.query(
+                        f"""
+                        SELECT
+                            ISNULL(SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -90, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END), 0) AS vds_90,
+                            ISNULL(SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END), 0) AS vds_365
+                        FROM NF_ITENS NFI WITH (NOLOCK)
+                        INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                            ON NF.COD_NF = NFI.COD_NF
+                            AND NF.COD_FILIAL = NFI.COD_FILIAL
+                            AND NF.COD_EMPRESA = NFI.COD_EMPRESA
+                        WHERE NFI.COD_ITEM = %s
+                          AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                          AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
+                          AND {clean_cfop_expr} IN ({cfop_sales_in})
+                        """,
+                        (int(cod_horus),),
+                        max_rows=1
+                    )
+                    if g_rows and len(g_rows) > 0:
+                        v90 = max(0, int(float(g_rows[0].get("vds_90") or 0)))
+                        v365 = max(0, int(float(g_rows[0].get("vds_365") or 0)))
+                        if v90 > 0 or not product.sales_90:
+                            product.sales_90 = v90
+                        if v365 > 0 or not product.sales_365:
+                            product.sales_365 = v365
+                except Exception as ge:
+                    log.debug(f"[DBM Enrich] Aviso giro NF_ITENS item #{cod_horus}: {ge}")
+        except Exception as se:
+            log.warning(f"[DBM Enrich] Aviso ao enriquecer produto #{product.id} via Horus SQL: {se}")
+
+    # 2. Se ainda faltar peso ou dimensões (Largura / Altura), consulta também a API Horus REST (Busca_Acervo)
+    needs_rest_dimensions = (
+        not product.weight_kg or product.weight_kg <= 0
+        or not product.width_cm or product.width_cm <= 0
+        or not product.height_cm or product.height_cm <= 0
+        or not product.pages or product.pages <= 0
+        or not product.long_description
+    )
+    if needs_rest_dimensions and company and settings and getattr(settings, "horus_enabled", False):
+        search_term = isbn_clean or (str(cod_horus) if cod_horus else "")
+        search_opt = "BARRAS_ISBN" if (isbn_clean and len(isbn_clean) >= 10) else "COD_ITEM"
+        if search_term:
+            horus_client = None
+            try:
+                horus_client = HorusProducts(db, seller_id)
+                h_res = await horus_client.busca_acervo_padrao(
+                    id_doc=company.document or "",
+                    term=search_term,
+                    search_option=search_opt,
+                    offset=0,
+                    limit=5
+                )
+                if isinstance(h_res, list) and len(h_res) > 0 and not ("Falha" in h_res[0] or "FALHA" in h_res[0]):
+                    matched = h_res[0]
+                    for cand in h_res:
+                        c_cod = str(cand.get("COD_ITEM") or "").strip()
+                        c_isbn = re.sub(r"[^0-9Xx]", "", str(cand.get("BARRAS_ISBN") or cand.get("COD_BARRA_ITEM") or ""))
+                        if (cod_horus and c_cod == str(cod_horus)) or (isbn_clean and c_isbn == isbn_clean):
+                            matched = cand
+                            break
+
+                    raw_peso = parse_horus_price(
+                        str(matched.get("PESO") or matched.get("PESO_ITEM") or matched.get("PESO_BRUTO") or matched.get("PESO_LIQ") or "0")
+                    )
+                    if raw_peso > 0 and (not product.weight_kg or product.weight_kg <= 0):
+                        product.weight_kg = round(raw_peso / 1000.0, 3) if raw_peso > 15 else round(raw_peso, 3)
+                        fields_updated.append("weight_kg")
+
+                    w_cm = parse_horus_price(str(matched.get("LARGURA") or matched.get("LARGURA_ITEM") or matched.get("VLR_LARGURA") or "0"))
+                    if w_cm > 0 and (not product.width_cm or product.width_cm <= 0):
+                        product.width_cm = round(w_cm, 2)
+                        fields_updated.append("width_cm")
+
+                    h_cm = parse_horus_price(str(matched.get("ALTURA") or matched.get("ALTURA_ITEM") or matched.get("VLR_ALTURA") or "0"))
+                    if h_cm > 0 and (not product.height_cm or product.height_cm <= 0):
+                        product.height_cm = round(h_cm, 2)
+                        fields_updated.append("height_cm")
+
+                    l_cm = parse_horus_price(str(matched.get("COMPRIMENTO") or matched.get("COMPRIMENTO_ITEM") or matched.get("ESPESSURA") or "0"))
+                    if l_cm > 0 and (not product.length_cm or product.length_cm <= 0):
+                        product.length_cm = round(l_cm, 2)
+                        fields_updated.append("length_cm")
+
+                    pags_api = int(parse_horus_price(str(matched.get("QTD_PAGINAS") or matched.get("PAGINAS") or "0")))
+                    if pags_api > 0 and (not product.pages or product.pages <= 0):
+                        product.pages = pags_api
+                        fields_updated.append("pages")
+
+                    syn_api = str(matched.get("DESC_SINOPSE") or matched.get("SINOPSE") or matched.get("INFO_COMP_ITEM") or "").strip()
+                    if syn_api and not product.long_description:
+                        product.long_description = syn_api
+                        fields_updated.append("long_description")
+
+                    aut_api = str(matched.get("NOM_AUTOR") or matched.get("AUTOR") or "").strip()
+                    if aut_api and not product.short_description:
+                        product.short_description = aut_api[:400]
+                        fields_updated.append("short_description")
+            except Exception as ae:
+                log.debug(f"[DBM Enrich] Aviso Busca_Acervo produto #{product.id}: {ae}")
+            finally:
+                if horus_client:
+                    try:
+                        await horus_client.close()
+                    except Exception:
+                        pass
+
+    # 3. Resolução da URL de Capa (mesma cascata do Storefront B2C)
+    cover_candidates: list[str] = []
+    if product.cover_url and product.cover_url.strip():
+        cover_candidates.append(product.cover_url.strip())
+
+    if isbn_clean:
+        company_cover_dir = STATIC_DIR / str(seller_id)
+        if (company_cover_dir / f"{isbn_clean}.jpg").exists():
+            local_cov = f"/uploads/covers/{seller_id}/{isbn_clean}.jpg"
+            if local_cov not in cover_candidates:
+                cover_candidates.append(local_cov)
+        elif (company_cover_dir / f"{isbn_clean}.png").exists():
+            local_cov = f"/uploads/covers/{seller_id}/{isbn_clean}.png"
+            if local_cov not in cover_candidates:
+                cover_candidates.append(local_cov)
+
+        if cover_primary_base:
+            prim_url = f"{cover_primary_base}/{isbn_clean}.jpg"
+            if prim_url not in cover_candidates:
+                cover_candidates.append(prim_url)
+        if cover_secondary_base:
+            sec_url = f"{cover_secondary_base}/{isbn_clean}.jpg"
+            if sec_url not in cover_candidates:
+                cover_candidates.append(sec_url)
+
+        local_fallback = f"/uploads/covers/{seller_id}/{isbn_clean}.jpg"
+        if local_fallback not in cover_candidates:
+            cover_candidates.append(local_fallback)
+
+    if not product.cover_url and cover_candidates:
+        product.cover_url = cover_candidates[0]
+        fields_updated.append("cover_url")
+
+    # 4. Cálculo automático de vencimento de contrato se tiver assinatura + anos e faltar vencimento
+    if product.contract_signed_date and product.contract_validity_years and not product.contract_expires_date:
+        exp_calc = _calculate_contract_expiration_str(product.contract_signed_date, product.contract_validity_years)
+        if exp_calc:
+            product.contract_expires_date = exp_calc
+            fields_updated.append("contract_expires_date")
+
+    if fields_updated:
+        db.commit()
+        db.refresh(product)
+
+    prod_dict = ProductResponse.from_orm(product).dict()
+    prod_dict["price"] = product.promotional_price if product.promotional_price else product.base_price
+    prod_dict["stock"] = product.stock_quantity
+    prod_dict["total_stock_with_consigned"] = int(product.stock_quantity or 0) + int(product.consignment_stock or 0)
+
+    return {
+        "success": True,
+        "updated": len(fields_updated) > 0,
+        "fields_updated": fields_updated,
+        "cover_image_base_url": cover_primary_base or None,
+        "cover_image_secondary_base_url": cover_secondary_base or None,
+        "cover_candidates": cover_candidates,
+        "product": prod_dict,
+    }
+
+
+def _calculate_contract_expiration_str(signed_str: Optional[str], validity_years: Optional[int]) -> Optional[str]:
+    if not signed_str or not validity_years:
+        return None
+    try:
+        years = int(validity_years)
+        if years <= 0:
+            return None
+        s = str(signed_str).strip()
+        if "/" in s:
+            parts = s.split("/")
+            if len(parts) == 3:
+                day, month, yr = int(parts[0]), int(parts[1]), int(parts[2])
+                if yr < 100:
+                    yr += 2000
+                return f"{day:02d}/{month:02d}/{yr + years:04d}"
+        elif "-" in s:
+            parts = s[:10].split("-")
+            if len(parts) == 3:
+                yr, month, day = int(parts[0]), int(parts[1]), int(parts[2])
+                return f"{day:02d}/{month:02d}/{yr + years:04d}"
+    except Exception:
+        pass
+    return None
+
+
+# ── Importação de Planilha Excel de 2 Abas (Itens + Tiragens) no Cadastro DBM ──
+
+MAX_DBM_PRODUCTS_EXCEL_BYTES = 10 * 1024 * 1024  # 10 MB (Regra Mandatória #1 AGENTS.md)
+
+
+def _format_cell_date_br(val: Any) -> str:
+    if val is None or val == "":
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%d/%m/%Y")
+    if hasattr(val, "strftime"):
+        try:
+            return val.strftime("%d/%m/%Y")
+        except Exception:
+            pass
+    s = str(val).strip()
+    if not s:
+        return ""
+    if "/" in s and len(s) >= 8:
+        return s[:10]
+    if "-" in s and len(s) >= 10:
+        parts = s[:10].split("-")
+        if len(parts) == 3 and len(parts[0]) == 4:
+            return f"{parts[2]}/{parts[1]}/{parts[0]}"
+    return s[:30]
+
+
+def _parse_cell_datetime(val: Any) -> Optional[datetime]:
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val
+    if hasattr(val, "year") and hasattr(val, "month") and hasattr(val, "day"):
+        return datetime(val.year, val.month, val.day, 12, 0, 0)
+    s = str(val).strip()
+    if not s:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            clean_s = s[:19] if ":" in fmt else s[:10]
+            return datetime.strptime(clean_s, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _fmt_pct_br(val: Any) -> str:
+    try:
+        num = float(str(val or 0).replace(",", "."))
+        if 0 < abs(num) <= 1.0:
+            num = num * 100.0
+        return f"{num:,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "0,00%"
+
+
+def _fmt_brl(val: Any) -> str:
+    try:
+        num = float(str(val or 0).replace(",", "."))
+        return f"R$ {num:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
+def _normalize_binding_finish(raw_val: Any, title_str: str = "") -> str:
+    s = str(raw_val or "").strip().lower()
+    t_up = (title_str or "").upper()
+    if "e-book" in s or "ebook" in s or "[E-BOOK]" in t_up or "[EBOOK]" in t_up:
+        return "E-book"
+    if "capa" in s and "dura" in s:
+        return "Capa Dura"
+    if "cartonad" in s:
+        return "Cartonado"
+    if "espiral" in s or "wire" in s:
+        return "Espiral / Wire-o"
+    if "gramp" in s or "canoa" in s:
+        return "Grampeado"
+    if "flex" in s:
+        return "Flexível"
+    if "box" in s or "kit" in s:
+        return "Box / Kit"
+    return "Brochura"
+
+
+@router.post("/products/import-excel-lancamentos")
+async def import_dbm_products_excel_lancamentos(
+    file: UploadFile = File(...),
+    company_id: Optional[int] = Form(None),
+    create_missing: bool = Form(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Importa planilha Excel de 2 abas (ex: 'data de lançamento.xlsx' com 'Planilha1' + 'TIRAGENS'):
+    - Valida limite rígido de 10 MB (Regra 1 do AGENTS.md).
+    - Lê a aba de Tiragens ('TIRAGENS' ou 2ª aba), agrupando todas as tiragens pelo 'cod_prod'
+      (inclusive quando houver 2, 3 ou mais tiragens para o mesmo livro) e ordenando cronologicamente.
+    - Lê a aba de Produtos ('Planilha1' ou 1ª aba), cruzando com prd_product pelo ISBN ('ean_gtin'/'barcode')
+      ou pelo 'CodProdHorus' ('horus_cod_item'/'sku').
+    - Atualiza todos os campos existentes na Ficha de Cadastro do DBM:
+      Data de Lançamento, Mês/Ano, Páginas, Preço de Capa, Edição, Sinopse, Subtítulo/Autor, Coleção,
+      Assunto, Largura (cm), Altura (cm), Peso (gramas -> kg), Acabamento, Link da Obra (LinkGGbrasil),
+      Unidades/Caixa (UniCaixas), Giro 90d (Vds90dias), Saldo Consignado (Consignado), Esgotado/Data Esgotado,
+      Regra de Royalties, Empresa Royalties, Data de Assinatura (Data_Contrato), Anos de Validade (Anos_Validade),
+      Vencimento calculado automaticamente, % Royalties E-book (perc_royalties_ebook) e a grade completa de Tiragens!
+    """
+    import json
+    from app.models.product import Product
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Nenhum arquivo Excel foi enviado.")
+
+    fname = file.filename.strip()
+    if not fname.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(
+            status_code=400,
+            detail="Formato inválido. Envie uma planilha Excel no formato .XLSX."
+        )
+
+    content = await file.read()
+    if len(content) > MAX_DBM_PRODUCTS_EXCEL_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="O arquivo excede o limite máximo permitido de 10 MB para este tipo de envio."
+        )
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Não foi possível abrir a planilha Excel: {str(e)}")
+
+    sheet_names = wb.sheetnames
+    if not sheet_names:
+        raise HTTPException(status_code=400, detail="A planilha enviada não possui abas válidas.")
+
+    # Identifica aba de Itens (Planilha1 ou primeira aba) e aba de Tiragens (TIRAGENS ou segunda aba)
+    items_ws = None
+    tiragens_ws = None
+    for sname in sheet_names:
+        up = sname.strip().upper()
+        if "TIRAGEN" in up or "TIRAGEM" in up:
+            tiragens_ws = wb[sname]
+        elif items_ws is None:
+            items_ws = wb[sname]
+
+    if items_ws is None:
+        items_ws = wb[sheet_names[0]]
+    if tiragens_ws is None and len(sheet_names) >= 2:
+        for sname in sheet_names[1:]:
+            if wb[sname] != items_ws:
+                tiragens_ws = wb[sname]
+                break
+
+    # 1. Processa aba TIRAGENS agrupada por cod_prod
+    tiragens_by_cod_prod: dict[str, list[dict]] = {}
+    total_tiragens_rows_read = 0
+
+    if tiragens_ws is not None and tiragens_ws.max_row >= 2:
+        t_headers = [str(cell.value or "").strip() for cell in tiragens_ws[1]]
+        t_col: dict[str, int] = {}
+        for idx, h in enumerate(t_headers):
+            norm = _normalize_header(h)
+            if norm:
+                t_col[norm] = idx
+
+        def _t_val(row_vals: tuple, *keys: str) -> Any:
+            for k in keys:
+                nk = _normalize_header(k)
+                if nk in t_col and t_col[nk] < len(row_vals):
+                    return row_vals[t_col[nk]]
+            return None
+
+        raw_tiragens_by_cod: dict[str, list[tuple[datetime, dict]]] = {}
+        for r_idx, row_vals in enumerate(tiragens_ws.iter_rows(min_row=2, values_only=True), start=2):
+            cp_raw = _t_val(row_vals, "cod_prod", "codprod", "codigo")
+            if cp_raw is None or str(cp_raw).strip() == "":
+                continue
+            cp_key = str(int(float(cp_raw))) if str(cp_raw).replace(".", "").isdigit() else str(cp_raw).strip()
+
+            qtd_raw = _t_val(row_vals, "tiragem", "qtd", "quantidade")
+            try:
+                qtd_tiragem = max(0, int(float(qtd_raw or 0)))
+            except Exception:
+                qtd_tiragem = 0
+
+            dt_raw = _t_val(row_vals, "data_tiragem", "datatiragem", "data")
+            dt_obj = _parse_cell_datetime(dt_raw) or datetime(2000, 1, 1)
+            dt_str = _format_cell_date_br(dt_raw)
+
+            free_raw = _t_val(row_vals, "free_copies", "freecopies", "cortesia", "fre")
+            try:
+                free_num = float(free_raw or 0)
+                if free_num > 1 and qtd_tiragem > 0:
+                    # Em TIRAGENS do Access, free_copies pode vir em exemplares (ex: 90 de 3000 = 3,00%) ou percentual
+                    fre_str = f"{(free_num / qtd_tiragem * 100.0):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if free_num <= qtd_tiragem else f"{int(free_num)}"
+                else:
+                    fre_str = _fmt_pct_br(free_num)
+            except Exception:
+                fre_str = "0,00%"
+
+            perc_roy_raw = _t_val(row_vals, "perc_roy", "percroy", "royalties", "daroy")
+            pis_raw = _t_val(row_vals, "pis")
+            advance_raw = _t_val(row_vals, "advance", "adiantamento", "daadvance")
+            custo_unit_raw = _t_val(row_vals, "custo_unit", "custounit", "custodb")
+            custo_real_raw = _t_val(row_vals, "custo_real", "custoreal", "custopro")
+            custo_final_raw = _t_val(row_vals, "custo_final", "custofinal", "custofin")
+            roy_min_raw = _t_val(row_vals, "roy_min", "roymin", "roy")
+
+            c_unit = float(custo_unit_raw or 0) if str(custo_unit_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
+            c_real = float(custo_real_raw or 0) if str(custo_real_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
+            c_fin = float(custo_final_raw or 0) if str(custo_final_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
+            ttc_val = round(c_fin * qtd_tiragem, 2) if (c_fin > 0 and qtd_tiragem > 0) else round(c_unit * qtd_tiragem, 2)
+
+            id_tir_raw = _t_val(row_vals, "id_tiragem", "idtiragem", "id")
+            try:
+                row_id = int(float(id_tir_raw)) if id_tir_raw is not None else r_idx
+            except Exception:
+                row_id = r_idx
+
+            t_entry = {
+                "id": row_id,
+                "data_tiragem": dt_str,
+                "tiragem": qtd_tiragem,
+                "fre": fre_str,
+                "da_roy": _fmt_pct_br(perc_roy_raw),
+                "pis": _fmt_pct_br(pis_raw),
+                "da_advance": _fmt_brl(advance_raw),
+                "custo_db": _fmt_brl(c_unit),
+                "custo_pro": _fmt_brl(c_real),
+                "custo_fin": _fmt_brl(c_fin),
+                "roy": _fmt_brl(roy_min_raw),
+                "da_s": "R$ 0,00",
+                "ttc": _fmt_brl(ttc_val),
+            }
+            raw_tiragens_by_cod.setdefault(cp_key, []).append((dt_obj, t_entry))
+            total_tiragens_rows_read += 1
+
+        # Ordena tiragens de cada produto da mais antiga para a mais recente e renumera IDs sequenciais se necessário
+        for cp_key, entries in raw_tiragens_by_cod.items():
+            entries.sort(key=lambda x: x[0])
+            tiragens_by_cod_prod[cp_key] = [e[1] for e in entries]
+
+    # 2. Carrega catálogo de produtos locais do Seller e mapa de empresas (para id_empresa_royalties)
+    local_products = db.query(Product).filter(Product.company_id == seller_id).all()
+    by_isbn: dict[str, Product] = {}
+    by_horus_cod: dict[int, Product] = {}
+    by_sku: dict[str, Product] = {}
+    by_cod_dbm: dict[str, Product] = {}
+
+    for p in local_products:
+        if p.ean_gtin:
+            clean_e = re.sub(r"[^0-9Xx]", "", p.ean_gtin.strip())
+            if clean_e:
+                by_isbn[clean_e] = p
+        if p.barcode:
+            clean_b = re.sub(r"[^0-9Xx]", "", p.barcode.strip())
+            if clean_b and clean_b not in by_isbn:
+                by_isbn[clean_b] = p
+        if p.additional_isbns:
+            for extra in p.additional_isbns.replace(";", ",").split(","):
+                clean_ex = re.sub(r"[^0-9Xx]", "", extra.strip())
+                if clean_ex and clean_ex not in by_isbn:
+                    by_isbn[clean_ex] = p
+        if p.horus_cod_item is not None:
+            by_horus_cod[int(p.horus_cod_item)] = p
+        if p.sku:
+            by_sku[p.sku.strip()] = p
+        if p.cod_dbm:
+            by_cod_dbm[p.cod_dbm.strip()] = p
+
+    # Mapa de clientes/fornecedores locais caso id_empresa_royalties bata com horus_cod_fornecedor / horus_cod_cli
+    customers_local = db.query(Customer).filter(Customer.company_id == seller_id).all()
+    empresa_roy_map: dict[str, str] = {}
+    for c in customers_local:
+        label_c = (c.name or c.corporate_name or "").strip()
+        if not label_c:
+            continue
+        if c.horus_cod_fornecedor:
+            empresa_roy_map[str(c.horus_cod_fornecedor)] = label_c
+        if c.horus_cod_cli:
+            empresa_roy_map[str(c.horus_cod_cli)] = label_c
+        empresa_roy_map[str(c.id)] = label_c
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    cover_primary_base = (settings.cover_image_base_url or "").strip().rstrip("/") if settings else ""
+    cover_secondary_base = (settings.cover_image_secondary_base_url or "").strip().rstrip("/") if settings else ""
+
+    # 3. Processa aba de Itens (Planilha1)
+    i_headers = [str(cell.value or "").strip() for cell in items_ws[1]]
+    i_col: dict[str, int] = {}
+    for idx, h in enumerate(i_headers):
+        norm = _normalize_header(h)
+        if norm and norm not in i_col:
+            i_col[norm] = idx
+
+    def _i_val(row_vals: tuple, *keys: str) -> Any:
+        for k in keys:
+            nk = _normalize_header(k)
+            if nk in i_col and i_col[nk] < len(row_vals):
+                return row_vals[i_col[nk]]
+        return None
+
+    updated_products_count = 0
+    created_products_count = 0
+    matched_tiragens_books = 0
+    matched_tiragens_rows = 0
+    not_found_items: list[dict] = []
+
+    for r_idx, row_vals in enumerate(items_ws.iter_rows(min_row=2, values_only=True), start=2):
+        cod_prod_raw = _i_val(row_vals, "Cod_Prod", "codprod")
+        isbn_raw = _i_val(row_vals, "ISBN", "Cod_Barras", "codbarras", "ean")
+        cod_horus_raw = _i_val(row_vals, "CodProdHorus", "codprodhorus", "cod_horus", "cod_item")
+        titulo_raw = _i_val(row_vals, "Titulo", "nome", "name")
+
+        if cod_prod_raw is None and isbn_raw is None and cod_horus_raw is None and titulo_raw is None:
+            continue
+
+        cp_key = ""
+        if cod_prod_raw is not None and str(cod_prod_raw).strip() != "":
+            cp_key = str(int(float(cod_prod_raw))) if str(cod_prod_raw).replace(".", "").isdigit() else str(cod_prod_raw).strip()
+
+        clean_isbn = re.sub(r"[^0-9Xx]", "", str(isbn_raw or "").strip())
+        if not clean_isbn:
+            cb_raw = _i_val(row_vals, "Cod_Barras", "codbarras")
+            clean_isbn = re.sub(r"[^0-9Xx]", "", str(cb_raw or "").strip())
+
+        cod_horus_int: Optional[int] = None
+        if cod_horus_raw is not None and str(cod_horus_raw).strip() != "":
+            ch_s = str(cod_horus_raw).strip()
+            if ch_s.replace(".", "").isdigit():
+                cod_horus_int = int(float(ch_s))
+
+        # Localiza o produto correspondente no Cronuz
+        prod: Optional[Product] = None
+        if clean_isbn and clean_isbn in by_isbn:
+            prod = by_isbn[clean_isbn]
+        elif cod_horus_int is not None and cod_horus_int in by_horus_cod:
+            prod = by_horus_cod[cod_horus_int]
+        elif cod_horus_int is not None and str(cod_horus_int) in by_sku:
+            prod = by_sku[str(cod_horus_int)]
+        elif cp_key and cp_key in by_cod_dbm:
+            prod = by_cod_dbm[cp_key]
+
+        if not prod:
+            if not create_missing:
+                not_found_items.append({
+                    "row": r_idx,
+                    "cod_prod": cp_key,
+                    "cod_horus": cod_horus_int,
+                    "isbn": clean_isbn,
+                    "title": str(titulo_raw or "").strip(),
+                })
+                continue
+            sku_new = str(cod_horus_int or clean_isbn or cp_key or f"DBM-{r_idx}").strip()
+            prod = Product(
+                company_id=seller_id,
+                sku=sku_new,
+                name=str(titulo_raw or f"Livro #{sku_new}").strip()[:255],
+                ean_gtin=clean_isbn[:50] if clean_isbn else None,
+                barcode=clean_isbn[:50] if clean_isbn else None,
+                horus_cod_item=cod_horus_int,
+                cod_dbm=str(cod_horus_int or cp_key or sku_new),
+                status="ACTIVE",
+                stock_quantity=0,
+            )
+            db.add(prod)
+            db.flush()
+            created_products_count += 1
+            if clean_isbn:
+                by_isbn[clean_isbn] = prod
+            if cod_horus_int:
+                by_horus_cod[cod_horus_int] = prod
+        else:
+            updated_products_count += 1
+
+        # Atualiza campos do produto com os dados da planilha
+        if titulo_raw and str(titulo_raw).strip() and not prod.name:
+            prod.name = str(titulo_raw).strip()[:255]
+
+        sub_raw = _i_val(row_vals, "SubtTitulo", "subtitulo")
+        autor_raw = _i_val(row_vals, "Autor", "autor")
+        short_desc = str(sub_raw or autor_raw or "").strip()
+        if short_desc:
+            prod.short_description = short_desc[:400]
+
+        if clean_isbn:
+            if not prod.ean_gtin:
+                prod.ean_gtin = clean_isbn[:50]
+            if not prod.barcode:
+                prod.barcode = clean_isbn[:50]
+
+        if cod_horus_int is not None and not prod.horus_cod_item:
+            prod.horus_cod_item = cod_horus_int
+        if not prod.cod_dbm:
+            prod.cod_dbm = str(cod_horus_int or cp_key or prod.sku)
+
+        # Data de Lançamento, Ano e Mês
+        dt_lanc = _parse_cell_datetime(_i_val(row_vals, "Data_Lanc", "datalanc", "data_lancamento"))
+        if dt_lanc:
+            prod.launch_date = dt_lanc
+            prod.launch_month = dt_lanc.month
+            prod.launch_year = dt_lanc.year
+        else:
+            ano_raw = _i_val(row_vals, "Ano_Lanc", "anolanc")
+            mes_raw = _i_val(row_vals, "Mes_Lanc", "meslanc")
+            if ano_raw and str(ano_raw).replace(".", "").isdigit():
+                prod.launch_year = int(float(ano_raw))
+            if mes_raw and str(mes_raw).replace(".", "").isdigit():
+                prod.launch_month = int(float(mes_raw))
+
+        # Assunto, Coleção, Sinopse, Páginas, Edição, Unidades por Caixa
+        assunto_raw = _i_val(row_vals, "Assunto", "assunto")
+        if assunto_raw and str(assunto_raw).strip():
+            prod.subject = str(assunto_raw).strip()[:150]
+
+        col_raw = _i_val(row_vals, "Coleção", "colecao")
+        if col_raw and str(col_raw).strip():
+            prod.collection = str(col_raw).strip()[:150]
+
+        sinopse_raw = _i_val(row_vals, "Sinopse", "sinopse")
+        if sinopse_raw and str(sinopse_raw).strip():
+            prod.long_description = str(sinopse_raw).strip()
+
+        pag_raw = _i_val(row_vals, "Páginas", "paginas")
+        if pag_raw is not None and str(pag_raw).replace(".", "").isdigit():
+            p_int = int(float(pag_raw))
+            if p_int > 0:
+                prod.pages = p_int
+
+        ed_raw = _i_val(row_vals, "Edição", "edicao")
+        if ed_raw is not None and str(ed_raw).strip() != "":
+            ed_s = str(int(float(ed_raw))) if str(ed_raw).replace(".", "").isdigit() else str(ed_raw).strip()
+            prod.edition_number = ed_s[:50]
+
+        uni_cx_raw = _i_val(row_vals, "UniCaixas", "unicaixas", "unid_caixa")
+        if uni_cx_raw is not None and str(uni_cx_raw).replace(".", "").isdigit():
+            ucx = int(float(uni_cx_raw))
+            if ucx > 0:
+                prod.units_per_box = ucx
+
+        # Preço (P_Euro na planilha é o Preço de Capa em R$ se o produto estiver sem preço)
+        preco_raw = _i_val(row_vals, "P_Euro", "peuro", "preco")
+        if preco_raw is not None:
+            try:
+                p_val = float(str(preco_raw).replace(",", "."))
+                if p_val > 0 and (not prod.base_price or prod.base_price <= 0):
+                    prod.base_price = round(p_val, 2)
+            except Exception:
+                pass
+
+        # Largura, Altura e Peso (em gramas na planilha -> kg no banco)
+        larg_raw = _i_val(row_vals, "Largura", "largura")
+        if larg_raw is not None:
+            try:
+                l_val = float(str(larg_raw).replace(",", "."))
+                if l_val > 0:
+                    prod.width_cm = round(l_val, 2)
+            except Exception:
+                pass
+
+        alt_raw = _i_val(row_vals, "Altura", "altura")
+        if alt_raw is not None:
+            try:
+                a_val = float(str(alt_raw).replace(",", "."))
+                if a_val > 0:
+                    prod.height_cm = round(a_val, 2)
+            except Exception:
+                pass
+
+        peso_raw = _i_val(row_vals, "Peso", "peso")
+        if peso_raw is not None:
+            try:
+                ps_val = float(str(peso_raw).replace(",", "."))
+                if ps_val > 0:
+                    prod.weight_kg = round(ps_val / 1000.0, 3) if ps_val > 15 else round(ps_val, 3)
+            except Exception:
+                pass
+
+        # Acabamento e flag de E-book
+        acab_raw = _i_val(row_vals, "Acabamento", "acabamento", "Encadernacao")
+        if acab_raw and str(acab_raw).strip():
+            norm_acab = _normalize_binding_finish(acab_raw, prod.name)
+            prod.binding_finish = norm_acab
+            if norm_acab == "E-book":
+                prod.is_ebook = True
+        elif "[E-BOOK]" in (prod.name or "").upper() or "[EBOOK]" in (prod.name or "").upper():
+            prod.binding_finish = "E-book"
+            prod.is_ebook = True
+
+        # Link do Site (LinkGGbrasil) -> external_link
+        link_raw = _i_val(row_vals, "LinkGGbrasil", "linkggbrasil", "link", "external_link")
+        if link_raw and str(link_raw).strip():
+            prod.external_link = str(link_raw).strip()[:500]
+
+        # Esgotado e Data_Esgotado
+        dt_esg_raw = _i_val(row_vals, "Data_Esgotado", "dataesgotado")
+        if dt_esg_raw:
+            dt_esg_str = _format_cell_date_br(dt_esg_raw)
+            if dt_esg_str:
+                prod.out_of_print_date = dt_esg_str
+                prod.is_out_of_print = True
+
+        # Consignado e Giro 90 dias (se informados na planilha)
+        consig_raw = _i_val(row_vals, "Consignado", "consignado")
+        if consig_raw is not None and str(consig_raw).replace(".", "").isdigit():
+            c_val = int(float(consig_raw))
+            if c_val >= 0 and not prod.consignment_stock:
+                prod.consignment_stock = c_val
+
+        vds90_raw = _i_val(row_vals, "Vds90dias", "vds90dias")
+        if vds90_raw is not None and str(vds90_raw).replace(".", "").isdigit():
+            v90_val = int(float(vds90_raw))
+            if v90_val >= 0:
+                prod.sales_90 = v90_val
+
+        # Contratos & Royalties DBM
+        roy_rule_raw = _i_val(row_vals, "Royaties", "Royalties", "royalties")
+        if roy_rule_raw and str(roy_rule_raw).strip():
+            prod.royalty_rule = str(roy_rule_raw).strip()[:100]
+
+        id_emp_roy_raw = _i_val(row_vals, "id_empresa_royalties", "idempresaroyalties")
+        if id_emp_roy_raw is not None and str(id_emp_roy_raw).strip() != "":
+            emp_key = str(int(float(id_emp_roy_raw))) if str(id_emp_roy_raw).replace(".", "").isdigit() else str(id_emp_roy_raw).strip()
+            prod.royalty_company = empresa_roy_map.get(emp_key, emp_key)[:200]
+
+        dt_contrato_raw = _i_val(row_vals, "Data_Contrato", "datacontrato")
+        if dt_contrato_raw:
+            signed_str = _format_cell_date_br(dt_contrato_raw)
+            if signed_str:
+                prod.contract_signed_date = signed_str
+
+        anos_val_raw = _i_val(row_vals, "Anos_Validade", "anosvalidade")
+        if anos_val_raw is not None and str(anos_val_raw).replace(".", "").isdigit():
+            anos_int = int(float(anos_val_raw))
+            if anos_int > 0:
+                prod.contract_validity_years = anos_int
+
+        if prod.contract_signed_date and prod.contract_validity_years:
+            exp_str = _calculate_contract_expiration_str(prod.contract_signed_date, prod.contract_validity_years)
+            if exp_str:
+                prod.contract_expires_date = exp_str
+
+        perc_eb_raw = _i_val(row_vals, "perc_royalties_ebook", "percroyaltiesebook")
+        if perc_eb_raw is not None and str(perc_eb_raw).strip() != "":
+            try:
+                peb = float(str(perc_eb_raw).replace(",", "."))
+                if 0 < peb <= 1.0:
+                    peb = round(peb * 100.0, 2)
+                prod.ebook_royalty_pct = round(peb, 2)
+            except Exception:
+                pass
+
+        # Capa automática usando as configurações do seller se o produto ainda não tiver cover_url
+        eff_isbn = re.sub(r"[^0-9Xx]", "", str(prod.ean_gtin or clean_isbn or ""))
+        if not prod.cover_url and eff_isbn:
+            if cover_primary_base:
+                prod.cover_url = f"{cover_primary_base}/{eff_isbn}.jpg"
+            elif cover_secondary_base:
+                prod.cover_url = f"{cover_secondary_base}/{eff_isbn}.jpg"
+
+        # Cruzamento com a aba TIRAGENS pelo Cod_Prod == cod_prod
+        if cp_key and cp_key in tiragens_by_cod_prod:
+            t_list = tiragens_by_cod_prod[cp_key]
+            if t_list:
+                # Se perc_roy vier na tiragem e o livro estiver como 'Sem Royalties', ajusta para 'Royalties % Capa'
+                has_roy_in_tiragem = any(t.get("da_roy") and t.get("da_roy") != "0,00%" for t in t_list)
+                if has_roy_in_tiragem and (not prod.royalty_rule or prod.royalty_rule == "Sem Royalties"):
+                    prod.royalty_rule = "Royalties % Capa"
+                prod.dbm_tiragens = json.dumps(t_list, ensure_ascii=False)
+                matched_tiragens_books += 1
+                matched_tiragens_rows += len(t_list)
+
+    db.commit()
+
+    return {
+        "success": True,
+        "filename": fname,
+        "sheets_detected": sheet_names,
+        "updated_products_count": updated_products_count,
+        "created_products_count": created_products_count,
+        "total_tiragens_rows_read": total_tiragens_rows_read,
+        "matched_tiragens_books": matched_tiragens_books,
+        "matched_tiragens_rows": matched_tiragens_rows,
+        "not_found_count": len(not_found_items),
+        "not_found_sample": not_found_items[:20],
+        "message": (
+            f"Importação concluída com sucesso! {updated_products_count} livro(s) atualizado(s)"
+            + (f", {created_products_count} criado(s)" if created_products_count > 0 else "")
+            + f" e {matched_tiragens_rows} tiragem(ns) vinculada(s) em {matched_tiragens_books} obra(s)."
+        ),
+    }
+
+
 
 
 

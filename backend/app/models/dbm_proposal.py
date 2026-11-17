@@ -34,8 +34,10 @@ class DbmProposal(Base):
     min_order_value = Column(Float, nullable=False, default=0.0)
 
     horus_order_number = Column(String(100), nullable=True)
+    subject = Column(String(255), nullable=True, index=True)
     notes = Column(Text, nullable=True)
     items_json = Column(JSON, nullable=True)
+    desk_snapshot_json = Column(JSON, nullable=True)
 
     created_by_user_id = Column(Integer, ForeignKey("usr_user.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
