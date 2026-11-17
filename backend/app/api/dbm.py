@@ -4226,8 +4226,7 @@ async def enrich_dbm_product_from_horus(
     from app.models.product import Product
     from app.models.company import Company
     from app.schemas.product import ProductResponse
-    from app.integrators.horus_products import HorusProducts
-    from app.api.storefront import parse_horus_price
+    from app.integrators.horus_products import HorusProducts, parse_horus_price
     from app.api.upload import STATIC_DIR
 
     eff_company_id = (payload.company_id if payload and payload.company_id else None) or company_id
@@ -4821,68 +4820,80 @@ async def import_dbm_products_excel_lancamentos(
 
         raw_tiragens_by_cod: dict[str, list[tuple[datetime, dict]]] = {}
         for r_idx, row_vals in enumerate(tiragens_ws.iter_rows(min_row=2, values_only=True), start=2):
-            cp_raw = _t_val(row_vals, "cod_prod", "codprod", "codigo")
-            if cp_raw is None or str(cp_raw).strip() == "":
+            try:
+                cp_raw = _t_val(row_vals, "cod_prod", "codprod", "codigo")
+                if cp_raw is None or str(cp_raw).strip() == "":
+                    continue
+                try:
+                    cp_key = str(int(float(str(cp_raw).strip())))
+                except Exception:
+                    cp_key = str(cp_raw).strip()
+
+                qtd_raw = _t_val(row_vals, "tiragem", "qtd", "quantidade")
+                try:
+                    qtd_tiragem = max(0, int(float(str(qtd_raw or 0).replace(",", "."))))
+                except Exception:
+                    qtd_tiragem = 0
+
+                dt_raw = _t_val(row_vals, "data_tiragem", "datatiragem", "data")
+                dt_obj = _parse_cell_datetime(dt_raw) or datetime(2000, 1, 1)
+                dt_str = _format_cell_date_br(dt_raw)
+
+                free_raw = _t_val(row_vals, "free_copies", "freecopies", "cortesia", "fre")
+                try:
+                    free_num = float(str(free_raw or 0).replace(",", "."))
+                    if free_num > 1 and qtd_tiragem > 0:
+                        fre_str = f"{(free_num / qtd_tiragem * 100.0):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if free_num <= qtd_tiragem else f"{int(free_num)}"
+                    else:
+                        fre_str = _fmt_pct_br(free_num)
+                except Exception:
+                    fre_str = "0,00%"
+
+                perc_roy_raw = _t_val(row_vals, "perc_roy", "percroy", "royalties", "daroy")
+                pis_raw = _t_val(row_vals, "pis")
+                advance_raw = _t_val(row_vals, "advance", "adiantamento", "daadvance")
+                custo_unit_raw = _t_val(row_vals, "custo_unit", "custounit", "custodb")
+                custo_real_raw = _t_val(row_vals, "custo_real", "custoreal", "custopro")
+                custo_final_raw = _t_val(row_vals, "custo_final", "custofinal", "custofin")
+                roy_min_raw = _t_val(row_vals, "roy_min", "roymin", "roy")
+
+                def _safe_float(v: Any) -> float:
+                    try:
+                        return float(str(v or 0).replace(",", "."))
+                    except Exception:
+                        return 0.0
+
+                c_unit = _safe_float(custo_unit_raw)
+                c_real = _safe_float(custo_real_raw)
+                c_fin = _safe_float(custo_final_raw)
+                ttc_val = round(c_fin * qtd_tiragem, 2) if (c_fin > 0 and qtd_tiragem > 0) else round(c_unit * qtd_tiragem, 2)
+
+                id_tir_raw = _t_val(row_vals, "id_tiragem", "idtiragem", "id")
+                try:
+                    row_id = int(float(str(id_tir_raw))) if id_tir_raw is not None else r_idx
+                except Exception:
+                    row_id = r_idx
+
+                t_entry = {
+                    "id": row_id,
+                    "data_tiragem": dt_str,
+                    "tiragem": qtd_tiragem,
+                    "fre": fre_str,
+                    "da_roy": _fmt_pct_br(perc_roy_raw),
+                    "pis": _fmt_pct_br(pis_raw),
+                    "da_advance": _fmt_brl(advance_raw),
+                    "custo_db": _fmt_brl(c_unit),
+                    "custo_pro": _fmt_brl(c_real),
+                    "custo_fin": _fmt_brl(c_fin),
+                    "roy": _fmt_brl(roy_min_raw),
+                    "da_s": "R$ 0,00",
+                    "ttc": _fmt_brl(ttc_val),
+                }
+                raw_tiragens_by_cod.setdefault(cp_key, []).append((dt_obj, t_entry))
+                total_tiragens_rows_read += 1
+            except Exception as tir_err:
+                log.warning(f"[DBM Excel Import] Aviso na linha {r_idx} da aba TIRAGENS: {tir_err}")
                 continue
-            cp_key = str(int(float(cp_raw))) if str(cp_raw).replace(".", "").isdigit() else str(cp_raw).strip()
-
-            qtd_raw = _t_val(row_vals, "tiragem", "qtd", "quantidade")
-            try:
-                qtd_tiragem = max(0, int(float(qtd_raw or 0)))
-            except Exception:
-                qtd_tiragem = 0
-
-            dt_raw = _t_val(row_vals, "data_tiragem", "datatiragem", "data")
-            dt_obj = _parse_cell_datetime(dt_raw) or datetime(2000, 1, 1)
-            dt_str = _format_cell_date_br(dt_raw)
-
-            free_raw = _t_val(row_vals, "free_copies", "freecopies", "cortesia", "fre")
-            try:
-                free_num = float(free_raw or 0)
-                if free_num > 1 and qtd_tiragem > 0:
-                    # Em TIRAGENS do Access, free_copies pode vir em exemplares (ex: 90 de 3000 = 3,00%) ou percentual
-                    fre_str = f"{(free_num / qtd_tiragem * 100.0):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if free_num <= qtd_tiragem else f"{int(free_num)}"
-                else:
-                    fre_str = _fmt_pct_br(free_num)
-            except Exception:
-                fre_str = "0,00%"
-
-            perc_roy_raw = _t_val(row_vals, "perc_roy", "percroy", "royalties", "daroy")
-            pis_raw = _t_val(row_vals, "pis")
-            advance_raw = _t_val(row_vals, "advance", "adiantamento", "daadvance")
-            custo_unit_raw = _t_val(row_vals, "custo_unit", "custounit", "custodb")
-            custo_real_raw = _t_val(row_vals, "custo_real", "custoreal", "custopro")
-            custo_final_raw = _t_val(row_vals, "custo_final", "custofinal", "custofin")
-            roy_min_raw = _t_val(row_vals, "roy_min", "roymin", "roy")
-
-            c_unit = float(custo_unit_raw or 0) if str(custo_unit_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
-            c_real = float(custo_real_raw or 0) if str(custo_real_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
-            c_fin = float(custo_final_raw or 0) if str(custo_final_raw or "").replace(".", "").replace(",", "").replace("-", "").isdigit() else 0.0
-            ttc_val = round(c_fin * qtd_tiragem, 2) if (c_fin > 0 and qtd_tiragem > 0) else round(c_unit * qtd_tiragem, 2)
-
-            id_tir_raw = _t_val(row_vals, "id_tiragem", "idtiragem", "id")
-            try:
-                row_id = int(float(id_tir_raw)) if id_tir_raw is not None else r_idx
-            except Exception:
-                row_id = r_idx
-
-            t_entry = {
-                "id": row_id,
-                "data_tiragem": dt_str,
-                "tiragem": qtd_tiragem,
-                "fre": fre_str,
-                "da_roy": _fmt_pct_br(perc_roy_raw),
-                "pis": _fmt_pct_br(pis_raw),
-                "da_advance": _fmt_brl(advance_raw),
-                "custo_db": _fmt_brl(c_unit),
-                "custo_pro": _fmt_brl(c_real),
-                "custo_fin": _fmt_brl(c_fin),
-                "roy": _fmt_brl(roy_min_raw),
-                "da_s": "R$ 0,00",
-                "ttc": _fmt_brl(ttc_val),
-            }
-            raw_tiragens_by_cod.setdefault(cp_key, []).append((dt_obj, t_entry))
-            total_tiragens_rows_read += 1
 
         # Ordena tiragens de cada produto da mais antiga para a mais recente e renumera IDs sequenciais se necessário
         for cp_key, entries in raw_tiragens_by_cod.items():
@@ -5219,7 +5230,15 @@ async def import_dbm_products_excel_lancamentos(
                 matched_tiragens_books += 1
                 matched_tiragens_rows += len(t_list)
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as commit_err:
+        db.rollback()
+        log.error(f"[DBM Excel Import] Erro ao salvar alterações no banco: {commit_err}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao gravar dados da planilha no banco: {str(commit_err)[:250]}"
+        )
 
     return {
         "success": True,

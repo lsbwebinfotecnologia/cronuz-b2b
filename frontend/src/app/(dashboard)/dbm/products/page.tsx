@@ -1346,7 +1346,7 @@ export default function DbmProductsSearchPage() {
   };
 
   // Importação de Planilha Excel de 2 Abas (Itens + Tiragens)
-  const handleExcelFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleExcelFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] || null;
     setExcelImportError(null);
     setExcelImportResult(null);
@@ -1368,7 +1368,23 @@ export default function DbmProductsSearchPage() {
       e.target.value = '';
       return;
     }
-    setExcelImportFile(f);
+    try {
+      // Carrega o arquivo imediatamente para a memória RAM (Blob/File em memória)
+      // Evita o erro nativo do Chrome "net::ERR_UPLOAD_FILE_CHANGED / Failed to fetch"
+      // quando a planilha está aberta no Excel ou em pasta sincronizada (iCloud/OneDrive/Dropbox)
+      const arrayBuf = await f.arrayBuffer();
+      const inMemoryFile = new File(
+        [arrayBuf],
+        f.name,
+        {
+          type: f.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          lastModified: Date.now(),
+        }
+      );
+      setExcelImportFile(inMemoryFile);
+    } catch {
+      setExcelImportFile(f);
+    }
   };
 
   const handleUploadExcelLancamentos = async (e: React.FormEvent) => {
@@ -1382,22 +1398,55 @@ export default function DbmProductsSearchPage() {
     setExcelImportResult(null);
     try {
       const token = getToken();
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const formData = new FormData();
-      formData.append('file', excelImportFile);
-      formData.append('company_id', String(companyId));
-      formData.append('create_missing', excelCreateMissing ? 'true' : 'false');
+      const configuredApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const isProdBrowser =
+        typeof window !== 'undefined' &&
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1';
+      // Prioriza same-origin (/api) quando em produção para evitar bloqueio/CORS entre subdomínios (app.cronuzb2b -> cronuzb2b)
+      const primaryBaseUrl = isProdBrowser ? '/api' : configuredApiUrl;
 
-      const res = await fetch(`${apiUrl}/dbm/products/import-excel-lancamentos`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        },
-        body: formData
-      });
-      const data = await res.json();
+      const buildFormData = () => {
+        const fd = new FormData();
+        fd.append('file', excelImportFile);
+        if (companyId) fd.append('company_id', String(companyId));
+        fd.append('create_missing', excelCreateMissing ? 'true' : 'false');
+        return fd;
+      };
+
+      let res: Response;
+      try {
+        res = await fetch(`${primaryBaseUrl}/dbm/products/import-excel-lancamentos`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`
+          },
+          body: buildFormData()
+        });
+      } catch (networkErr) {
+        if (primaryBaseUrl !== configuredApiUrl) {
+          res = await fetch(`${configuredApiUrl}/dbm/products/import-excel-lancamentos`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`
+            },
+            body: buildFormData()
+          });
+        } else {
+          throw networkErr;
+        }
+      }
+
+      const rawText = await res.text();
+      let data: any = {};
+      try {
+        data = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        data = { detail: rawText ? `HTTP ${res.status}: ${rawText.slice(0, 200)}` : `HTTP ${res.status}` };
+      }
+
       if (!res.ok) {
-        throw new Error(data.detail || 'Erro ao processar planilha de itens e tiragens.');
+        throw new Error(data.detail || `Erro ao processar planilha (HTTP ${res.status}).`);
       }
       setExcelImportResult(data);
       await fetchProducts(false);
@@ -1405,7 +1454,12 @@ export default function DbmProductsSearchPage() {
         await loadSingleProductIntoForm(bookForm.id);
       }
     } catch (err: any) {
-      setExcelImportError(err.message || 'Falha ao importar planilha Excel.');
+      const msg = err?.message || 'Falha ao importar planilha Excel.';
+      setExcelImportError(
+        msg === 'Failed to fetch'
+          ? 'Falha de comunicação ao enviar a planilha (Failed to fetch). Caso a planilha esteja aberta no Excel, feche-a, selecione o arquivo novamente e clique em Processar.'
+          : msg
+      );
     } finally {
       setImportingExcel(false);
     }
