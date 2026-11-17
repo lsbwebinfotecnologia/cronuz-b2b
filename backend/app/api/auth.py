@@ -177,6 +177,7 @@ def login_for_access_token(
                 mobile_modules = raw
 
     response = {"access_token": access_token, "token_type": "bearer", "user": {
+        "id": user.id,
         "name": user.name,
         "email": user.email,
         "type": user.type,
@@ -185,7 +186,8 @@ def login_for_access_token(
         "company_logo": company_logo,
         "tenant_id": user.tenant_id,
         "initial_page": getattr(user, "initial_page", None),
-        "allowed_modules": getattr(user, "allowed_modules", None)
+        "allowed_modules": getattr(user, "allowed_modules", None),
+        "sidebar_collapsed": bool(getattr(user, "sidebar_collapsed", False))
     }}
     
     if mobile_modules is not None:

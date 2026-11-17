@@ -18,6 +18,33 @@ class UserPasswordUpdate(BaseModel):
 class StatusUpdate(BaseModel):
     active: bool
 
+class UserUIPreferencesUpdate(BaseModel):
+    sidebar_collapsed: Optional[bool] = None
+
+
+@router.get("/users/me/ui-preferences")
+def get_my_ui_preferences(
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    return {
+        "sidebar_collapsed": bool(getattr(current_user, "sidebar_collapsed", False)),
+    }
+
+
+@router.patch("/users/me/ui-preferences")
+def update_my_ui_preferences(
+    prefs: UserUIPreferencesUpdate,
+    db: Session = Depends(get_db),
+    current_user: user_models.User = Depends(dependencies.get_current_user),
+):
+    if prefs.sidebar_collapsed is not None:
+        current_user.sidebar_collapsed = bool(prefs.sidebar_collapsed)
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "sidebar_collapsed": bool(getattr(current_user, "sidebar_collapsed", False)),
+    }
+
 
 @router.post("/users", response_model=user_schemas.User)
 def create_user(
