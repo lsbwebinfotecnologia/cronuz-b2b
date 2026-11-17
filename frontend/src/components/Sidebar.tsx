@@ -51,7 +51,9 @@ import {
   QrCode,
   MapPin,
   Wrench,
-  Send
+  Send,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -78,6 +80,7 @@ type UserData = {
   company_name?: string;
   allowed_modules?: string[] | null;
   initial_page?: string | null;
+  sidebar_collapsed?: boolean;
 };
 
 const masterNavigation: NavItem[] = [
@@ -227,7 +230,90 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleEstantevirtual, setModuleEstantevirtual] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [hoveredFlyout, setHoveredFlyout] = useState<{ item: NavItem; top: number } | null>(null);
+  const flyoutCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const _settingsFetchedRef = useRef(false);
+  const _prefsSyncedRef = useRef(false);
+
+  const getCollapseStorageKey = (u?: UserData | null) =>
+    `cronuz_sidebar_collapsed_${u?.id || u?.email || 'default'}`;
+
+  useEffect(() => {
+    const currentUser = getUser();
+    if (!currentUser) return;
+    try {
+      const savedLocal = localStorage.getItem(getCollapseStorageKey(currentUser));
+      if (savedLocal === 'true' || savedLocal === 'false') {
+        setIsCollapsed(savedLocal === 'true');
+      } else if (typeof currentUser.sidebar_collapsed === 'boolean') {
+        setIsCollapsed(currentUser.sidebar_collapsed);
+      }
+    } catch {}
+
+    if (!_prefsSyncedRef.current) {
+      _prefsSyncedRef.current = true;
+      const tokenStr = getToken();
+      if (tokenStr) {
+        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/me/ui-preferences`, {
+          headers: { Authorization: `Bearer ${tokenStr}` },
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => {
+            if (d && typeof d.sidebar_collapsed === 'boolean') {
+              const localVal = localStorage.getItem(getCollapseStorageKey(currentUser));
+              if (localVal === null) {
+                setIsCollapsed(d.sidebar_collapsed);
+                try {
+                  localStorage.setItem(getCollapseStorageKey(currentUser), String(d.sidebar_collapsed));
+                } catch {}
+              }
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, []);
+
+  const handleToggleCollapse = async () => {
+    const next = !isCollapsed;
+    setIsCollapsed(next);
+    setHoveredFlyout(null);
+    const currentUser = user || getUser();
+    try {
+      localStorage.setItem(getCollapseStorageKey(currentUser), String(next));
+    } catch {}
+    try {
+      const tokenStr = getToken();
+      if (tokenStr) {
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/users/me/ui-preferences`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${tokenStr}`,
+          },
+          body: JSON.stringify({ sidebar_collapsed: next }),
+        });
+      }
+    } catch {}
+  };
+
+  const openFlyout = (item: NavItem, el: HTMLElement) => {
+    if (flyoutCloseTimerRef.current) {
+      clearTimeout(flyoutCloseTimerRef.current);
+      flyoutCloseTimerRef.current = null;
+    }
+    const rect = el.getBoundingClientRect();
+    const maxTop = typeof window !== 'undefined' ? Math.max(12, window.innerHeight - 280) : rect.top;
+    setHoveredFlyout({ item, top: Math.min(rect.top, maxTop) });
+  };
+
+  const scheduleCloseFlyout = () => {
+    if (flyoutCloseTimerRef.current) clearTimeout(flyoutCloseTimerRef.current);
+    flyoutCloseTimerRef.current = setTimeout(() => {
+      setHoveredFlyout(null);
+    }, 160);
+  };
 
   useEffect(() => {
     const currentUser = getUser();
@@ -744,192 +830,333 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     router.refresh();
   };
 
-  const renderNavContent = (isMobile: boolean = false) => (
-    <div className="flex h-full flex-col justify-between">
-      <div>
-        <div className="flex items-center justify-between px-2 py-4 mb-6">
-          <Link 
-            href={user?.initial_page && user.initial_page !== 'DEFAULT' ? (user.initial_page.startsWith('/') ? user.initial_page : `/${user.initial_page}`) : "/"} 
-            onClick={() => isMobile && onCloseMobile?.()} 
-            className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-          >
-            <div className="relative h-10 w-28 flex-shrink-0 flex items-center">
-              <img 
-                src="/images/cronuz-logo.png" 
-                alt="Cronuz Logo" 
-                className="object-contain w-full h-full cronuz-logo"
-              />
-              <img 
-                src="/images/logo-square-horus.png" 
-                alt="Horus Logo" 
-                className="object-contain w-full h-full hidden horus-logo"
-              />
-            </div>
-          </Link>
+  const renderNavContent = (isMobile: boolean = false) => {
+    const collapsed = !isMobile && isCollapsed;
+    return (
+      <div className="flex h-full flex-col justify-between">
+        <div>
+          <div className={cn(
+            "flex items-center mb-5",
+            collapsed ? "flex-col justify-center gap-2 px-0 py-2" : "justify-between px-2 py-3"
+          )}>
+            {!collapsed && (
+              <Link 
+                href={user?.initial_page && user.initial_page !== 'DEFAULT' ? (user.initial_page.startsWith('/') ? user.initial_page : `/${user.initial_page}`) : "/"} 
+                onClick={() => isMobile && onCloseMobile?.()} 
+                className="flex items-center gap-3 hover:opacity-80 transition-opacity min-w-0"
+              >
+                <div className="relative h-9 w-28 flex-shrink-0 flex items-center">
+                  <img 
+                    src="/images/cronuz-logo.png" 
+                    alt="Cronuz Logo" 
+                    className="object-contain w-full h-full cronuz-logo"
+                  />
+                  <img 
+                    src="/images/logo-square-horus.png" 
+                    alt="Horus Logo" 
+                    className="object-contain w-full h-full hidden horus-logo"
+                  />
+                </div>
+              </Link>
+            )}
 
-          {isMobile && (
-            <button
-              onClick={onCloseMobile}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title="Fechar Menu"
-            >
-              <LogOut className="h-5 w-5 rotate-180" />
-            </button>
-          )}
-        </div>
+            {!isMobile && (
+              <button
+                type="button"
+                onClick={handleToggleCollapse}
+                className={cn(
+                  "p-2 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer",
+                  collapsed && "mx-auto"
+                )}
+                title={collapsed ? "Expandir menu lateral" : "Recolher menu lateral (somente ícones)"}
+              >
+                {collapsed ? <PanelLeftOpen className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+              </button>
+            )}
 
-        <nav className="space-y-1">
-          {dynamicNavigation.map((item) => {
-            const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href || (sub.href === '/products' && pathname.startsWith('/products/')))) || pathname.startsWith(item.href + '/') || (item.name === 'Hub Marketplaces' && pathname.startsWith('/estantevirtual'));
-            const isOpen = openMenus[item.name];
+            {isMobile && (
+              <button
+                onClick={onCloseMobile}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                title="Fechar Menu"
+              >
+                <LogOut className="h-5 w-5 rotate-180" />
+              </button>
+            )}
+          </div>
 
-            return (
-              <div key={item.name} className={cn("space-y-1", item.name === 'Integradores' ? 'theme-horus:hidden' : '')}>
-                {item.subItems ? (
-                   <button
-                      onClick={() => toggleMenu(item.name)}
-                      className={cn(
-                        'w-full group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
-                        (isActive || isOpen)
-                          ? 'text-slate-900 dark:text-white' 
-                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
-                      )}
-                   >
-                      <div className="flex items-center gap-3">
-                        <item.icon className={cn(
-                          "h-5 w-5 transition-colors", 
-                          (isActive || isOpen) ? "text-[var(--color-primary-base)]" : "text-slate-500 group-hover:text-slate-300"
-                        )} />
-                        {item.name}
-                      </div>
-                      <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
-                   </button>
-                ) : (
-                   <Link
+          <nav className="space-y-1">
+            {dynamicNavigation.map((item) => {
+              const isActive = pathname === item.href || (item.subItems && item.subItems.some(sub => pathname === sub.href || (sub.href === '/products' && pathname.startsWith('/products/')))) || pathname.startsWith(item.href + '/') || (item.name === 'Hub Marketplaces' && pathname.startsWith('/estantevirtual'));
+              const isOpen = openMenus[item.name];
+
+              if (collapsed) {
+                return (
+                  <div
+                    key={item.name}
+                    className={cn("relative flex justify-center", item.name === 'Integradores' ? 'theme-horus:hidden' : '')}
+                    onMouseEnter={(e) => openFlyout(item, e.currentTarget)}
+                    onMouseLeave={scheduleCloseFlyout}
+                  >
+                    <Link
                       href={item.href}
-                      onClick={() => isMobile && onCloseMobile?.()}
+                      title={item.name}
                       className={cn(
-                        'group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
-                        isActive 
-                          ? 'bg-slate-100 text-slate-900 dark:bg-slate-800/80 dark:text-white shadow-sm' 
-                          : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
+                        'relative flex h-10 w-10 items-center justify-center rounded-xl transition-all duration-200',
+                        isActive
+                          ? 'bg-slate-100 text-[var(--color-primary-base)] dark:bg-slate-800/90 dark:text-white shadow-sm'
+                          : 'text-slate-500 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
                       )}
                     >
-                      <div className="flex items-center gap-3">
-                        <item.icon className={cn(
-                          "h-5 w-5 transition-colors", 
-                          isActive ? "text-[var(--color-primary-base)]" : "text-slate-500 group-hover:text-slate-300"
-                        )} />
-                        {item.name}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {item.badge ? (
-                          <span className="bg-rose-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm animate-pulse">
-                            {item.badge}
-                          </span>
-                        ) : null}
-                        {isActive && (
-                          <motion.div 
-                            layoutId="activeTabIndicator"
-                            className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary-base)]"
-                          />
-                        )}
-                      </div>
+                      <item.icon className={cn(
+                        "h-5 w-5 transition-colors",
+                        isActive ? "text-[var(--color-primary-base)]" : "text-slate-500 dark:text-slate-400"
+                      )} />
+                      {item.badge ? (
+                        <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[9px] font-black h-4 min-w-[16px] px-1 rounded-full flex items-center justify-center shadow-sm">
+                          {item.badge}
+                        </span>
+                      ) : null}
+                      {isActive && (
+                        <span className="absolute left-0 top-2.5 bottom-2.5 w-1 rounded-r-full bg-[var(--color-primary-base)]" />
+                      )}
                     </Link>
-                )}
+                  </div>
+                );
+              }
 
-                <AnimatePresence>
-                  {item.subItems && isOpen && (
-                     <motion.div 
-                       initial={{ opacity: 0, height: 0 }}
-                       animate={{ opacity: 1, height: 'auto' }}
-                       exit={{ opacity: 0, height: 0 }}
-                       className="pl-11 pr-3 overflow-hidden space-y-0.5"
+              return (
+                <div key={item.name} className={cn("space-y-1", item.name === 'Integradores' ? 'theme-horus:hidden' : '')}>
+                  {item.subItems ? (
+                     <button
+                        onClick={() => toggleMenu(item.name)}
+                        className={cn(
+                          'w-full group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
+                          (isActive || isOpen)
+                            ? 'text-slate-900 dark:text-white' 
+                            : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
+                        )}
                      >
-                        <div className="py-1">
-                          {item.subItems.map(sub => {
-                             const isSubActive = pathname === sub.href || (sub.href === '/products' && item.name === 'B2C' && pathname.startsWith('/products/'));
-                             return (
-                               <Link
-                                 key={sub.name}
-                                 href={sub.href}
-                                 onClick={() => isMobile && onCloseMobile?.()}
-                                 className={cn(
-                                   'block rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                                   isSubActive
-                                     ? 'bg-slate-100 text-[var(--color-primary-base)] dark:bg-slate-800 dark:text-[var(--color-primary-base)]'
-                                     : 'text-slate-500 hover:text-[var(--color-primary-base)] hover:bg-slate-50 dark:text-slate-400 dark:hover:text-[var(--color-primary-base)] dark:hover:bg-slate-800/50'
-                                 )}
-                               >
-                                 <div className="flex items-center gap-2">
-                                     {sub.icon && <sub.icon className="w-4 h-4" />}
-                                     {sub.name}
-                                 </div>
-                               </Link>
-                             )
-                          })}
+                        <div className="flex items-center gap-3">
+                          <item.icon className={cn(
+                            "h-5 w-5 transition-colors", 
+                            (isActive || isOpen) ? "text-[var(--color-primary-base)]" : "text-slate-500 group-hover:text-slate-300"
+                          )} />
+                          {item.name}
                         </div>
-                     </motion.div>
+                        <ChevronDown className={cn("h-4 w-4 transition-transform", isOpen && "rotate-180")} />
+                     </button>
+                  ) : (
+                     <Link
+                        href={item.href}
+                        onClick={() => isMobile && onCloseMobile?.()}
+                        className={cn(
+                          'group flex items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200',
+                          isActive 
+                            ? 'bg-slate-100 text-slate-900 dark:bg-slate-800/80 dark:text-white shadow-sm' 
+                            : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/50 dark:hover:text-slate-100'
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <item.icon className={cn(
+                            "h-5 w-5 transition-colors", 
+                            isActive ? "text-[var(--color-primary-base)]" : "text-slate-500 group-hover:text-slate-300"
+                          )} />
+                          {item.name}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {item.badge ? (
+                            <span className="bg-rose-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full shadow-sm animate-pulse">
+                              {item.badge}
+                            </span>
+                          ) : null}
+                          {isActive && (
+                            <motion.div 
+                              layoutId="activeTabIndicator"
+                              className="h-1.5 w-1.5 rounded-full bg-[var(--color-primary-base)]"
+                            />
+                          )}
+                        </div>
+                      </Link>
                   )}
-                </AnimatePresence>
-              </div>
-            );
-          })}
-        </nav>
-      </div>
 
-      <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800/80">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 relative overflow-hidden group hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700 transition-colors">
-          <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary-base)]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
-            {user?.type === 'MASTER' ? 'Empresa Atual' : 'Sua Organização'}
-          </p>
-          <p className="theme-horus:hidden text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
-             {user?.company_name || (user?.type === 'MASTER' ? 'Sede Master Cronuz' : 'Empresa Vendedora')}
-          </p>
-          <p className="hidden theme-horus:block text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
-             {user?.company_name || (user?.type === 'MASTER' ? 'Sede Parceiro' : 'Empresa Vendedora')}
-          </p>
-          {user?.type === 'MASTER' && (
-            <Link 
-              href="/companies" 
-              onClick={() => isMobile && onCloseMobile?.()} 
-              className="text-xs text-[var(--color-primary-base)] mt-2 flex items-center gap-1 hover:text-[var(--color-primary-base)] transition-colors"
+                  <AnimatePresence>
+                    {item.subItems && isOpen && (
+                       <motion.div 
+                         initial={{ opacity: 0, height: 0 }}
+                         animate={{ opacity: 1, height: 'auto' }}
+                         exit={{ opacity: 0, height: 0 }}
+                         className="pl-11 pr-3 overflow-hidden space-y-0.5"
+                       >
+                          <div className="py-1">
+                            {item.subItems.map(sub => {
+                               const isSubActive = pathname === sub.href || (sub.href === '/products' && item.name === 'B2C' && pathname.startsWith('/products/'));
+                               return (
+                                 <Link
+                                   key={sub.name}
+                                   href={sub.href}
+                                   onClick={() => isMobile && onCloseMobile?.()}
+                                   className={cn(
+                                     'block rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                                     isSubActive
+                                       ? 'bg-slate-100 text-[var(--color-primary-base)] dark:bg-slate-800 dark:text-[var(--color-primary-base)]'
+                                       : 'text-slate-500 hover:text-[var(--color-primary-base)] hover:bg-slate-50 dark:text-slate-400 dark:hover:text-[var(--color-primary-base)] dark:hover:bg-slate-800/50'
+                                   )}
+                                 >
+                                   <div className="flex items-center gap-2">
+                                       {sub.icon && <sub.icon className="w-4 h-4" />}
+                                       {sub.name}
+                                   </div>
+                                 </Link>
+                               )
+                            })}
+                          </div>
+                       </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </nav>
+        </div>
+
+        {collapsed ? (
+          <div className="space-y-2.5 pt-3 border-t border-slate-200 dark:border-slate-800/80 flex flex-col items-center">
+            {user?.type === 'MASTER' && (
+              <Link
+                href="/companies"
+                title={`Empresa Atual: ${user?.company_name || 'Sede Master'} (Trocar organização)`}
+                className="flex h-9 w-9 items-center justify-center rounded-xl border border-slate-200 bg-slate-50 text-slate-600 hover:text-[var(--color-primary-base)] dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 transition-colors"
+              >
+                <Building2 className="h-4 w-4" />
+              </Link>
+            )}
+            <div
+              title={`${user?.name || 'Usuário'} (${user?.email || ''}) — ${user?.company_name || ''}`}
+              className="h-9 w-9 rounded-full bg-slate-100 flex items-center justify-center border border-slate-200 dark:bg-slate-800 dark:border-slate-700 select-none"
             >
-              Trocar organização <ChevronRight className="h-3 w-3" />
-            </Link>
-          )}
-        </div>
-        
-        <div className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3 dark:border-slate-800/50 dark:bg-slate-900/30">
-          <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200 dark:bg-slate-800 dark:border-slate-700">
-             <span className="text-xs font-bold text-slate-500 dark:text-slate-300">
-               {user?.name?.charAt(0)?.toUpperCase() || 'U'}
-             </span>
+              <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
+                {user?.name?.charAt(0)?.toUpperCase() || 'U'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              title="Sair do Sistema"
+              className="flex h-9 w-9 items-center justify-center rounded-xl border border-rose-500/20 bg-rose-500/10 text-rose-500 hover:bg-rose-500 hover:text-white transition-all duration-200 cursor-pointer"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
-          <div className="overflow-hidden">
-            <p className="text-sm font-medium text-slate-900 truncate dark:text-white" title={user?.name}>{user?.name || 'Usuário'}</p>
-            <p className="text-xs text-slate-500 truncate dark:text-slate-400" title={user?.email}>{user?.email}</p>
-          </div>
-        </div>
+        ) : (
+          <div className="space-y-4 pt-4 border-t border-slate-200 dark:border-slate-800/80">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 relative overflow-hidden group hover:border-slate-300 dark:border-slate-800 dark:bg-slate-900/50 dark:hover:border-slate-700 transition-colors">
+              <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary-base)]/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <p className="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">
+                {user?.type === 'MASTER' ? 'Empresa Atual' : 'Sua Organização'}
+              </p>
+              <p className="theme-horus:hidden text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
+                 {user?.company_name || (user?.type === 'MASTER' ? 'Sede Master Cronuz' : 'Empresa Vendedora')}
+              </p>
+              <p className="hidden theme-horus:block text-sm font-semibold text-slate-800 dark:text-slate-200 truncate" title={user?.company_name || 'Empresa Vendedora'}>
+                 {user?.company_name || (user?.type === 'MASTER' ? 'Sede Parceiro' : 'Empresa Vendedora')}
+              </p>
+              {user?.type === 'MASTER' && (
+                <Link 
+                  href="/companies" 
+                  onClick={() => isMobile && onCloseMobile?.()} 
+                  className="text-xs text-[var(--color-primary-base)] mt-2 flex items-center gap-1 hover:text-[var(--color-primary-base)] transition-colors"
+                >
+                  Trocar organização <ChevronRight className="h-3 w-3" />
+                </Link>
+              )}
+            </div>
+            
+            <div className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3 dark:border-slate-800/50 dark:bg-slate-900/30">
+              <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center shrink-0 border border-slate-200 dark:bg-slate-800 dark:border-slate-700">
+                 <span className="text-xs font-bold text-slate-500 dark:text-slate-300">
+                   {user?.name?.charAt(0)?.toUpperCase() || 'U'}
+                 </span>
+              </div>
+              <div className="overflow-hidden">
+                <p className="text-sm font-medium text-slate-900 truncate dark:text-white" title={user?.name}>{user?.name || 'Usuário'}</p>
+                <p className="text-xs text-slate-500 truncate dark:text-slate-400" title={user?.email}>{user?.email}</p>
+              </div>
+            </div>
 
-        <button  
-          onClick={handleLogout}
-          className="flex w-full justify-center items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-500 hover:bg-rose-500 hover:text-white transition-all duration-200"
-        >
-          <LogOut className="h-4 w-4" />
-          Sair do Sistema
-        </button>
+            <button  
+              onClick={handleLogout}
+              className="flex w-full justify-center items-center gap-2 rounded-xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm font-semibold text-rose-500 hover:bg-rose-500 hover:text-white transition-all duration-200"
+            >
+              <LogOut className="h-4 w-4" />
+              Sair do Sistema
+            </button>
+          </div>
+        )}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <>
-      {/* Sidebar Desktop Fixa */}
-      <aside className="hidden md:flex h-screen flex-col border-r border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-slate-950/50 backdrop-blur-xl w-64 p-4 transition-colors overflow-y-auto no-scrollbar shrink-0">
+      {/* Sidebar Desktop Fixa (Expandida w-64 ou Recolhida w-[68px]) */}
+      <aside className={cn(
+        "hidden md:flex h-screen flex-col border-r border-slate-200 bg-white/50 dark:border-slate-800 dark:bg-slate-950/50 backdrop-blur-xl transition-all duration-200 overflow-y-auto no-scrollbar shrink-0",
+        isCollapsed ? "w-[68px] px-2 py-3" : "w-64 p-4"
+      )}>
         {renderNavContent(false)}
       </aside>
+
+      {/* Menu Flutuante / Tooltip quando a Sidebar está recolhida */}
+      {isCollapsed && hoveredFlyout && (
+        <div
+          style={{ top: hoveredFlyout.top, left: 72 }}
+          onMouseEnter={() => {
+            if (flyoutCloseTimerRef.current) {
+              clearTimeout(flyoutCloseTimerRef.current);
+              flyoutCloseTimerRef.current = null;
+            }
+          }}
+          onMouseLeave={scheduleCloseFlyout}
+          className="hidden md:block fixed z-[100]"
+        >
+          {hoveredFlyout.item.subItems && hoveredFlyout.item.subItems.length > 0 ? (
+            <div className="w-56 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xl p-2 space-y-1">
+              <div className="px-2.5 py-1.5 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+                <hoveredFlyout.item.icon className="h-4 w-4 text-[var(--color-primary-base)] shrink-0" />
+                <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                  {hoveredFlyout.item.name}
+                </span>
+              </div>
+              <div className="space-y-0.5 pt-0.5">
+                {hoveredFlyout.item.subItems.map((sub) => {
+                  const isSubActive = pathname === sub.href || (sub.href === '/products' && hoveredFlyout.item.name === 'B2C' && pathname.startsWith('/products/'));
+                  return (
+                    <Link
+                      key={sub.name}
+                      href={sub.href}
+                      onClick={() => setHoveredFlyout(null)}
+                      className={cn(
+                        'flex items-center gap-2 rounded-xl px-2.5 py-2 text-xs font-medium transition-colors',
+                        isSubActive
+                          ? 'bg-slate-100 text-[var(--color-primary-base)] dark:bg-slate-800 dark:text-[var(--color-primary-base)] font-semibold'
+                          : 'text-slate-600 hover:text-[var(--color-primary-base)] hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800/60'
+                      )}
+                    >
+                      {sub.icon && <sub.icon className="w-3.5 h-3.5 shrink-0" />}
+                      <span className="truncate">{sub.name}</span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="px-3 py-1.5 rounded-xl bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900 text-xs font-semibold shadow-lg whitespace-nowrap pointer-events-none">
+              {hoveredFlyout.item.name}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Drawer Sidebar Mobile Flutuante */}
       <AnimatePresence>

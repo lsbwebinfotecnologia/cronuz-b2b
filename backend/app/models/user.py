@@ -30,6 +30,7 @@ class User(Base):
     # Custom Redirect & Permission Scope
     initial_page = Column(String(100), nullable=True) # e.g. '/pdv', '/product-search', '/orders'
     allowed_modules = Column(JSON, nullable=True)     # e.g. ['pdv'], ['busca_preco'], None = All modules
+    sidebar_collapsed = Column(Boolean, default=False, nullable=False)
     
     # Security & 2FA
     failed_login_attempts = Column(Integer, default=0, nullable=False)

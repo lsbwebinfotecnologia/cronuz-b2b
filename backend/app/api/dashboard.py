@@ -404,6 +404,7 @@ def get_dashboard_metrics(
         "module_pdv": module_pdv,
         "pdv_horus_sync_enabled": bool(module_pdv and pdv_horus_sync_enabled),
         "user_allowed_modules": getattr(current_user, "allowed_modules", None) if current_user else None,
+        "user_sidebar_collapsed": bool(getattr(current_user, "sidebar_collapsed", False)) if current_user else False,
         "module_agents": module_agents,
 
         "module_financial": module_financial,

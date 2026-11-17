@@ -1242,6 +1242,12 @@ export default function SellerB2CStorefrontManagementPage({
     }
   };
 
+  const [mountedCompanyName, setMountedCompanyName] = useState('');
+  useEffect(() => {
+    const u = getUser() as any;
+    if (u?.company_name) setMountedCompanyName(u.company_name);
+  }, []);
+
   const originUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
   const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
   const isHorusTenant = currentHost.includes('horus');
@@ -1262,7 +1268,7 @@ export default function SellerB2CStorefrontManagementPage({
       summary?.settings?.company_name ||
         settingsForm.footer_info?.legal_name ||
         summary?.settings?.domain ||
-        (getUser() as any)?.company_name ||
+        mountedCompanyName ||
         ''
     ) || 'loja-oficial';
   const effectiveStoreSlug =

@@ -13,6 +13,7 @@ class UserBase(BaseModel):
     active: bool = True
     initial_page: Optional[str] = None
     allowed_modules: Optional[list] = None
+    sidebar_collapsed: Optional[bool] = False
 
 class UserCreate(UserBase):
     password: str
@@ -27,6 +28,7 @@ class UserUpdate(BaseModel):
     active: Optional[bool] = None
     initial_page: Optional[str] = None
     allowed_modules: Optional[list] = None
+    sidebar_collapsed: Optional[bool] = False
 
 class UserEmailUpdate(BaseModel):
     email: EmailStr
