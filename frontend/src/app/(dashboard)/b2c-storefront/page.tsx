@@ -215,7 +215,7 @@ export default function SellerB2CStorefrontManagementPage({
     horus_order_config: {
       enabled: false,
       auto_send_on_paid: false,
-      tipo_pedido: 'L',
+      tipo_pedido: 'V',
       cod_param_fiscal_intra: '',
       cod_param_fiscal_inter: '',
       cod_metodo: '1',
@@ -223,11 +223,18 @@ export default function SellerB2CStorefrontManagementPage({
       cod_transp: '',
       frete_emit_dest: '1',
       status_envio_erp: 'LEX',
-      resp_cliente: '',
-      cod_resp: '',
+      pular_expedicao: false,
+      resp_cliente: 'FMZ',
+      cod_resp: '1',
+      cod_tipo_cliente: '',
       cod_forma: '',
+      cod_forma_zero: '',
+      order_prefix: '',
       send_freight_value: true,
       price_mode: 'UNIT_PRICE',
+      transport_from_to: [] as any[],
+      payment_from_to: [] as any[],
+      method_from_to: [] as any[],
     } as Record<string, any>,
     email_notifications_config: {
       enabled: true,
@@ -467,7 +474,7 @@ export default function SellerB2CStorefrontManagementPage({
             horus_order_config: {
               enabled: Boolean(hOrd.enabled),
               auto_send_on_paid: Boolean(hOrd.auto_send_on_paid),
-              tipo_pedido: hOrd.tipo_pedido || 'L',
+              tipo_pedido: hOrd.tipo_pedido === 'L' || !hOrd.tipo_pedido ? 'V' : hOrd.tipo_pedido,
               cod_param_fiscal_intra: hOrd.cod_param_fiscal_intra || '',
               cod_param_fiscal_inter: hOrd.cod_param_fiscal_inter || '',
               cod_metodo: hOrd.cod_metodo || '1',
@@ -475,11 +482,18 @@ export default function SellerB2CStorefrontManagementPage({
               cod_transp: hOrd.cod_transp || '',
               frete_emit_dest: hOrd.frete_emit_dest || '1',
               status_envio_erp: hOrd.status_envio_erp || 'LEX',
-              resp_cliente: hOrd.resp_cliente || '',
-              cod_resp: hOrd.cod_resp || '',
+              pular_expedicao: Boolean(hOrd.pular_expedicao),
+              resp_cliente: hOrd.resp_cliente || 'FMZ',
+              cod_resp: hOrd.cod_resp || '1',
+              cod_tipo_cliente: hOrd.cod_tipo_cliente || '',
               cod_forma: hOrd.cod_forma || '',
+              cod_forma_zero: hOrd.cod_forma_zero || '',
+              order_prefix: hOrd.order_prefix || '',
               send_freight_value: hOrd.send_freight_value !== false,
               price_mode: hOrd.price_mode || 'UNIT_PRICE',
+              transport_from_to: Array.isArray(hOrd.transport_from_to) ? hOrd.transport_from_to : [],
+              payment_from_to: Array.isArray(hOrd.payment_from_to) ? hOrd.payment_from_to : [],
+              method_from_to: Array.isArray(hOrd.method_from_to) ? hOrd.method_from_to : [],
             },
             email_notifications_config: {
               enabled: s.settings.email_notifications_config?.enabled !== false,
@@ -4390,9 +4404,9 @@ export default function SellerB2CStorefrontManagementPage({
           </div>
           )}
 
-          {/* SUB-ABA: INTEGRAÇÃO DE PEDIDOS COM O HORUS ERP (API ABERTA B2C) */}
+          {/* SUB-ABA: INTEGRAÇÃO DE PEDIDOS COM O HORUS ERP (API PADRÃO HORUS — SEM ID_GUID) */}
           {settingsSubTab === 'horus_orders' && (
-            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-5 shadow-sm">
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-6 space-y-6 shadow-sm">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 pb-4">
                 <div className="flex items-center gap-3">
                   <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-600">
@@ -4400,10 +4414,10 @@ export default function SellerB2CStorefrontManagementPage({
                   </div>
                   <div>
                     <h1 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
-                      Integração de Pedidos com o Horus ERP (API Aberta B2C)
+                      Integração de Pedidos — API Padrão Horus ERP (Sem ID_GUID e Sem Parâmetros Fiscais)
                     </h1>
                     <p className="text-xs text-slate-500">
-                      Cadastra ou localiza o cliente apenas pelo CPF/CNPJ (sem exigir ID_GUID), atualiza o endereço de entrega e cria o pedido de venda automaticamente em CAIXA ALTA.
+                      Cadastra/atualiza cliente (<code className="font-mono">Busca_Cliente</code> + <code className="font-mono">InsAltCliente</code> + <code className="font-mono">InsAltEndCliente</code>), aplica o motor <strong>DE/PARA</strong> de Transportadora, Forma de Pagamento e Método de Venda e cria o pedido em CAIXA ALTA (<code className="font-mono">InsPedidoVenda</code> + <code className="font-mono">InsItensPedidoVenda</code>).
                     </p>
                   </div>
                 </div>
@@ -4490,258 +4504,633 @@ export default function SellerB2CStorefrontManagementPage({
                 </label>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* BLOCO 1: PARÂMETROS GERAIS DA API PADRÃO HORUS */}
+              <div className="p-4 sm:p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 space-y-4">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Parâmetro Fiscal Estadual (Mesma UF) *
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_param_fiscal_intra || ''}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_param_fiscal_intra: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="Ex: 68 ou 1"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
-                  />
+                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
+                    1. Parâmetros Gerais do Cliente &amp; Pedido (API Padrão Horus)
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Na API Padrão do Horus (<code className="font-mono">InsPedidoVenda</code>), <strong>não são necessários códigos de parâmetros fiscais</strong>. O pedido utiliza apenas os códigos de método, transportadora, forma de pagamento e responsável abaixo.
+                  </p>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Parâmetro Fiscal Interestadual (Outra UF) *
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_param_fiscal_inter || ''}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_param_fiscal_inter: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="Ex: 41 ou 2"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Tipo de Pedido (`TIPO_PEDIDO_V_T_D`)
-                  </label>
-                  <select
-                    value={settingsForm.horus_order_config?.tipo_pedido || 'L'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          tipo_pedido: e.target.value,
-                        },
-                      })
-                    }
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
-                  >
-                    <option value="L">L — Liberação / Remessa (Padrão B2C)</option>
-                    <option value="V">V — Venda Direta</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Status Final no Horus (`STA_PEDIDO`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.status_envio_erp || 'LEX'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          status_envio_erp: e.target.value.toUpperCase(),
-                        },
-                      })
-                    }
-                    placeholder="LEX"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold uppercase"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Código do Método (`COD_METODO`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_metodo || '1'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_metodo: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="1 ou 2"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Tipo de Endereço (`COD_TPO_END`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_endereco || '1'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_endereco: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="1"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Código da Transportadora (`COD_TRANSP`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_transp || ''}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_transp: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="Ex: 2"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Modalidade Frete (`FRETE_EMIT_DEST`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.frete_emit_dest || '1'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          frete_emit_dest: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="1 (CIF) ou 2 (FOB)"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Responsável p/ Novos Clientes (`NOM_RESP`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.resp_cliente || ''}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          resp_cliente: e.target.value.toUpperCase(),
-                        },
-                      })
-                    }
-                    placeholder="Ex: LOJA B2C ou FMZ"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs uppercase font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Cód. Responsável (`COD_RESPONSAVEL`)
-                  </label>
-                  <input
-                    type="text"
-                    value={settingsForm.horus_order_config?.cod_resp || '1'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          cod_resp: e.target.value,
-                        },
-                      })
-                    }
-                    placeholder="1"
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Valor Unitário Enviado nos Itens (`VLR_LIQUIDO`)
-                  </label>
-                  <select
-                    value={settingsForm.horus_order_config?.price_mode || 'UNIT_PRICE'}
-                    onChange={(e) =>
-                      setSettingsForm({
-                        ...settingsForm,
-                        horus_order_config: {
-                          ...settingsForm.horus_order_config,
-                          price_mode: e.target.value,
-                        },
-                      })
-                    }
-                    className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
-                  >
-                    <option value="UNIT_PRICE">Preço Unitário de Venda da Loja</option>
-                    <option value="NET_PAID">Valor Líquido proporcional (após abatimento de cupom)</option>
-                  </select>
-                </div>
-
-                <div className="flex items-end">
-                  <label className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold cursor-pointer w-full">
-                    <input
-                      type="checkbox"
-                      checked={settingsForm.horus_order_config?.send_freight_value !== false}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Tipo de Pedido (`TIPO_PEDIDO_V_T_D`)
+                    </label>
+                    <select
+                      value={settingsForm.horus_order_config?.tipo_pedido || 'V'}
                       onChange={(e) =>
                         setSettingsForm({
                           ...settingsForm,
                           horus_order_config: {
                             ...settingsForm.horus_order_config,
-                            send_freight_value: e.target.checked,
+                            tipo_pedido: e.target.value,
                           },
                         })
                       }
-                      className="w-4 h-4 rounded text-indigo-600"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+                    >
+                      <option value="V">V — Venda (Padrão API Horus)</option>
+                      <option value="D">D — Doação / Cortesia</option>
+                      <option value="T">T — Transferência</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Método de Venda Padrão (`COD_METODO`) *
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_metodo || '1'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_metodo: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 8 ou 1"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
                     />
-                    <span>Enviar Valor do Frete (`VLR_FRETE`)</span>
-                  </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Cód. Responsável Cliente (`COD_RESPONSAVEL`) *
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_resp || '1'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_resp: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 1"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Nome do Responsável (`NOM_RESP`) *
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.resp_cliente || 'FMZ'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            resp_cliente: e.target.value.toUpperCase(),
+                          },
+                        })
+                      }
+                      placeholder="Ex: FMZ"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs uppercase font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Tipo de Endereço (`COD_TPO_END`)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_endereco || '1'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_endereco: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="1"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Tipo de Cliente (`COD_TIPO_CLIENTE` - Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_tipo_cliente || ''}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_tipo_cliente: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 1 (InsAltTipoCliente)"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Modalidade Frete (`FRETE_EMIT_DEST`)
+                    </label>
+                    <select
+                      value={settingsForm.horus_order_config?.frete_emit_dest || '1'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            frete_emit_dest: e.target.value,
+                          },
+                        })
+                      }
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+                    >
+                      <option value="1">1 — Emitente (CIF)</option>
+                      <option value="2">2 — Destinatário (FOB)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Status Final no Horus (`STA_PEDIDO`)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.status_envio_erp || 'LEX'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            status_envio_erp: e.target.value.toUpperCase(),
+                          },
+                        })
+                      }
+                      placeholder="LEX"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold uppercase"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Transportadora Padrão / Fallback (`COD_TRANSP`)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_transp || ''}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_transp: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 71 (Usado se não houver De/Para)"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Forma Pagamento Padrão / Fallback (`COD_FORMA`)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_forma || ''}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_forma: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 8 (Usado se não houver De/Para)"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Forma Pagamento p/ Pedido Zerado (100% Cupom)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.cod_forma_zero || ''}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            cod_forma_zero: e.target.value,
+                          },
+                        })
+                      }
+                      placeholder="Ex: 8 (Envia itens a R$ 0,10)"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Prefixo do Pedido (`COD_PEDIDO_ORIGEM`)
+                    </label>
+                    <input
+                      type="text"
+                      value={settingsForm.horus_order_config?.order_prefix || ''}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            order_prefix: e.target.value.toUpperCase(),
+                          },
+                        })
+                      }
+                      placeholder="Vazio p/ número puro (ex: 3149)"
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono uppercase"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Modo de Envio de Desconto / Cupom
+                    </label>
+                    <select
+                      value={settingsForm.horus_order_config?.price_mode || 'UNIT_PRICE'}
+                      onChange={(e) =>
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            price_mode: e.target.value,
+                          },
+                        })
+                      }
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+                    >
+                      <option value="UNIT_PRICE">Enviar VALOR_CUPOM_DESCONTO no Pedido (Padrão PHP)</option>
+                      <option value="NET_AFTER_COUPON">Ratear desconto no VLR_LIQUIDO dos itens</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-end">
+                    <label className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold cursor-pointer w-full">
+                      <input
+                        type="checkbox"
+                        checked={settingsForm.horus_order_config?.send_freight_value !== false}
+                        onChange={(e) =>
+                          setSettingsForm({
+                            ...settingsForm,
+                            horus_order_config: {
+                              ...settingsForm.horus_order_config,
+                              send_freight_value: e.target.checked,
+                            },
+                          })
+                        }
+                        className="w-4 h-4 rounded text-indigo-600"
+                      />
+                      <span>Enviar Valor do Frete (`VLR_FRETE`)</span>
+                    </label>
+                  </div>
+
+                  <div className="flex items-end">
+                    <label className="flex items-center gap-2.5 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold cursor-pointer w-full">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(settingsForm.horus_order_config?.pular_expedicao)}
+                        onChange={(e) =>
+                          setSettingsForm({
+                            ...settingsForm,
+                            horus_order_config: {
+                              ...settingsForm.horus_order_config,
+                              pular_expedicao: e.target.checked,
+                            },
+                          })
+                        }
+                        className="w-4 h-4 rounded text-indigo-600"
+                      />
+                      <span>Pular Expedição (`Pular_expedicao = S`)</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* BLOCO 2: MOTOR DE/PARA (FROM -> TO) ESTILO CRONUZ INTEGRATOR */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                {/* 2.1 DE/PARA DE TRANSPORTADORAS */}
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                        De/Para • Transportadoras (`COD_TRANSP`)
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Mapeie o nome do frete da loja para o código da transportadora no Horus.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentList = Array.isArray(settingsForm.horus_order_config?.transport_from_to)
+                          ? [...settingsForm.horus_order_config.transport_from_to]
+                          : [];
+                        const defTransp = settingsForm.horus_order_config?.cod_transp || '71';
+                        const presets = ['Frete Grátis', 'Transportadora Expressa', 'Entrega Padrão', 'PAC', 'SEDEX'];
+                        const carrierNames = (settingsForm.freight_config?.carrier_table || [])
+                          .map((c: any) => String(c.name || '').trim())
+                          .filter(Boolean);
+                        for (const name of [...carrierNames, ...presets]) {
+                          if (!currentList.some((x: any) => String(x.from_value || '').toLowerCase() === name.toLowerCase())) {
+                            currentList.push({ from_value: name, to_horus: defTransp });
+                          }
+                        }
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            transport_from_to: currentList,
+                          },
+                        });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold shrink-0 cursor-pointer"
+                    >
+                      + Preencher Fretes
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(settingsForm.horus_order_config?.transport_from_to || []).map((row: any, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={row.from_value || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.transport_from_to || [])];
+                            next[idx] = { ...next[idx], from_value: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, transport_from_to: next },
+                            });
+                          }}
+                          placeholder="DE (ex: Frete Grátis)"
+                          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                        />
+                        <span className="text-slate-400 text-xs font-bold">→</span>
+                        <input
+                          type="text"
+                          value={row.to_horus || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.transport_from_to || [])];
+                            next[idx] = { ...next[idx], to_horus: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, transport_from_to: next },
+                            });
+                          }}
+                          placeholder="COD_TRANSP"
+                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold text-center"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = (settingsForm.horus_order_config?.transport_from_to || []).filter(
+                              (_: any, i: number) => i !== idx
+                            );
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, transport_from_to: next },
+                            });
+                          }}
+                          className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = [
+                          ...(settingsForm.horus_order_config?.transport_from_to || []),
+                          { from_value: '', to_horus: settingsForm.horus_order_config?.cod_transp || '' },
+                        ];
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: { ...settingsForm.horus_order_config, transport_from_to: next },
+                        });
+                      }}
+                      className="w-full py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-indigo-400 hover:text-indigo-600 cursor-pointer"
+                    >
+                      + Adicionar De/Para de Transportadora
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2.2 DE/PARA DE FORMAS DE PAGAMENTO */}
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-extrabold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">
+                        De/Para • Formas de Pagamento (`COD_FORMA`)
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Mapeie PIX, Cartão, Link Vindi e Cupom 100% para o código no Horus.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentList = Array.isArray(settingsForm.horus_order_config?.payment_from_to)
+                          ? [...settingsForm.horus_order_config.payment_from_to]
+                          : [];
+                        const defForma = settingsForm.horus_order_config?.cod_forma || '8';
+                        const presets = ['PIX', 'CREDIT_CARD', 'PAYMENT_LINK', 'COUPON_100'];
+                        for (const p of presets) {
+                          if (!currentList.some((x: any) => String(x.from_value || '').toUpperCase() === p)) {
+                            currentList.push({ from_value: p, to_horus: defForma });
+                          }
+                        }
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: {
+                            ...settingsForm.horus_order_config,
+                            payment_from_to: currentList,
+                          },
+                        });
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold shrink-0 cursor-pointer"
+                    >
+                      + Preencher Pagamentos
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(settingsForm.horus_order_config?.payment_from_to || []).map((row: any, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={row.from_value || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.payment_from_to || [])];
+                            next[idx] = { ...next[idx], from_value: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, payment_from_to: next },
+                            });
+                          }}
+                          placeholder="DE (ex: PIX, CREDIT_CARD)"
+                          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                        />
+                        <span className="text-slate-400 text-xs font-bold">→</span>
+                        <input
+                          type="text"
+                          value={row.to_horus || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.payment_from_to || [])];
+                            next[idx] = { ...next[idx], to_horus: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, payment_from_to: next },
+                            });
+                          }}
+                          placeholder="COD_FORMA"
+                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold text-center"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = (settingsForm.horus_order_config?.payment_from_to || []).filter(
+                              (_: any, i: number) => i !== idx
+                            );
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, payment_from_to: next },
+                            });
+                          }}
+                          className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = [
+                          ...(settingsForm.horus_order_config?.payment_from_to || []),
+                          { from_value: '', to_horus: settingsForm.horus_order_config?.cod_forma || '' },
+                        ];
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: { ...settingsForm.horus_order_config, payment_from_to: next },
+                        });
+                      }}
+                      className="w-full py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-emerald-400 hover:text-emerald-600 cursor-pointer"
+                    >
+                      + Adicionar De/Para de Pagamento
+                    </button>
+                  </div>
+                </div>
+
+                {/* 2.3 DE/PARA DE MÉTODO DE VENDA (OPCIONAL MULTI-MÉTODO) */}
+                <div className="p-4 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40 space-y-3">
+                  <div>
+                    <h4 className="text-xs font-extrabold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                      De/Para • Método de Venda (`COD_METODO`)
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Opcional: se vazio, usa sempre o <code className="font-mono">COD_METODO</code> padrão ({settingsForm.horus_order_config?.cod_metodo || '1'}).
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    {(settingsForm.horus_order_config?.method_from_to || []).map((row: any, idx: number) => (
+                      <div key={idx} className="flex items-center gap-1.5">
+                        <input
+                          type="text"
+                          value={row.from_value || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.method_from_to || [])];
+                            next[idx] = { ...next[idx], from_value: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, method_from_to: next },
+                            });
+                          }}
+                          placeholder="Canal (ex: VINDI, EFI)"
+                          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono"
+                        />
+                        <span className="text-slate-400 text-xs font-bold">→</span>
+                        <input
+                          type="text"
+                          value={row.to_horus || ''}
+                          onChange={(e) => {
+                            const next = [...(settingsForm.horus_order_config?.method_from_to || [])];
+                            next[idx] = { ...next[idx], to_horus: e.target.value };
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, method_from_to: next },
+                            });
+                          }}
+                          placeholder="COD_METODO"
+                          className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-bold text-center"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = (settingsForm.horus_order_config?.method_from_to || []).filter(
+                              (_: any, i: number) => i !== idx
+                            );
+                            setSettingsForm({
+                              ...settingsForm,
+                              horus_order_config: { ...settingsForm.horus_order_config, method_from_to: next },
+                            });
+                          }}
+                          className="p-1.5 text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = [
+                          ...(settingsForm.horus_order_config?.method_from_to || []),
+                          { from_value: '', to_horus: settingsForm.horus_order_config?.cod_metodo || '1' },
+                        ];
+                        setSettingsForm({
+                          ...settingsForm,
+                          horus_order_config: { ...settingsForm.horus_order_config, method_from_to: next },
+                        });
+                      }}
+                      className="w-full py-1.5 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:border-amber-400 hover:text-amber-600 cursor-pointer"
+                    >
+                      + Adicionar De/Para de Método
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

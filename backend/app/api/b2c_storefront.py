@@ -566,7 +566,7 @@ def _default_b2c_horus_order_config(db: Optional[Session] = None, company_id: Op
     base = {
         "enabled": False,
         "auto_send_on_paid": False,
-        "tipo_pedido": "L",  # "L" = Logística/Remessa B2C (não exige condição financeira) ou "V" = Venda
+        "tipo_pedido": "V",  # "V" = Venda (API Padrão Horus), "D" = Doação/Cortesia, "T" = Transferência
         "cod_param_fiscal_intra": "",
         "cod_param_fiscal_inter": "",
         "cod_metodo": "1",
@@ -574,29 +574,87 @@ def _default_b2c_horus_order_config(db: Optional[Session] = None, company_id: Op
         "cod_transp": "",
         "frete_emit_dest": "1",  # 1 = Emitente, 2 = Destinatário
         "status_envio_erp": "LEX",
-        "resp_cliente": "",
-        "cod_resp": "",
+        "pular_expedicao": False,
+        "resp_cliente": "FMZ",
+        "cod_resp": "1",
+        "cod_tipo_cliente": "",
         "cod_forma": "",
+        "cod_forma_zero": "",
+        "order_prefix": "",
         "send_freight_value": True,
-        "price_mode": "UNIT_PRICE",  # "UNIT_PRICE" = Preço Unitário do Item | "NET_AFTER_COUPON" = Líquido pós-cupom
+        "price_mode": "UNIT_PRICE",  # "UNIT_PRICE" = Preço Unitário + VALOR_CUPOM_DESCONTO | "NET_AFTER_COUPON" = Líquido pós-cupom
+        "transport_from_to": [],
+        "payment_from_to": [],
+        "method_from_to": [],
     }
     if db and company_id:
         try:
             from app.models.dropship import DropshipConfig
             dsp = db.query(DropshipConfig).filter(DropshipConfig.company_id == company_id).first()
             if dsp:
-                base["cod_param_fiscal_intra"] = str(dsp.horus_fiscal_param_remessa_intra or dsp.horus_fiscal_param_venda or "")
-                base["cod_param_fiscal_inter"] = str(dsp.horus_fiscal_param_remessa_inter or dsp.horus_fiscal_param_venda or "")
                 base["cod_metodo"] = str(dsp.horus_cod_metodo or "1")
                 base["cod_endereco"] = str(dsp.horus_cod_endereco or "1")
                 base["cod_transp"] = str(dsp.horus_cod_transp or "")
                 base["frete_emit_dest"] = str(dsp.horus_frete_emit_dest or "1")
                 base["status_envio_erp"] = str(dsp.horus_status_envio_erp or "LEX")
-                base["resp_cliente"] = str(dsp.horus_resp_cliente or "").upper()
-                base["cod_resp"] = str(dsp.horus_cod_resp or "")
+                if dsp.horus_resp_cliente:
+                    base["resp_cliente"] = str(dsp.horus_resp_cliente).upper()
+                if dsp.horus_cod_resp:
+                    base["cod_resp"] = str(dsp.horus_cod_resp)
         except Exception:
             pass
     return base
+
+
+def _normalize_from_to_key(val: Optional[str]) -> str:
+    import unicodedata
+    raw = str(val or "").replace("&", "E").strip().upper()
+    norm = unicodedata.normalize("NFKD", raw).encode("ASCII", "ignore").decode("ASCII")
+    return re.sub(r"[\s_\-]+", " ", norm).strip()
+
+
+def _resolve_horus_from_to(
+    mappings: Optional[List[Dict[str, Any]]],
+    raw_key: Optional[str],
+    fallback_val: Optional[str] = None,
+) -> tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """
+    Resolve um código Horus a partir da lista DE/PARA (FromTo) comparando de forma case/accent-insensitive
+    ou por substring limpa (ex: 'Transportadora Expressa (0.35 kg)' -> 'Transportadora Expressa'),
+    com suporte a curinga ('*', 'TODOS', 'ALL') e fallback padrão.
+    """
+    target = _normalize_from_to_key(raw_key)
+    target_no_weight = re.sub(r"\s*\([^)]*KG\)\s*$", "", target).strip()
+    target_no_free = re.sub(r"\s*-\s*FRETE GRATIS\s*$", "", target_no_weight).strip()
+
+    wildcard_row: Optional[Dict[str, Any]] = None
+    for row in (mappings or []):
+        if not isinstance(row, dict):
+            continue
+        f_val = _normalize_from_to_key(row.get("from_value") or row.get("fromm") or row.get("de"))
+        t_val = str(row.get("to_horus") or row.get("too") or row.get("para") or "").strip().upper()
+        if not f_val or not t_val:
+            continue
+        if f_val in ("*", "TODOS", "ALL", "PADRAO"):
+            wildcard_row = row
+            continue
+        if target and (
+            f_val == target
+            or f_val == target_no_weight
+            or f_val == target_no_free
+            or (len(f_val) >= 3 and f_val in target)
+        ):
+            return t_val, row
+
+    if wildcard_row:
+        t_wild = str(wildcard_row.get("to_horus") or wildcard_row.get("too") or wildcard_row.get("para") or "").strip().upper()
+        if t_wild:
+            return t_wild, wildcard_row
+
+    clean_fb = str(fallback_val or "").strip().upper()
+    if clean_fb:
+        return clean_fb, None
+    return None, None
 
 
 def _get_b2c_horus_order_config(
@@ -893,14 +951,15 @@ async def _send_b2c_order_to_horus(
     force: bool = False,
 ) -> Dict[str, Any]:
     """
-    Integra um pedido da Loja B2C ao Horus ERP via API Aberta do Horus (sem necessidade de ID_GUID do cliente),
-    seguindo rigorosamente o fluxo homologado (Regra 11 — 100% CAIXA ALTA):
-      1. Busca_Cliente (por CPF/CNPJ) -> se não existir, InsAltCliente (COD_CLI='NOVO')
-      2. InsAltEndCliente (cadastra/atualiza endereço de entrega do consumidor final)
-      3. Busca_Acervo / Cache local para resolver COD_ITEM de cada livro
-      4. InsPedidoVenda (cria o cabeçalho do pedido no Horus ERP)
-      5. InsItensPedidoVenda (insere os itens com QTD_PEDIDA e VLR_LIQUIDO)
-      6. AltStatus_Pedido (avança o status para LEX/LAP conforme configuração)
+    Integra um pedido da Loja B2C ao Horus ERP via API Padrão do Horus (`TServerB2B` sem `ID_GUID` e sem `COD_PARAM_FISCAL`),
+    seguindo rigorosamente a arquitetura homologada (HorusClient + HorusOrder + FromTo, Regra 11 e Regra 15):
+      1. Busca_Cliente (por CPF/CNPJ, respeitando OFFSET/LIMIT) -> InsAltCliente (COD_CLI='NOVO' ou existente) -> InsAltTipoCliente
+      2. InsAltEndCliente (cadastra/atualiza endereço com sanitização NUM_END='SN' e STA_DEFAULT='S')
+      3. Resolução do Motor DE/PARA (Transportadora -> COD_TRANSP, Forma de Pagamento -> COD_FORMA, Origem -> COD_METODO)
+      4. Busca_Acervo / Cache local para resolver COD_ITEM de cada livro
+      5. InsPedidoVenda (sem COD_PARAM_FISCAL; tratando Pedido Zerado R$ 0,00 / 100% Cupom com itens a R$ 0,10)
+      6. InsItensPedidoVenda (com rollback LimpaItensPedidoVenda se algum item falhar)
+      7. AltStatus_Pedido (ex: LEX) e Pular_expedicao (se configurado)
     """
     meta = _parse_order_meta(order)
     if order.horus_pedido_venda and not force:
@@ -918,13 +977,7 @@ async def _send_b2c_order_to_horus(
         raise ValueError("Integração Horus ERP não está habilitada nas configurações desta empresa.")
 
     h_cfg = _get_b2c_horus_order_config(settings, db=db, company_id=order.company_id)
-    fiscal_intra = str(h_cfg.get("cod_param_fiscal_intra") or "").strip().upper()
-    fiscal_inter = str(h_cfg.get("cod_param_fiscal_inter") or "").strip().upper()
-    if not fiscal_intra and not fiscal_inter:
-        raise ValueError(
-            "Parâmetro Fiscal (COD_PARAM_FISCAL Intraestadual / Interestadual) não configurado. "
-            "Acesse Loja B2C → Configurações → Integração Pedidos Horus e preencha o código do parâmetro fiscal."
-        )
+    use_pagination = not bool(getattr(settings, "horus_legacy_pagination", False))
 
     cust = order.customer or (
         db.query(Customer).filter(Customer.id == order.customer_id).first() if order.customer_id else None
@@ -948,6 +1001,12 @@ async def _send_b2c_order_to_horus(
         (red.customer_name if red and red.customer_name else None)
         or (cust.name if cust and cust.name else "CLIENTE LOJA B2C")
     ).strip().upper()
+    email_cli = (
+        (red.customer_email if red and red.customer_email else None)
+        or (cust.email if cust and cust.email else "CLIENTE@LOJA.COM.BR")
+    ).strip().upper()
+    cel_digits = _clean_digits(getattr(cust, "phone", None) or "") or "11999999999"
+
     cep = _clean_digits(
         meta_ship.get("zip_code")
         or (getattr(addr, "zip_code", "") if addr else "")
@@ -977,19 +1036,35 @@ async def _send_b2c_order_to_horus(
     endereco = (
         meta_ship.get("street")
         or (getattr(addr, "street", "") if addr else "")
-        or (getattr(company, "address", "") if company else "")
+        or (getattr(company, "street", "") if company else "")
         or "ENDERECO PADRAO"
     ).strip().upper()
-    numero = (
+    raw_numero = (
         meta_ship.get("number")
         or (getattr(addr, "number", "") if addr else "")
-        or "S/N"
+        or "SN"
     ).strip().upper()
-    complemento = (
+    raw_complemento = (
         meta_ship.get("complement")
         or (getattr(addr, "complement", "") if addr else "")
         or ""
     ).strip().upper()
+
+    # Regra HorusClient::addAddress (PHP): se número vazio, zero ou alfanumérico, envia 'SN' e concatena no complemento
+    if not raw_numero or raw_numero in ("0", "S/N", "SN"):
+        street_number = "SN"
+        street_complement = raw_complemento
+    elif any(c.isalpha() for c in raw_numero):
+        street_number = "SN"
+        street_complement = f"{raw_complemento} | {raw_numero}".strip(" |")
+    else:
+        street_number = raw_numero[:10]
+        street_complement = raw_complemento
+
+    cod_resp = str(h_cfg.get("cod_resp") or "1").strip().upper() or "1"
+    nom_resp = str(h_cfg.get("resp_cliente") or "FMZ").strip().upper() or "FMZ"
+    cod_empresa_str = str(settings.horus_company or 1).strip().upper()
+    cod_filial_str = str(settings.horus_branch or 1).strip().upper()
 
     horus_clients = HorusClients(db, order.company_id)
     steps_log: List[Dict[str, Any]] = []
@@ -997,74 +1072,117 @@ async def _send_b2c_order_to_horus(
 
     try:
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 1: Busca_Cliente (por CPF/CNPJ) ou InsAltCliente (COD_CLI='NOVO')
+        # PASSO 1: Busca_Cliente -> InsAltCliente -> InsAltTipoCliente (Padrão PHP HorusClient)
         # ──────────────────────────────────────────────────────────────────────
-        cod_cli: Optional[str] = None
-        busca = await horus_clients.get_client_b2c(cnpj_destino="", cpf=cpf_cnpj)
-        if busca and not busca.get("error") and busca.get("data"):
-            data_cli = busca["data"]
-            cod_cli = str(data_cli.get("COD_CLI") or data_cli.get("CODIGO") or "").strip().upper() or None
-            if cod_cli:
-                steps_log.append({
-                    "step": "Busca_Cliente",
-                    "status": "OK",
-                    "detail": f"Cliente localizado no Horus: COD_CLI={cod_cli} (CPF/CNPJ {cpf_cnpj})",
-                })
+        tpo_pessoa = "F" if len(cpf_cnpj) <= 11 else "J"
+        doc_key = "CPF" if tpo_pessoa == "F" else "CNPJ"
+        busca_params: Dict[str, Any] = {doc_key: cpf_cnpj}
+        if use_pagination:
+            busca_params["OFFSET"] = 0
+            busca_params["LIMIT"] = 25
+
+        existing_cod_cli: Optional[str] = None
+        try:
+            search_res = await horus_clients.get("Busca_Cliente", params=busca_params)
+            if isinstance(search_res, list) and len(search_res) > 0 and isinstance(search_res[0], dict):
+                first_cli = search_res[0]
+                if not (first_cli.get("Falha") or first_cli.get("FALHA") == "S"):
+                    existing_cod_cli = str(first_cli.get("COD_CLI") or first_cli.get("CODIGO") or "").strip().upper() or None
+                    if existing_cod_cli:
+                        steps_log.append({
+                            "step": "Busca_Cliente",
+                            "status": "OK",
+                            "detail": f"Cliente já cadastrado no Horus: COD_CLI={existing_cod_cli} ({doc_key} {cpf_cnpj})",
+                        })
+        except Exception as e_busca:
+            warnings.append(f"Aviso Busca_Cliente: {e_busca}")
+
+        ins_params: Dict[str, Any] = {
+            "COD_CLI": existing_cod_cli if existing_cod_cli else "NOVO",
+            "COD_RESPONSAVEL": cod_resp,
+            "NOM_RESP": nom_resp,
+            "NOM_CLI": (nome[:60] if nome else "CLIENTE LOJA B2C").upper(),
+            "NOM_CONTATO": (nome[:100] if nome else "CLIENTE LOJA B2C").upper(),
+            "EMAIL": email_cli[:100],
+            "TPO_PESSOA": tpo_pessoa,
+            "STA_CONTRIBUINTE": "N",
+        }
+        if tpo_pessoa == "F":
+            ins_params["CPF"] = cpf_cnpj
+        else:
+            ins_params["CNPJ"] = cpf_cnpj
+
+        ins_params = _upper_horus_dict(ins_params)
+        ins_res = await horus_clients.get("InsAltCliente", params=ins_params)
+        cod_cli: Optional[str] = existing_cod_cli
+
+        if ins_res and isinstance(ins_res, list) and len(ins_res) > 0 and isinstance(ins_res[0], dict):
+            item_cli = ins_res[0]
+            if item_cli.get("Falha") or item_cli.get("FALHA") == "S":
+                msg_horus = str(item_cli.get("Mensagem") or item_cli.get("MENSAGEM") or item_cli.get("MSG") or "Erro Horus")
+                if not cod_cli:
+                    raise ValueError(f"InsAltCliente recusado pelo Horus: {msg_horus}")
+                warnings.append(f"InsAltCliente aviso (usando COD_CLI={cod_cli}): {msg_horus}")
+            else:
+                # No Horus: inserção retorna 'COD_CLI'; atualização retorna 'Cliente'
+                cod_cli = (
+                    str(
+                        item_cli.get("COD_CLI")
+                        or item_cli.get("Cliente")
+                        or item_cli.get("CLIENTE")
+                        or item_cli.get("CODIGO")
+                        or existing_cod_cli
+                        or ""
+                    )
+                    .strip()
+                    .upper()
+                    or None
+                )
 
         if not cod_cli:
-            doc_key = "CPF" if len(cpf_cnpj) == 11 else "CNPJ"
-            tpo_pessoa = "F" if len(cpf_cnpj) == 11 else "J"
-            ins_params: Dict[str, Any] = {
-                "COD_CLI": "NOVO",
-                "TPO_PESSOA": tpo_pessoa,
-                doc_key: cpf_cnpj,
-                "NOM_CLI": (nome[:60] if nome else "CLIENTE LOJA B2C").upper(),
-            }
-            if h_cfg.get("resp_cliente"):
-                ins_params["NOM_RESP"] = str(h_cfg["resp_cliente"]).strip().upper()
-            if h_cfg.get("cod_resp"):
-                ins_params["COD_RESPONSAVEL"] = str(h_cfg["cod_resp"]).strip().upper()
+            raise ValueError(f"InsAltCliente não retornou COD_CLI válido. Resposta Horus: {ins_res}")
 
-            ins_params = _upper_horus_dict(ins_params)
-            ins_res = await horus_clients.get("InsAltCliente", params=ins_params)
-            if ins_res and isinstance(ins_res, list) and len(ins_res) > 0:
-                item_cli = ins_res[0]
-                if item_cli.get("Falha") or item_cli.get("FALHA") == "S":
-                    msg_horus = str(item_cli.get("Mensagem") or item_cli.get("MENSAGEM") or item_cli.get("MSG") or "Erro Horus")
-                    if "duplica" in msg_horus.lower() or "buscar antes" in msg_horus.lower():
-                        busca_retry = await horus_clients.get_client_b2c(cnpj_destino="", cpf=cpf_cnpj)
-                        if busca_retry and not busca_retry.get("error") and busca_retry.get("data"):
-                            cod_cli = str(busca_retry["data"].get("COD_CLI") or busca_retry["data"].get("CODIGO") or "").strip().upper() or None
-                    if not cod_cli:
-                        raise ValueError(f"InsAltCliente recusado pelo Horus: {msg_horus}")
-                else:
-                    cod_cli = str(item_cli.get("COD_CLI") or item_cli.get("CODIGO") or "").strip().upper() or None
-            if not cod_cli:
-                raise ValueError(f"InsAltCliente não retornou COD_CLI válido. Resposta Horus: {ins_res}")
+        steps_log.append({
+            "step": "InsAltCliente",
+            "status": "OK",
+            "detail": f"Cliente {'atualizado' if existing_cod_cli else 'cadastrado'} no Horus: COD_CLI={cod_cli} ({nome[:60]})",
+        })
 
-            steps_log.append({
-                "step": "InsAltCliente",
-                "status": "OK",
-                "detail": f"Cliente cadastrado no Horus: COD_CLI={cod_cli} ({nome[:60]})",
-            })
+        # Se cadastrou cliente novo e houver COD_TIPO_CLIENTE configurado, vincula via InsAltTipoCliente
+        cod_tipo_cli = str(h_cfg.get("cod_tipo_cliente") or "").strip().upper()
+        if not existing_cod_cli and cod_tipo_cli:
+            try:
+                await horus_clients.get(
+                    "InsAltTipoCliente",
+                    params=_upper_horus_dict({
+                        "COD_CLI": cod_cli,
+                        "COD_TIPO_CLIENTE": cod_tipo_cli,
+                        "STA_DEFAULT": "S",
+                    }),
+                )
+            except Exception:
+                pass
 
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 2: InsAltEndCliente — Cadastrar/atualizar endereço de entrega (CAIXA ALTA)
+        # PASSO 2: InsAltEndCliente — Cadastrar/atualizar endereço (Padrão PHP HorusClient::addAddress)
         # ──────────────────────────────────────────────────────────────────────
         end_params: Dict[str, Any] = {
             "COD_CLI": cod_cli,
             "COD_TPO_END": str(h_cfg.get("cod_endereco") or "1").strip().upper(),
             "NOM_PAIS": "BRASIL",
             "SIGLA_UF": uf,
-            "NOME_UF": _UF_NOMES_HORUS_UPPER.get(uf, uf).upper(),
+            "NOME_UF": uf,
             "NOM_LOCAL": cidade[:60],
+            "NOM_CONTATO": nome[:100],
             "NOM_BAIRRO": bairro[:40],
-            "DESC_ENDERECO": endereco[:80],
-            "NUM_END": numero[:10],
+            "DESC_ENDERECO": endereco[:100],
+            "NUM_END": street_number,
+            "COM_ENDERECO": (street_complement or "LOJA VIRTUAL")[:60],
             "CEP": cep,
+            "CEL_ENDERECO": cel_digits,
+            "STA_DEFAULT": "S",
+            "STA_VALIDO": "S",
         }
-        if complemento:
-            end_params["COM_ENDERECO"] = complemento[:40]
         end_params = _upper_horus_dict(end_params)
         try:
             end_res = await horus_clients.get("InsAltEndCliente", params=end_params)
@@ -1076,13 +1194,95 @@ async def _send_b2c_order_to_horus(
                 steps_log.append({
                     "step": "InsAltEndCliente",
                     "status": "OK",
-                    "detail": f"Endereço atualizado: {endereco[:40]}, {numero} - {cidade}/{uf} (CEP {cep})",
+                    "detail": f"Endereço registrado: {endereco[:40]}, {street_number} - {cidade}/{uf} (CEP {cep})",
                 })
         except Exception as e_end:
             warnings.append(f"InsAltEndCliente falhou (não bloqueante): {e_end}")
 
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 3: Resolver COD_ITEM de todos os itens do pedido
+        # PASSO 3: Resolver Motor DE/PARA (Transportadora, Forma de Pagamento e Método de Venda)
+        # ──────────────────────────────────────────────────────────────────────
+        raw_freight_name = str(meta.get("freight_service_name") or meta.get("carrier_name") or "Entrega Padrão").strip()
+        raw_payment_method = str(meta.get("payment_method") or order.payment_condition or "PIX").strip().upper()
+        raw_origin_channel = str(meta.get("payment_gateway") or order.payment_condition or "B2C").strip().upper()
+
+        subtotal_val = float(order.subtotal or 0.0)
+        discount_val = float(order.discount or 0.0)
+        total_paid_val = float(order.total or 0.0)
+        is_zero_order = (total_paid_val <= 0.009) or (discount_val > 0 and (subtotal_val - discount_val) <= 0.009)
+
+        # 3.1. DE/PARA Transportadora (COD_TRANSP)
+        resolved_cod_transp, _ = _resolve_horus_from_to(
+            h_cfg.get("transport_from_to"),
+            raw_freight_name,
+            fallback_val=str(h_cfg.get("cod_transp") or ""),
+        )
+        if not resolved_cod_transp:
+            raise ValueError(
+                f"Falta DE/PARA de Transportadora para '{raw_freight_name}'. "
+                f"Acesse B2C → Configurações → Pedidos Horus ERP e mapeie a transportadora '{raw_freight_name}' "
+                f"ou informe o Código da Transportadora Padrão (COD_TRANSP)."
+            )
+
+        # 3.2. DE/PARA Forma de Pagamento (COD_FORMA e Parcelas)
+        tipo_ped = str(h_cfg.get("tipo_pedido") or "V").strip().upper()[:1] or "V"
+        if tipo_ped in ("L",):
+            tipo_ped = "V"
+
+        payment_lookup_key = "COUPON_100" if is_zero_order else raw_payment_method
+        payment_fallback = (
+            str(h_cfg.get("cod_forma_zero") or h_cfg.get("cod_forma") or "")
+            if is_zero_order
+            else str(h_cfg.get("cod_forma") or "")
+        )
+        resolved_cod_forma, matched_pay_row = _resolve_horus_from_to(
+            h_cfg.get("payment_from_to"),
+            payment_lookup_key,
+            fallback_val=payment_fallback,
+        )
+        if not resolved_cod_forma and is_zero_order:
+            resolved_cod_forma, matched_pay_row = _resolve_horus_from_to(
+                h_cfg.get("payment_from_to"),
+                raw_payment_method,
+                fallback_val=payment_fallback,
+            )
+
+        if tipo_ped == "V" and not resolved_cod_forma:
+            raise ValueError(
+                f"Falta DE/PARA de Forma de Pagamento para '{payment_lookup_key}' ({raw_payment_method}). "
+                f"Acesse B2C → Configurações → Pedidos Horus ERP e mapeie a forma de pagamento "
+                f"ou preencha a Forma de Pagamento Padrão (COD_FORMA)."
+            )
+
+        order_installments = max(1, int(meta.get("installments") or 1))
+        if matched_pay_row and matched_pay_row.get("installments"):
+            try:
+                order_installments = max(1, int(matched_pay_row["installments"]))
+            except Exception:
+                pass
+        if is_zero_order:
+            order_installments = 1
+
+        # 3.3. DE/PARA Método de Venda (COD_METODO)
+        resolved_cod_metodo, _ = _resolve_horus_from_to(
+            h_cfg.get("method_from_to"),
+            raw_origin_channel,
+            fallback_val=str(h_cfg.get("cod_metodo") or "1"),
+        )
+        resolved_cod_metodo = resolved_cod_metodo or "1"
+
+        steps_log.append({
+            "step": "DePara_FromTo",
+            "status": "OK",
+            "detail": (
+                f"De/Para resolvido: Transportadora '{raw_freight_name}' → COD_TRANSP={resolved_cod_transp} | "
+                f"Pagamento '{payment_lookup_key}' → COD_FORMA={resolved_cod_forma or 'N/A'} ({order_installments}x) | "
+                f"COD_METODO={resolved_cod_metodo}"
+            ),
+        })
+
+        # ──────────────────────────────────────────────────────────────────────
+        # PASSO 4: Resolver COD_ITEM de todos os itens do pedido
         # ──────────────────────────────────────────────────────────────────────
         order_items = list(order.items or [])
         if not order_items:
@@ -1112,7 +1312,11 @@ async def _send_b2c_order_to_horus(
 
             if not cod_item_val and isbn_clean:
                 try:
-                    acervo = await horus_clients.get("Busca_Acervo", params={"BARRAS_ISBN": isbn_clean})
+                    acervo_params: Dict[str, Any] = {"BARRAS_ISBN": isbn_clean}
+                    if use_pagination:
+                        acervo_params["OFFSET"] = 0
+                        acervo_params["LIMIT"] = 1
+                    acervo = await horus_clients.get("Busca_Acervo", params=acervo_params)
                     if isinstance(acervo, list) and len(acervo) > 0 and isinstance(acervo[0], dict) and not acervo[0].get("Falha"):
                         cod_item_val = str(acervo[0].get("COD_ITEM") or acervo[0].get("CODIGO") or "").strip() or None
                 except Exception:
@@ -1135,122 +1339,156 @@ async def _send_b2c_order_to_horus(
             })
 
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 4: InsPedidoVenda (Cabeçalho do Pedido via API Aberta B2C)
+        # PASSO 5: InsPedidoVenda (Padrão PHP HorusOrder::addOrder — Sem COD_PARAM_FISCAL)
         # ──────────────────────────────────────────────────────────────────────
-        uf_seller = str(getattr(company, "state", "") or "SP").strip().upper()[:2]
-        if uf_seller and uf and uf_seller == uf:
-            fiscal_param = fiscal_intra or fiscal_inter
-        else:
-            fiscal_param = fiscal_inter or fiscal_intra
-
         coupon_ref = (red.coupon_code if red and red.coupon_code else None) or (
             order.customer_order_ref if order.customer_order_ref and order.customer_order_ref != "B2C_DIRECT" else None
         )
         obs_parts = [
-            f"LOJA B2C | PEDIDO #{order.id}",
-            f"CLIENTE: {nome[:40]}",
-            f"CPF: {cpf_cnpj}",
-            f"CEP: {cep}",
+            f"PEDIDO LOJA VIRTUAL {order.id}",
+            f"PAGAMENTO: {raw_payment_method}",
+            f"TIPO ENTREGA: {raw_freight_name}",
         ]
         if coupon_ref:
             obs_parts.append(f"CUPOM: {coupon_ref}")
         obs_pedido = " | ".join(obs_parts).upper()[:240]
 
-        tipo_ped = str(h_cfg.get("tipo_pedido") or "L").strip().upper()[:1] or "L"
-        pedido_params: Dict[str, Any] = {
-            "TIPO_PEDIDO_V_T_D": tipo_ped,
-            "COD_PARAM_FISCAL": fiscal_param,
-            "COD_PEDIDO_ORIGEM": f"B2C-{order.id}".upper(),
-            "COD_CLI": cod_cli,
-            "OBS_PEDIDO": obs_pedido,
-        }
-        if settings.horus_company:
-            pedido_params["COD_EMPRESA"] = str(settings.horus_company).strip().upper()
-        if settings.horus_branch:
-            pedido_params["COD_FILIAL"] = str(settings.horus_branch).strip().upper()
-        if h_cfg.get("cod_metodo"):
-            pedido_params["COD_METODO"] = str(h_cfg["cod_metodo"]).strip().upper()
-        if h_cfg.get("cod_endereco"):
-            pedido_params["COD_TPO_END"] = str(h_cfg["cod_endereco"]).strip().upper()
-        if h_cfg.get("cod_transp"):
-            pedido_params["COD_TRANSP"] = str(h_cfg["cod_transp"]).strip().upper()
-        if h_cfg.get("frete_emit_dest"):
-            pedido_params["FRETE_EMIT_DEST"] = str(h_cfg["frete_emit_dest"]).strip().upper()
-        if h_cfg.get("cod_forma") and tipo_ped == "V":
-            pedido_params["COD_FORMA"] = str(h_cfg["cod_forma"]).strip().upper()
-
+        prefix_str = str(h_cfg.get("order_prefix") or "").strip().upper()
+        cod_pedido_origem = f"{prefix_str}{order.id}" if prefix_str else str(order.id)
         freight_val = float(red.order_freight or 0) if red else float(meta.get("freight_value") or 0.0)
-        if h_cfg.get("send_freight_value", True) and freight_val > 0:
-            pedido_params["VLR_FRETE"] = round(freight_val, 2)
+        price_mode = str(h_cfg.get("price_mode") or "UNIT_PRICE").strip().upper()
+
+        pedido_params: Dict[str, Any] = {
+            "COD_EMPRESA": cod_empresa_str,
+            "COD_FILIAL": cod_filial_str,
+            "COD_CLI": cod_cli,
+            "TIPO_PEDIDO_V_T_D": tipo_ped,
+            "OBS_PEDIDO": obs_pedido,
+            "COD_TRANSP": resolved_cod_transp,
+            "COD_METODO": resolved_cod_metodo,
+            "COD_TPO_END": str(h_cfg.get("cod_endereco") or "1").strip().upper(),
+            "FRETE_EMIT_DEST": str(h_cfg.get("frete_emit_dest") or "1").strip().upper(),
+            "DATA_EST_ENTREGA": datetime.now().strftime("%d/%m/%Y"),
+            "QTD_PARCELAS": order_installments,
+            "VLR_FRETE": round(freight_val, 2) if (h_cfg.get("send_freight_value", True) and freight_val > 0) else 0,
+            "NOM_RESP": nom_resp,
+            "COD_PEDIDO_ORIGEM": cod_pedido_origem,
+            "PRESENTE": "N",
+        }
+        if tipo_ped not in ("D", "T") and resolved_cod_forma:
+            pedido_params["COD_FORMA"] = resolved_cod_forma
+
+        # Em pedidos zerados (100% cupom), NÃO envia VALOR_CUPOM_DESCONTO para o Horus não rejeitar os R$ 0,10
+        if not is_zero_order and discount_val > 0 and price_mode != "NET_AFTER_COUPON":
+            pedido_params["VALOR_CUPOM_DESCONTO"] = round(discount_val, 2)
 
         pedido_params = _upper_horus_dict(pedido_params)
         ped_res = await horus_clients.get("InsPedidoVenda", params=pedido_params)
         cod_ped_venda: Optional[str] = None
-        if ped_res and isinstance(ped_res, list) and len(ped_res) > 0:
-            if ped_res[0].get("Falha") or ped_res[0].get("FALHA") == "S":
-                msg_ped = str(ped_res[0].get("Mensagem") or ped_res[0].get("MENSAGEM") or ped_res[0])
-                raise ValueError(f"InsPedidoVenda recusado pelo Horus: {msg_ped}")
-            cod_ped_venda = str(ped_res[0].get("COD_PED_VENDA") or "").strip().upper() or None
+        if ped_res and isinstance(ped_res, list) and len(ped_res) > 0 and isinstance(ped_res[0], dict):
+            if not (ped_res[0].get("Falha") or ped_res[0].get("FALHA") == "S"):
+                cod_ped_venda = str(ped_res[0].get("COD_PED_VENDA") or "").strip().upper() or None
+
+        # Idempotência (igual HorusOrder.php linhas 223-248): se já existia no Horus, consulta Busca_PedidosVenda
+        if not cod_ped_venda:
+            try:
+                busca_ped_params: Dict[str, Any] = {
+                    "COD_EMPRESA": cod_empresa_str,
+                    "COD_FILIAL": cod_filial_str,
+                    "COD_METODO": resolved_cod_metodo,
+                    "COD_PEDIDO_ORIGEM": cod_pedido_origem,
+                }
+                if use_pagination:
+                    busca_ped_params["OFFSET"] = 0
+                    busca_ped_params["LIMIT"] = 10
+                existing_ped = await horus_clients.get("Busca_PedidosVenda", params=busca_ped_params)
+                if isinstance(existing_ped, list) and len(existing_ped) > 0 and isinstance(existing_ped[0], dict):
+                    cod_ped_venda = str(existing_ped[0].get("COD_PED_VENDA") or "").strip().upper() or None
+            except Exception:
+                pass
 
         if not cod_ped_venda:
-            raise ValueError(f"Horus não retornou COD_PED_VENDA em InsPedidoVenda. Resposta: {ped_res}")
+            msg_ped = (
+                str(ped_res[0].get("Mensagem") or ped_res[0].get("MENSAGEM") or ped_res[0])
+                if (ped_res and isinstance(ped_res, list) and len(ped_res) > 0 and isinstance(ped_res[0], dict))
+                else str(ped_res)
+            )
+            raise ValueError(f"InsPedidoVenda recusado pelo Horus: {msg_ped}")
 
         steps_log.append({
             "step": "InsPedidoVenda",
             "status": "OK",
-            "detail": f"Pedido criado no Horus: COD_PED_VENDA={cod_ped_venda} (CFOP/Param Fiscal={fiscal_param}, Tipo={tipo_ped})",
+            "detail": (
+                f"Pedido criado no Horus: COD_PED_VENDA={cod_ped_venda} "
+                f"(Tipo={tipo_ped}, COD_METODO={resolved_cod_metodo}, COD_TRANSP={resolved_cod_transp}, COD_FORMA={resolved_cod_forma or 'N/A'})"
+            ),
         })
 
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 5: InsItensPedidoVenda (Inserir todos os itens do pedido)
+        # PASSO 6: InsItensPedidoVenda (Com regra de R$ 0,10 p/ pedido zerado e rollback LimpaItensPedidoVenda)
         # ──────────────────────────────────────────────────────────────────────
-        price_mode = str(h_cfg.get("price_mode") or "UNIT_PRICE").strip().upper()
-        subtotal_val = float(order.subtotal or 0.0)
-        discount_val = float(order.discount or 0.0)
         discount_ratio = (
             max(0.0, min(0.99, (subtotal_val - discount_val) / subtotal_val))
-            if (price_mode == "NET_AFTER_COUPON" and subtotal_val > 0 and discount_val > 0)
+            if (not is_zero_order and price_mode == "NET_AFTER_COUPON" and subtotal_val > 0 and discount_val > 0)
             else 1.0
         )
 
         items_sent_count = 0
         for r_it in resolved_items:
-            raw_unit = float(r_it["unit_price"] or 0.01)
-            vlr_liq = round(max(0.01, raw_unit * discount_ratio), 2)
+            if is_zero_order:
+                vlr_liq = 0.10
+            else:
+                raw_unit = float(r_it["unit_price"] or 0.10)
+                vlr_liq = round(max(0.10, raw_unit * discount_ratio), 2)
+
             item_params: Dict[str, Any] = {
+                "COD_EMPRESA": cod_empresa_str,
+                "COD_FILIAL": cod_filial_str,
+                "COD_CLI": cod_cli,
                 "COD_PED_VENDA": cod_ped_venda,
                 "COD_ITEM": r_it["cod_item"],
                 "QTD_PEDIDA": r_it["qty"],
                 "VLR_LIQUIDO": vlr_liq,
-                "COD_CLI": cod_cli,
             }
-            if settings.horus_company:
-                item_params["COD_EMPRESA"] = str(settings.horus_company).strip().upper()
-            if settings.horus_branch:
-                item_params["COD_FILIAL"] = str(settings.horus_branch).strip().upper()
-
             item_params = _upper_horus_dict(item_params)
             it_res = await horus_clients.get("InsItensPedidoVenda", params=item_params)
             it_fail = _extract_horus_failures(it_res)
             if it_fail:
-                warnings.append(f"Item {r_it['cod_item']} ({r_it['isbn']}): {' | '.join(it_fail)}")
-            else:
-                items_sent_count += 1
+                # Rollback dos itens parciais como em HorusOrder::removeItemOrder
+                try:
+                    await horus_clients.get(
+                        "LimpaItensPedidoVenda",
+                        params=_upper_horus_dict({
+                            "COD_EMPRESA": cod_empresa_str,
+                            "COD_FILIAL": cod_filial_str,
+                            "COD_CLI": cod_cli,
+                            "COD_PED_VENDA": cod_ped_venda,
+                        }),
+                    )
+                except Exception:
+                    pass
+                raise ValueError(
+                    f"InsItensPedidoVenda recusou o item COD_ITEM={r_it['cod_item']} (ISBN {r_it['isbn']}): {' | '.join(it_fail)}"
+                )
+            items_sent_count += 1
 
         steps_log.append({
             "step": "InsItensPedidoVenda",
-            "status": "OK" if items_sent_count == len(resolved_items) else "WARNING",
-            "detail": f"{items_sent_count}/{len(resolved_items)} item(ns) inserido(s) no pedido Horus #{cod_ped_venda}",
+            "status": "OK",
+            "detail": (
+                f"{items_sent_count}/{len(resolved_items)} item(ns) inserido(s) no pedido Horus #{cod_ped_venda}"
+                + (" (Pedido 100% Cupom ajustado para R$ 0,10 por item)" if is_zero_order else "")
+            ),
         })
 
         # ──────────────────────────────────────────────────────────────────────
-        # PASSO 6: AltStatus_Pedido (Liberar pedido no Horus, ex: LEX / LAP)
+        # PASSO 7: AltStatus_Pedido (ex: LEX) e Pular_expedicao (se configurado)
         # ──────────────────────────────────────────────────────────────────────
         target_erp_status = str(h_cfg.get("status_envio_erp") or "").strip().upper()
         if target_erp_status:
             alt_params: Dict[str, Any] = {
-                "COD_EMPRESA": settings.horus_company,
-                "COD_FILIAL": settings.horus_branch,
+                "COD_EMPRESA": cod_empresa_str,
+                "COD_FILIAL": cod_filial_str,
                 "COD_CLI": cod_cli,
                 "COD_PED_VENDA": cod_ped_venda,
                 "STA_PEDIDO": target_erp_status,
@@ -1270,6 +1508,27 @@ async def _send_b2c_order_to_horus(
                     })
             except Exception as e_alt:
                 warnings.append(f"AltStatus_Pedido ({target_erp_status}) falhou: {e_alt}")
+
+        if bool(h_cfg.get("pular_expedicao", False)):
+            try:
+                cod_local_est = str(getattr(settings, "horus_stock_local", None) or "1").strip().upper()
+                await horus_clients.get(
+                    "Pular_expedicao",
+                    params=_upper_horus_dict({
+                        "COD_EMPRESA": cod_empresa_str,
+                        "COD_FILIAL": cod_filial_str,
+                        "COD_CLI": cod_cli,
+                        "COD_PED_VENDA": cod_ped_venda,
+                        "COD_LOCAL": cod_local_est,
+                    }),
+                )
+                steps_log.append({
+                    "step": "Pular_expedicao",
+                    "status": "OK",
+                    "detail": f"Expedição pulada (COD_LOCAL={cod_local_est})",
+                })
+            except Exception as e_skip:
+                warnings.append(f"Pular_expedicao aviso: {e_skip}")
 
         # Persistir no Pedido B2C
         now_iso = datetime.now(timezone.utc).isoformat()

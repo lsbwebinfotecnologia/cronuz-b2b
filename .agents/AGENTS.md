@@ -372,3 +372,161 @@ git push origin --delete feature/nome-da-funcionalidade
 - **`BORDERO`**:
   - Recebe o fechamento (`COD_EMPRESA`, `COD_FILIAL`, `COD_FORMA`, `COD_BORDERO`, `VLR_TOT_BORDERO`, `VLR_TOT_PAGO`, `STA_BORDERO` `'AP'` ou `'PG'`, `COD_BANCO`, `COD_AGENCIA`, `COD_CONTAC`, `NRO_CARTEIRA`, `DAT_GERACAO`, `DAT_PAGAMENTO`), vinculado aos títulos via `UPDATE LANCTOS_CRECEBER SET COD_BORDERO = ...` e auditado em tempo real no banco PostgreSQL do Cronuz (`horus_reconciliation_closings`).
 
+---
+
+## 🛒 15. Integrações Marketplace — Arquitetura Unificada, Fila de Processamento Assíncrona e Padrão de Conectores
+
+> [!IMPORTANT]
+> **REGRA ARQUITETURAL MANDATÓRIA PARA TODOS OS MARKETPLACES (`MERCADOLIVRE`, `ESTANTEVIRTUAL`, `SHOPEE`, `AMAZON`, `MAGALU`, `TIKTOK`, `AMERICANAS`)**:
+> **NUNCA construa integrações de marketplace isoladas ou síncronas que travem requisições HTTP ao publicar ou atualizar centenas/milhares de livros.**
+> Toda integração de marketplace (incluindo a evolução do Mercado Livre e a implementação da Estante Virtual, Shopee e próximos canais) DEVE seguir estritamente o **Motor Unificado de Marketplaces com Fila de Processamento Assíncrona (`Marketplace Pipeline & Queue Architecture`)** descrito abaixo.
+
+### 1. Os 4 Pilares de Padronização Obrigatória
+
+```mermaid
+flowchart LR
+    subgraph SellerUI["1. Hub Marketplaces UI (Alt+1..4)"]
+        S1["Seleção de Canal & Auth"]
+        S2["Ativação de Produtos (1 ou Lote)"]
+        S3["Grade de Estoque & Preços"]
+        S4["Pedidos, Etiquetas & Horus"]
+    end
+
+    subgraph CoreEngine["2. Motor Central & Fila PostgreSQL"]
+        Conn[("Conexão Padronizada\n(OAuth2 / JWT 24h)")]
+        List[("Espelho de Anúncios\n(Estado Vivo: Preço/Estoque)")]
+        Queue[("Fila de Processamento\nmkt_sync_queue\n(PUBLISH / STOCK / PRICE)")]
+        Ord[("Espelho de Pedidos\nIdempotência & Máquina Estados")]
+    end
+
+    subgraph Workers["3. Worker Assíncrono & Adaptadores"]
+        W["Queue Consumer\n(Rate Limit + Batch/Unitário)"]
+        AdML["Adapter Mercado Livre"]
+        AdEV["Adapter Estante Virtual"]
+        AdSH["Adapter Shopee / Outros"]
+    end
+
+    SellerUI --> CoreEngine
+    Queue --> W
+    W --> AdML
+    W --> AdEV
+    W --> AdSH
+```
+
+#### Pilar A — Padronização de Autenticação e Conexão (`App Connection Layer`)
+Todo conector de marketplace deve implementar uma interface única de autenticação e renovação automática de credenciais antes de qualquer chamada externa:
+1. **Suporte aos 2 Modelos Oficiais de Auth**:
+   - **`OAUTH2_CODE_REFRESH`** (Ex.: *Mercado Livre*, *Shopee*, *Magalu*): Fluxo de autorização com `app_id` / `client_secret` (suportando App Global Cronuz ou App próprio do Seller), troca de `code` por `access_token` + `refresh_token`, e renovação preventiva automática quando faltar menos de 10 minutos para expirar.
+   - **`CREDENTIALS_BEARER_JWT`** (Ex.: *Estante Virtual*): Login automatizado via `POST /auth/login` (`email` + `password`) + `id_vendedor` fixo, armazenando o `auth_token` (válido por 24h) em cache no banco e renovando-o automaticamente antes do vencimento ou em caso de `HTTP 401`.
+2. **Estrutura Padronizada de Configuração (`preset_config`)**:
+   - Todo marketplace deve utilizar o mesmo contrato de regras de negócio no JSON de preset:
+     - `price_rule_type` (`PERCENTAGE` | `FIXED`), `price_rule_value`, piso mínimo do canal (ex.: `R$ 6,00` na EV, taxa fixa `< R$ 79` no ML);
+     - `min_stock_buffer` (estoque de segurança), `handling_days` / `prazo_postagem` (dias para postagem / encomenda);
+     - `default_condition` (`NOVO` / `USADO` — respeitando imutabilidade após publicação quando exigido pelo canal);
+     - `default_category_id` e `category_mapping` (De/Para entre categorias locais/Horus e árvore oficial do marketplace);
+     - `auto_sync_stock`, `auto_import_orders`, `auto_send_horus_order`, `horus_default_customer_doc`, `horus_default_customer_guid`.
+
+#### Pilar B — Fila de Processamento de Produtos, Preços e Estoques (`mkt_sync_queue` + Estado Vivo)
+Quando um Seller seleciona produtos do catálogo/Horus e ativa a integração para o **Mercado Livre**, **Estante Virtual** ou **Shopee** (ou quando o *Delta Sync* detecta mudança de saldo/preço no Horus ERP), o sistema **NUNCA** deve processar listas longas de forma síncrona na thread da API:
+1. **Tabela de Estado Vivo do Anúncio (Vínculo Permanente Produto ↔ Canal)**:
+   - Armazena para cada produto integrado no canal: `company_id`, `channel` (`mercadolivre`, `estantevirtual`, `shopee`, etc.), `product_id`, `sku` (`codigo` único no vendedor), `ean_gtin` / `isbn`, `horus_cod_item`, `external_item_id`, `condition` (`NOVO`/`USADO`), `base_price` (`valor_de`), `channel_price` (`valor_por`), `current_stock`, `last_synced_stock`, `last_synced_price`, `status` e `last_synced_at`.
+   - É esta tabela que garante a memória permanente do que já está publicado para futuras atualizações rápidas de preço (`SYNC_PRICE`) e estoque (`SYNC_STOCK`).
+2. **Tabela de Fila de Processamento (`mkt_sync_queue`) com Drenagem/Eliminação Automática**:
+   - Sempre que um produto é marcado para publicar ou sofre alteração de preço/saldo, um registro é enfileirado em `mkt_sync_queue`:
+     - `id`, `company_id`, `channel` (`mercadolivre`, `estantevirtual`, `shopee`), `listing_id`, `sku`, `isbn_ean`;
+     - `operation`: `PUBLISH_PRODUCT` (criação inicial), `UPDATE_PRODUCT` (dados cadastrais), `SYNC_STOCK` (atualização de saldo), `SYNC_PRICE` (atualização de preço `valor_de`/`valor_por`), `REMOVE_PRODUCT` (zerar estoque/pausar);
+     - `priority`: `10` (Estoque/Venda imediata), `20` (Preço), `30` (Publicação de catálogo em massa);
+     - `payload_json`: Snapshot pronto com os dados sanitizados necessários para o envio;
+     - `status`: `PENDING`, `PROCESSING`, `RETRY`, `FAILED`;
+     - `attempts`, `max_attempts` (default `3`), `next_run_at`, `error_message`, `created_at`.
+   - **Deduplicação na Entrada (`Upsert Queue`)**: Se já houver um item `PENDING` para o mesmo `(company_id, channel, sku, operation)`, o sistema apenas atualiza o `payload_json` existente em vez de duplicar linhas na fila.
+   - **Consumo Inteligente (Unitário vs. Lote) e Eliminação Pós-Sucesso**:
+     - O Worker consome a fila em background:
+       - Para operações que exigem envio **1 a 1** (ex.: `POST /produtos` na Estante Virtual ou `POST /items` no Mercado Livre), processa em fatias controladas respeitando o *Rate Limit* do canal.
+       - Para operações que suportam **Lote / Batch** (ex.: `PUT /estoques` e `PUT /precos` na Estante Virtual), agrupa todos os itens `PENDING` daquele seller e dispara uma única chamada em lote.
+     - **Eliminação da Fila (`Queue Drain`)**: Assim que o item é processado com sucesso (`HTTP 200/201`), o Worker atualiza `last_synced_stock` / `last_synced_price` / `status` na tabela de anúncios, grava o resumo consolidado no log de auditoria e **elimina (DELETE) o registro concluído da fila `mkt_sync_queue`**, mantendo a tabela de fila enxuta, rápida e contendo apenas o que está pendente ou com erro para retentativa.
+3. **Consulta Horus ERP Obrigatória (`SD_*` e `OFFSET/LIMIT`)**:
+   - Toda coleta de saldo e preço no Horus ERP para alimentar a fila deve respeitar estritamente os parâmetros `SD_COD_EMPRESA`, `SD_COD_FILIAL`, `SD_LOCAL_ESTOQUE` (Regra 9) e a configuração de paginação `OFFSET/LIMIT` (`horus_legacy_pagination`) do seller.
+
+#### Pilar C — Padronização de Recebimento de Pedidos, Estoque Cruzado e Envio ao Horus ERP
+1. **Recepção Unificada (Webhook Push + Polling)**:
+   - Todo pedido recebido de qualquer marketplace (`POST /pedido` e `PUT /pedido` na Estante Virtual, `orders_v2` no Mercado Livre, Webhook Shopee) passa pelo mesmo fluxo padronizado:
+     - **Idempotência Estrita**: Pedidos ou atualizações de status repetidos são detectados por `(company_id, channel, external_order_id)` e ignorados sem duplicar registros em `ord_order`.
+     - **Ordem Cronológica e Máquina de Estados**: Não aceita atualização (`PUT`) de pedido cujo cadastro inicial (`POST`) ainda não exista, e valida transições permitidas (`PROCESSING -> STANDBY -> SENT / CANCELED`).
+     - **Estoque Cruzado Multi-Canal (Anti-Overselling)**: Ao confirmar um pedido em qualquer marketplace, o sistema abate o estoque local imediatamente e **enfileira automaticamente um `SYNC_STOCK` prioritário (`priority=10`)** para atualizar o saldo daquele SKU nos demais marketplaces ativos do seller.
+2. **Expedição, Rastreio, Cancelamento e Etiquetas (`MLE` / `Mercado Envios`)**:
+   - Atualização de envio padronizada informando código de rastreio (Correios) ou URL de transportadora (respeitando travas específicas do conector, como na Estante Virtual onde `rastreio` e `url_rastreio` são mutuamente exclusivos no status `SENT`).
+   - Emissão de etiquetas oficiais em PDF (individual ou em lote, como `GET /etiquetas?ids=...` para até 25 pedidos Magalu Entregas na Estante Virtual ou `shipment_labels` no Mercado Livre).
+3. **Integração Horus ERP em `UPPERCASE` (Regra 11)**:
+   - O envio de clientes (`InsAltCliente`, `InsAltEndCliente`), capa de pedido (`InsPedidoVenda`) e itens (`InsItensPedidoVenda`) para o Horus ERP utiliza prefixo padronizado por canal (`ML...`, `EV...`, `SH...`), metadados de nota fiscal (`cnpj_instituicao_financeira`, `codigo_autorizacao`, `bandeira`, `e2e_id_pix`) e converte **100% dos campos textuais para CAIXA ALTA (`.strip().upper()`)**.
+
+#### Pilar D — Governança de Módulos pelo Master (`cmp_company`), Menu Lateral `Marketplace` e Ergonomia de 4 Etapas (`Alt+1` a `Alt+4`)
+1. **Habilitação Exclusiva por Módulo no Ambiente Master (Padrão Existente do Projeto)**:
+   - Todo marketplace segue exatamente a arquitetura de módulos já existente no Cronuz B2B (sem criar mecanismos paralelos):
+     - **Banco & Schemas (`cmp_company`)**: Cada marketplace possui sua flag booleana dedicada em [`models/company.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/models/company.py) e [`schemas/company.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/schemas/company.py) (ex.: `module_mercadolivre`, `module_estantevirtual`).
+     - **API de Empresas & Permissões de Usuários ([`api/companies.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/companies.py) e [`userPermissionsConfig.ts`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/app/%28dashboard%29/companies/%5Bid%5D/users/userPermissionsConfig.ts))**: Registrado em `ModuleUpdate` e mapeado em `MODULE_TO_USER_PERMISSIONS` para liberar automaticamente a permissão aos usuários do Seller quando ativado pelo Master.
+     - **Painel Master de Módulos ([`companies/[id]/modules/page.tsx`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/app/%28dashboard%29/companies/%5Bid%5D/modules/page.tsx)) e Métricas ([`api/dashboard.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/dashboard.py))**: O Master ativa/desativa individualmente quais marketplaces o Seller contratou, e `/dashboard/metrics` retorna as flags ativas para o frontend.
+     - **Menu Lateral Unificado `Marketplace` ([`Sidebar.tsx`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/frontend/src/components/Sidebar.tsx))**: Quando pelo menos um marketplace está habilitado pelo Master para o Seller, a Sidebar exibe o menu expansível **`Marketplace`**, listando dinamicamente em `subItems` apenas os canais contratados e ativos naquele Seller (ex.: `Mercado Livre` se `module_mercadolivre` estiver ativo; `Estante Virtual` se `module_estantevirtual` estiver ativo).
+2. **Jornada Padronizada de 4 Etapas (`Alt+1` a `Alt+4` — Estilo Access Moderno)**:
+   - Toda tela de marketplace deve seguir o mesmo layout moderno de 4 etapas e navegação estilo planilha Excel (`↑`, `↓`, `Enter`, `F2`, `Esc`) com navegador de registros (`|< < Registro X de N > >|`):
+     - **Etapa 1 (`Alt+1` — Conexão, Credenciais & Regras)**: Autenticação (OAuth2 ou Login/Token 24h), regras de preço (`CurrencyInput`), buffer de estoque, prazo de postagem e De/Para de categorias.
+     - **Etapa 2 (`Alt+2` — Publicar do Catálogo / Horus para a Fila)**: Seleção unitária ou em massa de produtos do Horus/Catálogo enviando para a **Fila de Processamento (`mkt_sync_queue`)**.
+     - **Etapa 3 (`Alt+3` — Planilha de Anúncios, Fila, Preços & Estoque)**: Grade de alta densidade exibindo os anúncios ativos, status da fila `mkt_sync_queue`, edição rápida de preço/estoque e gatilho de *Delta Sync*.
+     - **Etapa 4 (`Alt+4` — Pedidos, Rastreio, Etiquetas & Horus ERP)**: Lista de pedidos do canal, envio 1-clique ao Horus ERP em `UPPERCASE`, modal de rastreio/cancelamento e impressão de etiquetas PDF.
+
+---
+
+## 🛒 15. Arquitetura Dual de Integração de Pedidos com o Horus ERP (B2B `ID_GUID` vs. API Padrão Horus `TServerB2B`)
+
+> [!IMPORTANT]
+> **REGRA ARQUITETURAL MANDATÓRIA: O Cronuz B2B opera com DOIS modelos distintos e totalmente isolados de integração de pedidos com o Horus ERP.**
+> **NUNCA misture nem descaracterize o fluxo de um modelo ao dar manutenção no outro.**
+
+### Modelo 1 — Integração Horus B2B (`ID_GUID` — Storefront B2B & Pedidos Digitados no Painel do Seller)
+- **Onde é utilizado**:
+  - Storefront B2B (`/store/*`, carrinho B2B, consignação B2B);
+  - Digitação manual de pedidos B2B pelo painel do Seller (`/orders/new`, `/orders`);
+  - Operações B2B nativas gerenciadas por [`horus_orders.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/integrators/horus_orders.py).
+- **Como funciona (Intacto e Imutável)**:
+  - Baseado na identificação do cliente B2B via **`ID_GUID`** e `CNPJ_DESTINO`, utilizando as rotinas de carrinho/pedido B2B do Horus (`InsPedidoVendaB2B`, `InsItensPedidoB2B`, políticas comerciais e descontos de cliente B2B).
+  - **Regra de Ouro**: Qualquer evolução na integração B2C ou de Marketplaces **NÃO deve alterar** o comportamento existente do Storefront B2B nem da digitação de pedidos B2B pelo painel do Seller.
+
+---
+
+### Modelo 2 — Integração via API Padrão do Horus (`TServerB2B` sem `ID_GUID` — Storefront B2C, E-commerce & Marketplaces)
+- **Referência Oficial**: Documentação Postman Horus (`SW7ey5A8`) e arquitetura homologada de [`HorusClient.php`](file:///Users/licivandosilva/Documents/Dev/cronuz/app/Integrators/Horus/HorusClient.php) + [`HorusOrder.php`](file:///Users/licivandosilva/Documents/Dev/cronuz/app/Integrators/Horus/HorusOrder.php) + [`FromTo.php`](file:///Users/licivandosilva/Documents/Dev/cronuz/app/Integrators/FromTo.php).
+- **Onde é utilizado**:
+  - Storefront Aberto B2C (`/b2c-storefront/orders`, `_send_b2c_order_to_horus` em [`b2c_storefront.py`](file:///Users/licivandosilva/.gemini/antigravity/scratch/cronuz-b2b/backend/app/api/b2c_storefront.py));
+  - Integrações de E-commerce e Marketplaces que utilizam a API Padrão do Horus.
+- **Diretrizes Técnicas Obrigatórias da API Padrão do Horus**:
+  1. **NÃO exige `ID_GUID` e NÃO exige `COD_PARAM_FISCAL`**:
+     - Na API Padrão do Horus (`InsPedidoVenda`), **não se envia nem se exige** código de parâmetro fiscal estadual/interestadual (`COD_PARAM_FISCAL` é exclusivo da operação triangular de Dropship Logístico).
+  2. **Passo 1 — Cliente (`Busca_Cliente` → `InsAltCliente` → `InsAltTipoCliente`)**:
+     - Consulta `Busca_Cliente` passando `CPF` (se `<= 11` dígitos, `TPO_PESSOA = "F"`) ou `CNPJ` (se `14` dígitos, `TPO_PESSOA = "J"`), respeitando `OFFSET=0` e `LIMIT` conforme `horus_legacy_pagination` do seller.
+     - Chama `InsAltCliente` enviando em **CAIXA ALTA**:
+       - `COD_CLI`: código encontrado em `Busca_Cliente` ou `"NOVO"`;
+       - `COD_RESPONSAVEL` (ex.: `"1"`) e `NOM_RESP` (ex.: `"FMZ"`);
+       - `NOM_CLI`, `NOM_CONTATO`, `EMAIL`, `TPO_PESSOA`, `CPF`/`CNPJ` e `STA_CONTRIBUINTE = "N"` (para PF).
+     - **Tratamento duplo de retorno do `InsAltCliente`**:
+       - Quando insere cliente novo, o Horus retorna `COD_CLI` (e opcionalmente chama `InsAltTipoCliente` com `COD_TIPO_CLIENTE` e `STA_DEFAULT="S"`).
+       - Quando atualiza cliente existente, o Horus retorna o código na chave **`Cliente`**.
+  3. **Passo 2 — Endereço (`InsAltEndCliente`)**:
+     - Se `NUM_END` for vazio, `"0"` ou contiver letras, envia `NUM_END = "SN"` e concatena o número original em `COM_ENDERECO`.
+     - Envia `COD_CLI`, `COD_TPO_END`, `NOM_PAIS="BRASIL"`, `SIGLA_UF`, `NOME_UF`, `NOM_LOCAL`, `NOM_CONTATO`, `NOM_BAIRRO`, `DESC_ENDERECO`, `NUM_END`, `COM_ENDERECO`, `CEP`, `CEL_ENDERECO`, `STA_DEFAULT="S"`, `STA_VALIDO="S"`.
+  4. **Passo 3 — Motor De/Para Obrigatório (`Transportadora`, `Forma de Pagamento` e `Método de Venda`)**:
+     - **De/Para de Transportadora (`transport_from_to`)**: Converte o nome do serviço de frete do pedido (ex.: `PAC`, `SEDEX`, `Transportadora Expressa`, `Frete Grátis`) para o `COD_TRANSP` numérico do Horus (com fallback para o `COD_TRANSP` padrão se configurado).
+     - **De/Para de Forma de Pagamento (`payment_from_to`)**: Converte o meio de pagamento do pedido (`PIX`, `CREDIT_CARD`, `PAYMENT_LINK`, `COUPON_100`) para o `COD_FORMA` do Horus (com fallback para o `COD_FORMA` padrão).
+     - **De/Para de Método de Venda (`method_from_to` / `COD_METODO`)**: Usa o `COD_METODO` padrão configurado ou resolve via De/Para pela origem/canal do pedido.
+  5. **Passo 4 — Cabeçalho do Pedido (`InsPedidoVenda`) e Idempotência (`Busca_PedidosVenda`)**:
+     - Envia `COD_EMPRESA`, `COD_FILIAL`, `COD_CLI`, `TIPO_PEDIDO_V_T_D` (padrão `"V"`), `OBS_PEDIDO`, `COD_TRANSP`, `COD_METODO`, `COD_TPO_END`, `FRETE_EMIT_DEST`, `DATA_EST_ENTREGA`, `COD_FORMA` (omitido apenas se `TIPO_PEDIDO_V_T_D` for `"D"` ou `"T"`), `QTD_PARCELAS`, `VLR_FRETE`, `NOM_RESP`, `COD_PEDIDO_ORIGEM`, `PRESENTE="N"`.
+     - Se o pedido já tiver sido enviado antes, consulta `Busca_PedidosVenda` por `COD_EMPRESA`, `COD_FILIAL`, `COD_METODO` e `COD_PEDIDO_ORIGEM` para recuperar o `COD_PED_VENDA`.
+  6. **Passo 5 — Regra de Pedido Zerado (`R$ 0,00` / 100% Cupom) e Itens (`InsItensPedidoVenda`)**:
+     - Quando o pedido tem valor líquido `R$ 0,00` (ex.: 100% pago com cupom/vale) ou quando o desconto é `>=` à soma bruta dos itens:
+       - **NÃO envia `VALOR_CUPOM_DESCONTO`** no `InsPedidoVenda`;
+       - Envia cada item em `InsItensPedidoVenda` com **`VLR_LIQUIDO = 0.10`** (`R$ 0,10` simbólico) para que o Horus aceite o pedido sem rejeitar item zerado.
+     - Se qualquer item falhar em `InsItensPedidoVenda`, executa `LimpaItensPedidoVenda` para evitar pedidos parciais no ERP.
+  7. **Passo 6 — Status Final e Expedição (`AltStatus_Pedido` + `Pular_expedicao`)**:
+     - Avança o status do pedido via `AltStatus_Pedido` (ex.: `STA_PEDIDO = "LEX"`) e, se `pular_expedicao = True`, chama `Pular_expedicao` com `COD_LOCAL`.
+
+
+
