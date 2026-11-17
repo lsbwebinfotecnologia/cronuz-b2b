@@ -9,6 +9,9 @@ import {
   Search,
   Plus,
   ArrowLeft,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   RefreshCw,
   Edit3,
   ChevronLeft,
@@ -298,6 +301,7 @@ export default function DbmProductsSearchPage() {
   // Modo de Edição Rápida Estilo Excel direto na planilha de Pesquisa
   const [excelInlineEditMode, setExcelInlineEditMode] = useState(false);
   const [inlineSavingId, setInlineSavingId] = useState<number | null>(null);
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null);
 
   useEffect(() => {
     const freshUser = getUser();
@@ -345,6 +349,12 @@ export default function DbmProductsSearchPage() {
   const [loading, setLoading] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const [quickSearchFooter, setQuickSearchFooter] = useState('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(50);
+  const [sortConfig, setSortConfig] = useState<{
+    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box';
+    direction: 'asc' | 'desc';
+  } | null>(null);
 
   // Estado do Formulário "Cadastro de Livros"
   const [bookForm, setBookForm] = useState<DbmBookFormState>(EMPTY_BOOK_FORM);
@@ -1058,9 +1068,9 @@ export default function DbmProductsSearchPage() {
     }
   }, [bookForm.id, bookForm.ean_gtin, coverBaseUrl, coverSecondaryBaseUrl]);
 
-  // Filtragem local complementar (incluindo filtro de Janela de Novidades -9m a +6m)
+  // Filtragem e Ordenação Geral (aplica sobre TODO o catálogo antes da paginação)
   const filteredProducts = useMemo(() => {
-    return products.filter(item => {
+    const baseFiltered = products.filter(item => {
       if (filterTitle && !item.name.toLowerCase().includes(filterTitle.toLowerCase())) {
         return false;
       }
@@ -1109,7 +1119,134 @@ export default function DbmProductsSearchPage() {
       }
       return true;
     });
-  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter]);
+
+    if (!sortConfig) return baseFiltered;
+
+    const { key, direction } = sortConfig;
+    const dir = direction === 'asc' ? 1 : -1;
+
+    return [...baseFiltered].sort((a, b) => {
+      if (key === 'name' || key === 'brand' || key === 'isbn') {
+        const valA =
+          key === 'name'
+            ? (a.name || '')
+            : key === 'brand'
+            ? (a.brand || '')
+            : (a.ean_gtin || a.isbn || '');
+        const valB =
+          key === 'name'
+            ? (b.name || '')
+            : key === 'brand'
+            ? (b.brand || '')
+            : (b.ean_gtin || b.isbn || '');
+        return valA.localeCompare(valB, 'pt-BR', { sensitivity: 'base', numeric: true }) * dir;
+      }
+
+      if (key === 'cod_horus') {
+        const rawA = String(a.horus_cod_item ?? a.sku ?? '').trim();
+        const rawB = String(b.horus_cod_item ?? b.sku ?? '').trim();
+        const numA = Number(rawA);
+        const numB = Number(rawB);
+        if (!Number.isNaN(numA) && !Number.isNaN(numB) && rawA !== '' && rawB !== '') {
+          return (numA - numB) * dir;
+        }
+        return rawA.localeCompare(rawB, 'pt-BR', { numeric: true }) * dir;
+      }
+
+      if (key === 'launch_date') {
+        const tA = a.launch_date ? new Date(a.launch_date).getTime() : NaN;
+        const tB = b.launch_date ? new Date(b.launch_date).getTime() : NaN;
+        const validA = !Number.isNaN(tA);
+        const validB = !Number.isNaN(tB);
+        if (!validA && !validB) return 0;
+        if (!validA) return 1; // Sem data vai para o final
+        if (!validB) return -1;
+        return (tA - tB) * dir;
+      }
+
+      if (key === 'base_price') {
+        return (Number(a.base_price || 0) - Number(b.base_price || 0)) * dir;
+      }
+      if (key === 'stock_quantity') {
+        return (Number(a.stock_quantity || 0) - Number(b.stock_quantity || 0)) * dir;
+      }
+      if (key === 'units_per_box') {
+        return (Number(a.units_per_box || 0) - Number(b.units_per_box || 0)) * dir;
+      }
+      return 0;
+    });
+  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter, sortConfig]);
+
+  const handleSortProductColumn = (
+    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box'
+  ) => {
+    const isTextCol = key === 'name' || key === 'brand' || key === 'isbn';
+    setSortConfig(prev => {
+      if (!prev || prev.key !== key) {
+        return { key, direction: isTextCol ? 'asc' : 'desc' };
+      }
+      return { key, direction: prev.direction === 'asc' ? 'desc' : 'asc' };
+    });
+    setCurrentPage(1);
+    setSelectedIndex(0);
+  };
+
+  const renderProductSortIcon = (
+    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box'
+  ) => {
+    if (!sortConfig || sortConfig.key !== key) {
+      return <ArrowUpDown className="w-3 h-3 text-slate-400/70 opacity-60 group-hover:opacity-100 shrink-0" />;
+    }
+    return sortConfig.direction === 'asc' ? (
+      <ArrowUp className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+    ) : (
+      <ArrowDown className="w-3 h-3 text-indigo-600 dark:text-indigo-400 shrink-0" />
+    );
+  };
+
+  // Paginação da Planilha de Produtos DBM
+  const totalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredProducts.length / pageSize)),
+    [filteredProducts.length, pageSize]
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+    setSelectedIndex(filteredProducts.length > 0 ? 0 : -1);
+  }, [filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter, pageSize]);
+
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  useEffect(() => {
+    if (selectedIndex >= 0) {
+      const targetPage = Math.floor(selectedIndex / pageSize) + 1;
+      if (targetPage !== currentPage && targetPage >= 1 && targetPage <= totalPages) {
+        setCurrentPage(targetPage);
+      }
+    }
+  }, [selectedIndex, pageSize, totalPages]);
+
+  const pageStartIdx = (currentPage - 1) * pageSize;
+  const paginatedProducts = useMemo(
+    () => filteredProducts.slice(pageStartIdx, pageStartIdx + pageSize),
+    [filteredProducts, pageStartIdx, pageSize]
+  );
+
+  const handleGoToPage = (nextPage: number) => {
+    const bounded = Math.max(1, Math.min(nextPage, totalPages));
+    setCurrentPage(bounded);
+    const firstRowIdx = (bounded - 1) * pageSize;
+    if (firstRowIdx < filteredProducts.length) {
+      setSelectedIndex(firstRowIdx);
+    }
+    if (tableContainerRef.current) {
+      tableContainerRef.current.scrollTop = 0;
+    }
+  };
 
   // Navegação por Teclado estilo Excel na Aba Pesquisa e na Ficha
   useEffect(() => {
@@ -1630,6 +1767,51 @@ export default function DbmProductsSearchPage() {
     fetchProducts(false);
   };
 
+  const handleDeleteProductFromList = async (item: ProductGridItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm(`Deseja realmente excluir o livro "${item.name}" (Cód. #${item.horus_cod_item || item.sku || item.id}) da listagem DBM?`)) {
+      return;
+    }
+
+    setDeletingProductId(item.id);
+    try {
+      const token = getToken();
+      const configuredApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const isProdBrowser =
+        typeof window !== 'undefined' &&
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1';
+      const primaryBaseUrl = isProdBrowser ? '/api' : configuredApiUrl;
+
+      let res: Response;
+      try {
+        res = await fetch(`${primaryBaseUrl}/dbm/products/${item.id}?company_id=${companyId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      } catch {
+        res = await fetch(`${configuredApiUrl}/dbm/products/${item.id}?company_id=${companyId}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
+        });
+      }
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || `Não foi possível excluir o item (HTTP ${res.status}).`);
+      }
+
+      setProducts(prev => prev.filter(p => p.id !== item.id));
+      if (bookForm.id === item.id) {
+        setBookForm(EMPTY_BOOK_FORM);
+      }
+    } catch (err: any) {
+      alert(err?.message || 'Erro ao excluir item do cadastro DBM.');
+    } finally {
+      setDeletingProductId(null);
+    }
+  };
+
   const formLaunchBadge = useMemo(() => evaluateLaunchWindow(bookForm.launch_date), [bookForm.launch_date]);
 
   return (
@@ -1894,24 +2076,88 @@ export default function DbmProductsSearchPage() {
           {/* Grade Principal Estilo Planilha Excel Moderna */}
           <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
             <table className="w-full border-collapse text-left table-fixed min-w-[1080px]">
-              <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+              <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider select-none">
                 <tr>
                   <th className="w-9 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">#</th>
-                  <th className="w-20 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Cód Horus</th>
-                  <th className="w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">ISBN Principal</th>
-                  <th className="w-[34%] py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Título da Obra</th>
-                  <th className="w-32 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700">Editora</th>
-                  <th className="w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-center">
-                    Lançamento / Status
+                  <th
+                    onClick={() => handleSortProductColumn('cod_horus')}
+                    title="Clique para ordenar todo o catálogo por Código Horus"
+                    className="group w-24 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">Cód Horus</span>
+                      {renderProductSortIcon('cod_horus')}
+                    </div>
                   </th>
-                  <th className="w-28 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right">
-                    Preço Capa
+                  <th
+                    onClick={() => handleSortProductColumn('isbn')}
+                    title="Clique para ordenar todo o catálogo por ISBN Principal"
+                    className="group w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">ISBN Principal</span>
+                      {renderProductSortIcon('isbn')}
+                    </div>
                   </th>
-                  <th className="w-20 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right">
-                    Saldo
+                  <th
+                    onClick={() => handleSortProductColumn('name')}
+                    title="Clique para ordenar todo o catálogo por Título da Obra (A-Z / Z-A)"
+                    className="group w-[32%] py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">Título da Obra</span>
+                      {renderProductSortIcon('name')}
+                    </div>
                   </th>
-                  <th className="w-16 py-2 px-2 border-r border-slate-200 dark:border-slate-700 text-center">
-                    Un/Cx
+                  <th
+                    onClick={() => handleSortProductColumn('brand')}
+                    title="Clique para ordenar todo o catálogo por Editora (A-Z / Z-A)"
+                    className="group w-32 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">Editora</span>
+                      {renderProductSortIcon('brand')}
+                    </div>
+                  </th>
+                  <th
+                    onClick={() => handleSortProductColumn('launch_date')}
+                    title="Clique para ordenar todo o catálogo por Data de Lançamento"
+                    className="group w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="truncate">Lançamento / Status</span>
+                      {renderProductSortIcon('launch_date')}
+                    </div>
+                  </th>
+                  <th
+                    onClick={() => handleSortProductColumn('base_price')}
+                    title="Clique para ordenar todo o catálogo por Preço de Capa"
+                    className="group w-28 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">Preço Capa</span>
+                      {renderProductSortIcon('base_price')}
+                    </div>
+                  </th>
+                  <th
+                    onClick={() => handleSortProductColumn('stock_quantity')}
+                    title="Clique para ordenar todo o catálogo por Saldo Disponível"
+                    className="group w-20 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-end gap-1">
+                      <span className="truncate">Saldo</span>
+                      {renderProductSortIcon('stock_quantity')}
+                    </div>
+                  </th>
+                  <th
+                    onClick={() => handleSortProductColumn('units_per_box')}
+                    title="Clique para ordenar todo o catálogo por Unidades por Caixa"
+                    className="group w-16 py-2 px-2 border-r border-slate-200 dark:border-slate-700 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
+                  >
+                    <div className="flex items-center justify-center gap-1">
+                      <span className="truncate">Un/Cx</span>
+                      {renderProductSortIcon('units_per_box')}
+                    </div>
                   </th>
                   <th className="w-24 py-2 px-2 text-center">Ação</th>
                 </tr>
@@ -1947,7 +2193,8 @@ export default function DbmProductsSearchPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredProducts.map((item, idx) => {
+                  paginatedProducts.map((item, localIdx) => {
+                    const idx = pageStartIdx + localIdx;
                     const isSelected = idx === selectedIndex;
                     const isZeroOrOut = item.is_out_of_print || item.stock_quantity <= 0;
                     const launchInfo = evaluateLaunchWindow(item.launch_date);
@@ -2086,30 +2333,42 @@ export default function DbmProductsSearchPage() {
 
                         {/* Coluna Ação */}
                         <td className="py-1 px-2 text-center">
-                          {excelInlineEditMode ? (
+                          <div className="flex items-center justify-center gap-1.5">
+                            {excelInlineEditMode ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSaveInlineRow(item);
+                                }}
+                                disabled={inlineSavingId === item.id}
+                                className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition cursor-pointer"
+                              >
+                                {inlineSavingId === item.id ? '...' : 'Salvar'}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenProductInAccessForm(item, idx);
+                                }}
+                                className="px-2.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 hover:bg-indigo-600 text-slate-700 hover:text-white border border-slate-200 transition cursor-pointer"
+                              >
+                                Abrir Ficha
+                              </button>
+                            )}
+
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleSaveInlineRow(item);
-                              }}
-                              disabled={inlineSavingId === item.id}
-                              className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition cursor-pointer"
+                              disabled={deletingProductId === item.id}
+                              onClick={(e) => handleDeleteProductFromList(item, e)}
+                              title="Excluir item do cadastro DBM"
+                              className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition cursor-pointer disabled:opacity-40"
                             >
-                              {inlineSavingId === item.id ? '...' : 'Salvar'}
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenProductInAccessForm(item, idx);
-                              }}
-                              className="px-2.5 py-0.5 rounded-md text-[10px] font-semibold bg-slate-100 hover:bg-indigo-600 text-slate-700 hover:text-white border border-slate-200 transition cursor-pointer"
-                            >
-                              Abrir Ficha
-                            </button>
-                          )}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -2119,15 +2378,16 @@ export default function DbmProductsSearchPage() {
             </table>
           </div>
 
-          {/* Barra de Rodapé Estilo Planilha Excel */}
+          {/* Barra de Rodapé Estilo Planilha Excel + Paginação Completa */}
           <div className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 px-3 py-1.5 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 dark:text-slate-400 shrink-0">
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <span className="font-semibold text-slate-500">Linha:</span>
               <button
                 type="button"
                 onClick={() => setSelectedIndex(0)}
                 disabled={filteredProducts.length === 0 || selectedIndex <= 0}
                 className="p-1 rounded hover:bg-slate-100 border border-slate-200 disabled:opacity-40 cursor-pointer"
+                title="Primeira linha (Home)"
               >
                 <ChevronsLeft className="w-3.5 h-3.5" />
               </button>
@@ -2136,6 +2396,7 @@ export default function DbmProductsSearchPage() {
                 onClick={() => setSelectedIndex(prev => Math.max(0, prev - 1))}
                 disabled={filteredProducts.length === 0 || selectedIndex <= 0}
                 className="p-1 rounded hover:bg-slate-100 border border-slate-200 disabled:opacity-40 cursor-pointer"
+                title="Linha anterior (↑)"
               >
                 <ChevronLeft className="w-3.5 h-3.5" />
               </button>
@@ -2147,6 +2408,7 @@ export default function DbmProductsSearchPage() {
                 onClick={() => setSelectedIndex(prev => Math.min(filteredProducts.length - 1, prev + 1))}
                 disabled={filteredProducts.length === 0 || selectedIndex >= filteredProducts.length - 1}
                 className="p-1 rounded hover:bg-slate-100 border border-slate-200 disabled:opacity-40 cursor-pointer"
+                title="Próxima linha (↓)"
               >
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
@@ -2155,18 +2417,76 @@ export default function DbmProductsSearchPage() {
                 onClick={() => setSelectedIndex(filteredProducts.length - 1)}
                 disabled={filteredProducts.length === 0 || selectedIndex >= filteredProducts.length - 1}
                 className="p-1 rounded hover:bg-slate-100 border border-slate-200 disabled:opacity-40 cursor-pointer"
+                title="Última linha (End)"
               >
                 <ChevronsRight className="w-3.5 h-3.5" />
               </button>
 
-              <div className="ml-2 flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-0.5">
+              <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
+
+              {/* Controles de Paginação */}
+              <div className="flex items-center gap-1">
+                <span className="font-semibold text-slate-500">Página:</span>
+                <button
+                  type="button"
+                  onClick={() => handleGoToPage(1)}
+                  disabled={currentPage <= 1}
+                  className="px-1.5 py-0.5 rounded border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold cursor-pointer"
+                  title="Primeira página"
+                >
+                  «
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleGoToPage(currentPage - 1)}
+                  disabled={currentPage <= 1}
+                  className="px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold cursor-pointer"
+                >
+                  Anterior
+                </button>
+                <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-800 border border-indigo-200 rounded font-mono text-[11px] font-bold">
+                  Pág. {currentPage} de {totalPages}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleGoToPage(currentPage + 1)}
+                  disabled={currentPage >= totalPages}
+                  className="px-2 py-0.5 rounded border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold cursor-pointer"
+                >
+                  Próxima
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleGoToPage(totalPages)}
+                  disabled={currentPage >= totalPages}
+                  className="px-1.5 py-0.5 rounded border border-slate-200 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold cursor-pointer"
+                  title="Última página"
+                >
+                  »
+                </button>
+
+                <select
+                  value={pageSize}
+                  onChange={(e) => setPageSize(Number(e.target.value) || 50)}
+                  className="ml-1 px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-semibold text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  title="Itens exibidos por página"
+                >
+                  <option value={25}>25 / pág.</option>
+                  <option value={50}>50 / pág.</option>
+                  <option value={100}>100 / pág.</option>
+                  <option value={250}>250 / pág.</option>
+                  <option value={500}>500 / pág.</option>
+                </select>
+              </div>
+
+              <div className="ml-1 flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2 py-0.5">
                 <Search className="w-3 h-3 text-slate-400" />
                 <input
                   type="text"
                   value={quickSearchFooter}
                   onChange={(e) => setQuickSearchFooter(e.target.value)}
                   placeholder="Filtro instantâneo na grade..."
-                  className="text-[11px] bg-transparent w-44 focus:outline-none text-slate-800"
+                  className="text-[11px] bg-transparent w-40 focus:outline-none text-slate-800"
                 />
               </div>
             </div>

@@ -145,6 +145,8 @@ export default function DbmProposalsListPage() {
 
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [phaseFilter, setPhaseFilter] = useState<string>('ALL');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(25);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [exportingId, setExportingId] = useState<number | null>(null);
 
@@ -228,13 +230,18 @@ export default function DbmProposalsListPage() {
     if (u?.company_id) setCompanyId(u.company_id);
   }, []);
 
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, phaseFilter, pageSize]);
+
   const fetchProposals = useCallback(async () => {
     setLoading(true);
     try {
       const token = getToken();
       const params = new URLSearchParams();
-      params.append('limit', '100');
-      params.append('skip', '0');
+      const skipVal = Math.max(0, (currentPage - 1) * pageSize);
+      params.append('limit', String(pageSize));
+      params.append('skip', String(skipVal));
       if (companyId) params.append('company_id', String(companyId));
       if (searchTerm.trim()) params.append('search', searchTerm.trim());
       if (phaseFilter && phaseFilter !== 'ALL') params.append('status_phase', phaseFilter);
@@ -260,7 +267,7 @@ export default function DbmProposalsListPage() {
     } finally {
       setLoading(false);
     }
-  }, [companyId, searchTerm, phaseFilter]);
+  }, [companyId, searchTerm, phaseFilter, currentPage, pageSize]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -605,9 +612,9 @@ export default function DbmProposalsListPage() {
           </table>
         </div>
 
-        {/* Rodapé da Grade (Navegação Estilo Access) */}
+        {/* Rodapé da Grade (Navegação Estilo Access + Paginação) */}
         <div className="px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-slate-500 dark:text-slate-400 font-semibold mr-1">
               Registro:
             </span>
@@ -629,11 +636,11 @@ export default function DbmProposalsListPage() {
             </button>
             <div className="flex items-center gap-1 px-1.5">
               <span className="font-mono font-bold text-slate-800 dark:text-white">
-                {selectedIndex >= 0 ? selectedIndex + 1 : 0}
+                {selectedIndex >= 0 ? (currentPage - 1) * pageSize + selectedIndex + 1 : 0}
               </span>
               <span className="text-slate-400">de</span>
               <span className="font-mono font-bold text-slate-800 dark:text-white">
-                {proposals.length}
+                {totalCount}
               </span>
             </div>
             <button
@@ -652,6 +659,66 @@ export default function DbmProposalsListPage() {
             >
               <ChevronsRight className="h-4 w-4" />
             </button>
+
+            <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
+
+            {/* Controles de Paginação */}
+            {(() => {
+              const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+              return (
+                <div className="flex items-center gap-1">
+                  <span className="text-slate-500 dark:text-slate-400 font-semibold">Página:</span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(1)}
+                    disabled={currentPage <= 1}
+                    className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold"
+                    title="Primeira página"
+                  >
+                    «
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage <= 1}
+                    className="px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold"
+                  >
+                    Anterior
+                  </button>
+                  <span className="px-2.5 py-0.5 bg-indigo-50 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-200 border border-indigo-200 dark:border-indigo-800 rounded font-mono text-[11px] font-bold">
+                    Pág. {currentPage} de {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage >= totalPages}
+                    className="px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold"
+                  >
+                    Próxima
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCurrentPage(totalPages)}
+                    disabled={currentPage >= totalPages}
+                    className="px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 disabled:opacity-40 text-[11px] font-semibold"
+                    title="Última página"
+                  >
+                    »
+                  </button>
+
+                  <select
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value) || 25)}
+                    className="ml-1 px-1.5 py-0.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-[11px] font-semibold text-slate-700 dark:text-slate-300 focus:outline-none focus:border-indigo-500"
+                    title="Orçamentos exibidos por página"
+                  >
+                    <option value={25}>25 / pág.</option>
+                    <option value={50}>50 / pág.</option>
+                    <option value={100}>100 / pág.</option>
+                  </select>
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-4 text-slate-500 dark:text-slate-400">

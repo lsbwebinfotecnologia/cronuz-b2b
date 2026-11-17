@@ -5259,6 +5259,46 @@ async def import_dbm_products_excel_lancamentos(
     }
 
 
+@router.delete("/products/{product_id}")
+def delete_dbm_product(
+    product_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Exclui um produto do cadastro DBM do seller, limpando movimentações locais vinculadas.
+    """
+    from app.models.product import Product, StockMovement, PriceHistory
+    from app.models.catalog_support import ProductCharacteristic
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    prod = db.query(Product).filter(
+        Product.id == product_id,
+        Product.company_id == seller_id
+    ).first()
+    if not prod:
+        raise HTTPException(status_code=404, detail="Produto não encontrado no cadastro DBM deste seller.")
+
+    prod_name = prod.name
+    try:
+        db.query(StockMovement).filter(StockMovement.product_id == prod.id).delete(synchronize_session=False)
+        db.query(PriceHistory).filter(PriceHistory.product_id == prod.id).delete(synchronize_session=False)
+        db.query(ProductCharacteristic).filter(ProductCharacteristic.product_id == prod.id).delete(synchronize_session=False)
+        db.delete(prod)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.error(f"[DBM Product Delete] Erro ao excluir produto #{product_id}: {exc}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Não foi possível excluir o item '{prod_name}': {str(exc)[:220]}"
+        )
+
+    return {"success": True, "deleted_id": product_id, "name": prod_name}
+
+
+
 
 
 
