@@ -1530,9 +1530,14 @@ async def _send_b2c_order_to_horus(
             except Exception as e_skip:
                 warnings.append(f"Pular_expedicao aviso: {e_skip}")
 
-        # Persistir no Pedido B2C
+        # Persistir no Pedido B2C e avançar automaticamente o status do pedido para "Em Separação" (SEPARATION)
         now_iso = datetime.now(timezone.utc).isoformat()
         order.horus_pedido_venda = str(cod_ped_venda)
+        prev_norm_st = _normalize_b2c_order_status(order.status)
+        if prev_norm_st not in ("FINALIZED", "DELIVERED", "CANCELLED"):
+            order.status = "SEPARATION"
+        new_norm_st = _normalize_b2c_order_status(order.status)
+
         meta["horus_pedido_venda"] = str(cod_ped_venda)
         meta["horus_cod_cli"] = str(cod_cli)
         meta["horus_sent_at"] = now_iso
@@ -1544,9 +1549,17 @@ async def _send_b2c_order_to_horus(
         db.commit()
         db.refresh(order)
 
+        if new_norm_st == "SEPARATION" and prev_norm_st != "SEPARATION":
+            try:
+                _send_b2c_order_email(db, order, event_status="SEPARATION")
+            except Exception:
+                pass
+
         return {
             "ok": True,
             "already_sent": False,
+            "status": new_norm_st,
+            "status_label": B2C_STATUS_LABELS.get(new_norm_st, "Em Separação"),
             "horus_pedido_venda": str(cod_ped_venda),
             "horus_cod_cli": str(cod_cli),
             "horus_status_erp": target_erp_status or "CRIADO",
@@ -1554,7 +1567,7 @@ async def _send_b2c_order_to_horus(
             "items_sent": items_sent_count,
             "warnings": warnings,
             "steps_log": steps_log,
-            "message": f"Pedido #{order.id} integrado ao Horus ERP com sucesso! Nº Horus: {cod_ped_venda} (COD_CLI: {cod_cli}).",
+            "message": f"Pedido #{order.id} integrado ao Horus ERP com sucesso (Nº Horus: {cod_ped_venda}) e alterado para Em Separação!",
         }
     finally:
         try:

@@ -768,10 +768,14 @@ export default function SellerB2CStorefrontManagementPage({
       if (!res.ok) throw new Error(data.detail || 'Falha ao integrar pedido com Horus ERP.');
       toast.success(data.message || `Pedido #${orderId} integrado ao Horus!`);
       if (selectedOrder && selectedOrder.id === orderId) {
+        const nextSt = data.status || 'SEPARATION';
+        const nextStLabel = data.status_label || 'Em Separação';
         setSelectedOrder((prev: any) =>
           prev
             ? {
                 ...prev,
+                status: nextSt,
+                status_label: nextStLabel,
                 horus_pedido_venda: data.horus_pedido_venda,
                 horus_cod_cli: data.horus_cod_cli,
                 horus_status_erp: data.horus_status_erp,
@@ -780,6 +784,10 @@ export default function SellerB2CStorefrontManagementPage({
               }
             : null
         );
+        setOrderEditForm((prev) => ({
+          ...prev,
+          status: nextSt,
+        }));
       }
       loadAllData();
     } catch (e: any) {
