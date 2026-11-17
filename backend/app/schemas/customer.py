@@ -92,6 +92,8 @@ class CustomerBase(BaseModel):
     nfse_notes: Optional[str] = None
     billing_emails: Optional[str] = None
     default_group_id: Optional[int] = None
+    horus_cod_cli: Optional[int] = None
+    horus_cod_fornecedor: Optional[int] = None
 
 class CustomerCreate(CustomerBase):
     addresses: Optional[list[AddressCreate]] = []
@@ -118,6 +120,8 @@ class CustomerUpdate(BaseModel):
     nfse_notes: Optional[str] = None
     billing_emails: Optional[str] = None
     default_group_id: Optional[int] = None
+    horus_cod_cli: Optional[int] = None
+    horus_cod_fornecedor: Optional[int] = None
 
 class CustomerInDBBase(CustomerBase):
     id: int

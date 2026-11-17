@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { getToken, getUser } from '@/lib/auth';
 import { CurrencyInput } from '@/components/CurrencyInput';
+import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
 
 interface DbmCompanyItem {
   id: number;
@@ -619,19 +620,12 @@ export default function DbmCompaniesSearchPage() {
   };
 
   return (
-    <div className="space-y-4 pb-16">
-      {/* ── Abas de Navegação Superiores (Estilo Access: Menu | Localiza Empresas | Cadastro de Empresas) ─ */}
+    <div className="space-y-3 pb-16">
+      {/* ── Barra de Menus Fixos Persistentes por Usuário ───────────────── */}
+      <DbmPinnedNavBar />
+
+      {/* ── Abas de Navegação Superiores (Localiza Empresas | Cadastro de Empresas) ─ */}
       <div className="flex items-center gap-1.5 border-b border-slate-200 dark:border-slate-800 bg-white/70 dark:bg-slate-900/70 p-1.5 rounded-2xl backdrop-blur-sm overflow-x-auto scrollbar-none">
-        <button
-          onClick={() => router.push('/dbm')}
-          className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition-colors shrink-0"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Menu
-        </button>
-
-        <span className="text-slate-300 dark:text-slate-700">|</span>
-
         <button
           onClick={() => setMainTab('search')}
           className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all shrink-0 ${

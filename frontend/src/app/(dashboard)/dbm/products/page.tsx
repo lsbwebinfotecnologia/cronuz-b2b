@@ -33,10 +33,51 @@ import {
   ExternalLink,
   Sparkles,
   Keyboard,
-  Upload
+  Upload,
+  Download,
+  GripVertical,
+  Columns3,
+  RotateCcw,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { getToken, getUser } from '@/lib/auth';
 import CurrencyInput from '@/components/CurrencyInput';
+import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
+
+export type ProductColumnKey =
+  | 'cod_horus'
+  | 'isbn'
+  | 'name'
+  | 'brand'
+  | 'launch_date'
+  | 'base_price'
+  | 'stock_quantity'
+  | 'consignment_stock'
+  | 'sales_365'
+  | 'sales_90'
+  | 'units_per_box';
+
+export const DEFAULT_PRODUCT_COLUMNS: ProductColumnKey[] = [
+  'cod_horus',
+  'isbn',
+  'name',
+  'brand',
+  'launch_date',
+  'base_price',
+  'stock_quantity',
+  'consignment_stock',
+  'sales_365',
+  'sales_90',
+  'units_per_box',
+];
+
+const formatProductDaysToMonths = (days: number): string => {
+  const d = Math.max(1, Number(days) || 90);
+  if (d === 365 || d === 360) return '12M';
+  const m = d / 30;
+  if (Number.isInteger(m)) return `${m}M`;
+  return `${Math.max(1, Math.round(m))}M`;
+};
 
 interface TiragemRow {
   id: number;
@@ -329,20 +370,86 @@ export default function DbmProductsSearchPage() {
     }
   }, []);
 
-  // Filtros Superiores da Aba Pesquisa de Produtos
+  // Filtros Superiores da Aba Pesquisa de Produtos (Persistidos no usuário / login)
   const [filterTitle, setFilterTitle] = useState('');
   const [filterIsbn, setFilterIsbn] = useState('');
   const [filterCollection, setFilterCollection] = useState('');
   const [filterPublisher, setFilterPublisher] = useState('');
   const [filterLaunchWindow, setFilterLaunchWindow] = useState<'ALL' | 'NOVELTY' | 'EXPIRING' | 'BACKLIST'>('ALL');
-  const [onlyOutOfStock, setOnlyOutOfStock] = useState(false);
-  const [hideEbooks, setHideEbooks] = useState<boolean>(() => {
+  const [hideOutOfStock, setHideOutOfStock] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('cronuz_dbm_hide_ebooks');
+      const u = getUser();
+      const userKey = `cronuz_dbm_hide_out_of_stock_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+      const saved = localStorage.getItem(userKey) ?? localStorage.getItem('cronuz_dbm_hide_out_of_stock');
       if (saved !== null) return saved === 'true';
     }
     return true;
   });
+  const [hideEbooks, setHideEbooks] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const u = getUser();
+      const userKey = `cronuz_dbm_hide_ebooks_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+      const saved = localStorage.getItem(userKey) ?? localStorage.getItem('cronuz_dbm_hide_ebooks');
+      if (saved !== null) return saved === 'true';
+    }
+    return true;
+  });
+  const [generalSalesDays, setGeneralSalesDays] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const u = getUser();
+      const deskKey = `cronuz_proposal_desk_config_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+      const rawDesk = localStorage.getItem(deskKey) || localStorage.getItem('cronuz_proposal_desk_config');
+      if (rawDesk) {
+        try {
+          const parsed = JSON.parse(rawDesk);
+          if (typeof parsed.generalSalesDays === 'number' && parsed.generalSalesDays > 0) {
+            return parsed.generalSalesDays;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      const savedDays = localStorage.getItem('cronuz_dbm_general_sales_days');
+      if (savedDays && Number(savedDays) > 0) return Number(savedDays);
+    }
+    return 90;
+  });
+
+  // Ordem das colunas da Planilha de Produtos (Movimentável e Salva por Usuário)
+  const [columnOrder, setColumnOrder] = useState<ProductColumnKey[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const colKey = `cronuz_dbm_products_col_order_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+        const raw = localStorage.getItem(colKey) || localStorage.getItem('cronuz_dbm_products_col_order');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const valid: ProductColumnKey[] = [];
+            for (const k of parsed) {
+              if (DEFAULT_PRODUCT_COLUMNS.includes(k as ProductColumnKey) && !valid.includes(k as ProductColumnKey)) {
+                valid.push(k as ProductColumnKey);
+              }
+            }
+            for (const defK of DEFAULT_PRODUCT_COLUMNS) {
+              if (!valid.includes(defK)) valid.push(defK);
+            }
+            return valid;
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return DEFAULT_PRODUCT_COLUMNS;
+  });
+  const [dragColKey, setDragColKey] = useState<ProductColumnKey | null>(null);
+  const [showColumnOrderModal, setShowColumnOrderModal] = useState<boolean>(false);
+
+  // Modal de Exportação Excel (Modelos)
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [exportModel, setExportModel] = useState<'MODEL_1_CATALOG' | 'MODEL_2_TIRAGENS'>('MODEL_1_CATALOG');
+  const [exportScope, setExportScope] = useState<'FILTERED' | 'ALL'>('FILTERED');
 
   // Estados de Dados da Planilha Principal
   const [products, setProducts] = useState<ProductGridItem[]>([]);
@@ -352,7 +459,7 @@ export default function DbmProductsSearchPage() {
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(50);
   const [sortConfig, setSortConfig] = useState<{
-    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box';
+    key: ProductColumnKey;
     direction: 'asc' | 'desc';
   } | null>(null);
 
@@ -587,6 +694,7 @@ export default function DbmProductsSearchPage() {
           if (!bookForm.id) {
             setBookForm(mapProductToForm(mapped[0]));
           }
+          batchEnrichCatalogMetrics(targetCompanyId, generalSalesDays);
         } else {
           setSelectedIndex(-1);
         }
@@ -595,6 +703,60 @@ export default function DbmProductsSearchPage() {
       console.error('Erro ao buscar catálogo DBM:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Enriquecimento em lote de VDS365 Geral, VDS(XM) Geral e Saldo Consignado Geral
+  const batchEnrichCatalogMetrics = async (targetCompanyId?: number, salesDays?: number) => {
+    const cid = targetCompanyId || companyId;
+    const days = salesDays || generalSalesDays || 90;
+    try {
+      const token = getToken();
+      const configuredApiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+      const isProdBrowser =
+        typeof window !== 'undefined' &&
+        window.location.hostname !== 'localhost' &&
+        window.location.hostname !== '127.0.0.1';
+      const baseUrl = isProdBrowser ? '/api' : configuredApiUrl;
+
+      let res: Response;
+      try {
+        res = await fetch(
+          `${baseUrl}/dbm/products/batch-enrich-metrics?company_id=${cid}&general_sales_days=${days}`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+      } catch {
+        res = await fetch(
+          `${configuredApiUrl}/dbm/products/batch-enrich-metrics?company_id=${cid}&general_sales_days=${days}`,
+          {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+      }
+
+      if (!res.ok) return;
+      const data = await res.json();
+      const metricsMap = data?.metrics || {};
+      if (Object.keys(metricsMap).length > 0) {
+        setProducts((prev) =>
+          prev.map((item) => {
+            const m = metricsMap[String(item.id)];
+            if (!m) return item;
+            return {
+              ...item,
+              consignment_stock: Number(m.consignment_stock ?? item.consignment_stock ?? 0),
+              sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
+              sales_90: Number(m.sales_90 ?? item.sales_90 ?? 0),
+            };
+          })
+        );
+      }
+    } catch {
+      // silencioso em background
     }
   };
 
@@ -1106,7 +1268,7 @@ export default function DbmProductsSearchPage() {
       if (hideEbooks && item.is_ebook) {
         return false;
       }
-      if (onlyOutOfStock && item.stock_quantity > 0 && !item.is_out_of_print) {
+      if (hideOutOfStock && (item.is_out_of_print || Number(item.stock_quantity || 0) <= 0)) {
         return false;
       }
       if (quickSearchFooter) {
@@ -1170,16 +1332,23 @@ export default function DbmProductsSearchPage() {
       if (key === 'stock_quantity') {
         return (Number(a.stock_quantity || 0) - Number(b.stock_quantity || 0)) * dir;
       }
+      if (key === 'consignment_stock') {
+        return (Number(a.consignment_stock || 0) - Number(b.consignment_stock || 0)) * dir;
+      }
+      if (key === 'sales_365') {
+        return (Number(a.sales_365 || 0) - Number(b.sales_365 || 0)) * dir;
+      }
+      if (key === 'sales_90') {
+        return (Number(a.sales_90 || 0) - Number(b.sales_90 || 0)) * dir;
+      }
       if (key === 'units_per_box') {
         return (Number(a.units_per_box || 0) - Number(b.units_per_box || 0)) * dir;
       }
       return 0;
     });
-  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter, sortConfig]);
+  }, [products, filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, hideOutOfStock, quickSearchFooter, sortConfig]);
 
-  const handleSortProductColumn = (
-    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box'
-  ) => {
+  const handleSortProductColumn = (key: ProductColumnKey) => {
     const isTextCol = key === 'name' || key === 'brand' || key === 'isbn';
     setSortConfig(prev => {
       if (!prev || prev.key !== key) {
@@ -1191,9 +1360,7 @@ export default function DbmProductsSearchPage() {
     setSelectedIndex(0);
   };
 
-  const renderProductSortIcon = (
-    key: 'cod_horus' | 'isbn' | 'name' | 'brand' | 'launch_date' | 'base_price' | 'stock_quantity' | 'units_per_box'
-  ) => {
+  const renderProductSortIcon = (key: ProductColumnKey) => {
     if (!sortConfig || sortConfig.key !== key) {
       return <ArrowUpDown className="w-3 h-3 text-slate-400/70 opacity-60 group-hover:opacity-100 shrink-0" />;
     }
@@ -1213,7 +1380,7 @@ export default function DbmProductsSearchPage() {
   useEffect(() => {
     setCurrentPage(1);
     setSelectedIndex(filteredProducts.length > 0 ? 0 : -1);
-  }, [filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, onlyOutOfStock, quickSearchFooter, pageSize]);
+  }, [filterTitle, filterIsbn, filterCollection, filterPublisher, filterLaunchWindow, hideEbooks, hideOutOfStock, quickSearchFooter, pageSize]);
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -1762,9 +1929,254 @@ export default function DbmProductsSearchPage() {
     setFilterCollection('');
     setFilterPublisher('');
     setFilterLaunchWindow('ALL');
-    setOnlyOutOfStock(false);
     setQuickSearchFooter('');
     fetchProducts(false);
+  };
+
+  const saveColumnOrder = (nextOrder: ProductColumnKey[]) => {
+    setColumnOrder(nextOrder);
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const colKey = `cronuz_dbm_products_col_order_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+        localStorage.setItem(colKey, JSON.stringify(nextOrder));
+        localStorage.setItem('cronuz_dbm_products_col_order', JSON.stringify(nextOrder));
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const handleMoveColumnInOrder = (index: number, direction: -1 | 1) => {
+    const targetIdx = index + direction;
+    if (targetIdx < 0 || targetIdx >= columnOrder.length) return;
+    const copy = [...columnOrder];
+    const temp = copy[index];
+    copy[index] = copy[targetIdx];
+    copy[targetIdx] = temp;
+    saveColumnOrder(copy);
+  };
+
+  const handleDropColumnHeader = (targetKey: ProductColumnKey) => {
+    if (!dragColKey || dragColKey === targetKey) {
+      setDragColKey(null);
+      return;
+    }
+    const fromIdx = columnOrder.indexOf(dragColKey);
+    const toIdx = columnOrder.indexOf(targetKey);
+    if (fromIdx === -1 || toIdx === -1) {
+      setDragColKey(null);
+      return;
+    }
+    const copy = [...columnOrder];
+    const [moved] = copy.splice(fromIdx, 1);
+    copy.splice(toIdx, 0, moved);
+    saveColumnOrder(copy);
+    setDragColKey(null);
+  };
+
+  const getColumnLabel = (colKey: ProductColumnKey): string => {
+    switch (colKey) {
+      case 'cod_horus':
+        return 'Cód Horus';
+      case 'isbn':
+        return 'ISBN Principal';
+      case 'name':
+        return 'Título da Obra';
+      case 'brand':
+        return 'Editora';
+      case 'launch_date':
+        return 'Lançamento / Status';
+      case 'base_price':
+        return 'Preço Capa';
+      case 'stock_quantity':
+        return 'Saldo';
+      case 'consignment_stock':
+        return 'Consig. Geral';
+      case 'sales_365':
+        return 'VDS365';
+      case 'sales_90':
+        return `VDS(${formatProductDaysToMonths(generalSalesDays)})`;
+      case 'units_per_box':
+        return 'Un/Cx';
+      default:
+        return colKey;
+    }
+  };
+
+  // Exportação da Planilha Geral (Modelo 1: Catálogo & Links | Modelo 2: Tiragens Gerais)
+  const handleExportProductsExcel = () => {
+    const sourceList = exportScope === 'FILTERED' ? filteredProducts : products;
+    if (sourceList.length === 0) {
+      alert('Não há livros disponíveis para exportar neste filtro.');
+      return;
+    }
+
+    if (exportModel === 'MODEL_1_CATALOG') {
+      // Modelo 1: (ISBN, Título, Data de lançamento, Ano, Mês, Link do item na internet)
+      const rows = sourceList.map((p) => {
+        const rawDate = p.launch_date ? String(p.launch_date).slice(0, 10) : '';
+        const dateParts = rawDate ? rawDate.split('-') : [];
+        const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : '';
+        const yearVal = p.launch_year || (dateParts.length === 3 ? Number(dateParts[0]) : '');
+        const monthVal = p.launch_month || (dateParts.length === 3 ? Number(dateParts[1]) : '');
+        return {
+          ISBN: p.ean_gtin || p.isbn || '',
+          Título: p.name || '',
+          'Data de Lançamento': formattedDate,
+          Ano: yearVal,
+          Mês: monthVal,
+          'Link do Item na Internet': p.external_link || '',
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = [
+        { wch: 18 }, // ISBN
+        { wch: 48 }, // Título
+        { wch: 18 }, // Data de Lançamento
+        { wch: 10 }, // Ano
+        { wch: 10 }, // Mês
+        { wch: 52 }, // Link do Item na Internet
+      ];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Modelo 1 - Catalogo');
+      XLSX.writeFile(wb, `DBM_Produtos_Modelo1_${new Date().toISOString().slice(0, 10)}.xlsx`);
+      setShowExportModal(false);
+      return;
+    }
+
+    // Modelo 2: Tiragens Gerais de Todos os Itens (ISBN, Título + Dados da Tiragem)
+    const tiragensRows: Record<string, any>[] = [];
+    for (const p of sourceList) {
+      let parsed: TiragemRow[] = [];
+      if (p.dbm_tiragens) {
+        try {
+          const arr = JSON.parse(p.dbm_tiragens);
+          if (Array.isArray(arr)) parsed = arr;
+        } catch {
+          parsed = [];
+        }
+      }
+      if (parsed.length === 0) {
+        tiragensRows.push({
+          ISBN: p.ean_gtin || p.isbn || '',
+          Título: p.name || '',
+          'Cód. Horus': p.horus_cod_item || p.sku || '',
+          'Nº Tiragem': 1,
+          'Data Tiragem': p.launch_date ? String(p.launch_date).slice(0, 10).split('-').reverse().join('/') : '',
+          'Qtd. Exemplares': Number(p.stock_quantity || 0),
+          Frete: '0,00%',
+          'DA Roy': p.ebook_royalty_pct ? `${Number(p.ebook_royalty_pct).toFixed(2).replace('.', ',')}%` : '0,00%',
+          PIS: '0,00%',
+          'Adiant. DA': 'R$ 0,00',
+          'Custo DB': p.cost_price ? `R$ ${Number(p.cost_price).toFixed(2).replace('.', ',')}` : 'R$ 0,00',
+          'Custo Pro': 'R$ 0,00',
+          'Custo Fin': 'R$ 0,00',
+          Roy: 'R$ 0,00',
+          'DA s/': 'R$ 0,00',
+          TTC: 'R$ 0,00',
+        });
+      } else {
+        parsed.forEach((t, idx) => {
+          tiragensRows.push({
+            ISBN: p.ean_gtin || p.isbn || '',
+            Título: p.name || '',
+            'Cód. Horus': p.horus_cod_item || p.sku || '',
+            'Nº Tiragem': idx + 1,
+            'Data Tiragem': t.data_tiragem || '',
+            'Qtd. Exemplares': Number(t.tiragem || 0),
+            Frete: t.fre || '0,00%',
+            'DA Roy': t.da_roy || '0,00%',
+            PIS: t.pis || '0,00%',
+            'Adiant. DA': t.da_advance || 'R$ 0,00',
+            'Custo DB': t.custo_db || 'R$ 0,00',
+            'Custo Pro': t.custo_pro || 'R$ 0,00',
+            'Custo Fin': t.custo_fin || 'R$ 0,00',
+            Roy: t.roy || 'R$ 0,00',
+            'DA s/': t.da_s || 'R$ 0,00',
+            TTC: t.ttc || 'R$ 0,00',
+          });
+        });
+      }
+    }
+
+    const ws = XLSX.utils.json_to_sheet(tiragensRows);
+    ws['!cols'] = [
+      { wch: 18 },
+      { wch: 44 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 15 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tiragens Gerais DBM');
+    XLSX.writeFile(wb, `DBM_Tiragens_Gerais_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    setShowExportModal(false);
+  };
+
+  // Exportação das Tiragens de um Único Item aberto na Ficha
+  const handleExportSingleBookTiragensExcel = () => {
+    const rows = (bookForm.tiragens || []).map((t, idx) => ({
+      ISBN: bookForm.ean_gtin || bookForm.barcode || '',
+      Título: bookForm.name || '',
+      'Cód. Horus': bookForm.horus_cod_item || bookForm.sku || '',
+      'Nº Tiragem': idx + 1,
+      'Data Tiragem': t.data_tiragem || '',
+      'Qtd. Exemplares': Number(t.tiragem || 0),
+      Frete: t.fre || '0,00%',
+      'DA Roy': t.da_roy || '0,00%',
+      PIS: t.pis || '0,00%',
+      'Adiant. DA': t.da_advance || 'R$ 0,00',
+      'Custo DB': t.custo_db || 'R$ 0,00',
+      'Custo Pro': t.custo_pro || 'R$ 0,00',
+      'Custo Fin': t.custo_fin || 'R$ 0,00',
+      Roy: t.roy || 'R$ 0,00',
+      'DA s/': t.da_s || 'R$ 0,00',
+      TTC: t.ttc || 'R$ 0,00',
+    }));
+
+    if (rows.length === 0) {
+      alert('Este livro ainda não possui linhas de tiragem para exportar.');
+      return;
+    }
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols'] = [
+      { wch: 18 },
+      { wch: 44 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 14 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 12 },
+      { wch: 15 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+      { wch: 14 },
+    ];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tiragens do Livro');
+    const safeSlug = (bookForm.ean_gtin || bookForm.horus_cod_item || bookForm.name || 'Livro')
+      .replace(/[^a-zA-Z0-9_-]/g, '_')
+      .slice(0, 30);
+    XLSX.writeFile(wb, `DBM_Tiragens_${safeSlug}.xlsx`);
   };
 
   const handleDeleteProductFromList = async (item: ProductGridItem, e?: React.MouseEvent) => {
@@ -1817,29 +2229,14 @@ export default function DbmProductsSearchPage() {
   return (
     <div className="flex flex-col h-[calc(100vh-4.5rem)] bg-slate-50 dark:bg-slate-950 rounded-xl border border-slate-200/90 dark:border-slate-800 overflow-hidden shadow-xs select-none">
 
+      {/* ── Barra de Menus Fixos Persistentes por Usuário ───────────────── */}
+      <DbmPinnedNavBar className="rounded-none border-x-0 border-t-0 shrink-0" />
+
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* BARRA SUPERIOR DE NAVEGAÇÃO & AÇÕES RÁPIDAS (UI MODERNA + EXCEL)      */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 py-2 flex items-center justify-between gap-2 shrink-0 flex-wrap">
         <div className="flex items-center gap-1.5 overflow-x-auto">
-          <Link
-            href="/dbm"
-            className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-1.5 transition"
-          >
-            <ArrowLeft className="w-3.5 h-3.5 text-slate-500" />
-            Menu DBM
-          </Link>
-
-          <Link
-            href="/dbm/customers"
-            className="px-2.5 py-1.5 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg flex items-center gap-1.5 transition"
-          >
-            <Building2 className="w-3.5 h-3.5 text-slate-500" />
-            Empresas / Clientes
-          </Link>
-
-          <div className="h-4 w-px bg-slate-200 dark:bg-slate-700 mx-1" />
-
           <button
             type="button"
             onClick={() => setActiveAccessTab('SEARCH')}
@@ -1873,8 +2270,8 @@ export default function DbmProductsSearchPage() {
           </button>
         </div>
 
-        {/* Botões Rápidos de Sincronização Horus SQL + Atalhos + Novo Livro */}
-        <div className="flex items-center gap-2">
+        {/* Botões Rápidos de Exportação, Importação, Sincronização Horus SQL + Novo Livro */}
+        <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => setShowLegendModal(true)}
@@ -1883,6 +2280,16 @@ export default function DbmProductsSearchPage() {
           >
             <Keyboard className="w-3.5 h-3.5" />
             Atalhos Excel
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowExportModal(true)}
+            className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Exportar planilha Excel (Modelo 1: Catálogo & Links | Modelo 2: Tiragens Gerais)"
+          >
+            <Download className="w-3.5 h-3.5 text-emerald-600" />
+            Exportar Excel
           </button>
 
           <button
@@ -2005,7 +2412,7 @@ export default function DbmProductsSearchPage() {
                   Filtrar
                 </button>
 
-                {(filterTitle || filterIsbn || filterCollection || filterPublisher || filterLaunchWindow !== 'ALL' || onlyOutOfStock) && (
+                {(filterTitle || filterIsbn || filterCollection || filterPublisher || filterLaunchWindow !== 'ALL') && (
                   <button
                     type="button"
                     onClick={handleClearFilters}
@@ -2018,7 +2425,7 @@ export default function DbmProductsSearchPage() {
               </div>
             </form>
 
-            {/* Sub-barra de Controle Estilo Excel */}
+            {/* Sub-barra de Controle Estilo Excel (Salva por Usuário no Login) */}
             <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-3">
                 <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
@@ -2029,6 +2436,9 @@ export default function DbmProductsSearchPage() {
                       const val = e.target.checked;
                       setHideEbooks(val);
                       if (typeof window !== 'undefined') {
+                        const u = getUser();
+                        const userKey = `cronuz_dbm_hide_ebooks_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+                        localStorage.setItem(userKey, String(val));
                         localStorage.setItem('cronuz_dbm_hide_ebooks', String(val));
                       }
                     }}
@@ -2042,11 +2452,20 @@ export default function DbmProductsSearchPage() {
                 <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
                   <input
                     type="checkbox"
-                    checked={onlyOutOfStock}
-                    onChange={(e) => setOnlyOutOfStock(e.target.checked)}
+                    checked={hideOutOfStock}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      setHideOutOfStock(val);
+                      if (typeof window !== 'undefined') {
+                        const u = getUser();
+                        const userKey = `cronuz_dbm_hide_out_of_stock_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+                        localStorage.setItem(userKey, String(val));
+                        localStorage.setItem('cronuz_dbm_hide_out_of_stock', String(val));
+                      }
+                    }}
                     className="w-3.5 h-3.5 rounded text-indigo-600 border-slate-300"
                   />
-                  Apenas Esgotados / Sem Saldo
+                  Não mostrar Esgotados / Sem Saldo
                 </label>
 
                 <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-700" />
@@ -2060,14 +2479,48 @@ export default function DbmProductsSearchPage() {
                   />
                   ✏️ Modo Edição Direta na Planilha (Estilo Excel)
                 </label>
+
+                <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-700" />
+
+                {/* Configurador de Dias Vendas Geral (sincronizado com VDS(XM)) */}
+                <div className="inline-flex items-center gap-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-md px-2 py-0.5 text-[11px]">
+                  <span className="text-slate-500 font-semibold">Vds Geral:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={730}
+                    value={generalSalesDays}
+                    onChange={(e) => {
+                      const val = Math.max(1, parseInt(e.target.value, 10) || 90);
+                      setGeneralSalesDays(val);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('cronuz_dbm_general_sales_days', String(val));
+                      }
+                    }}
+                    onBlur={() => batchEnrichCatalogMetrics(companyId, generalSalesDays)}
+                    className="w-12 text-center font-mono font-bold text-indigo-700 bg-white dark:bg-slate-900 border border-slate-300 rounded px-1 py-0.2"
+                    title="Dias configurados para a coluna de Vendas Gerais VDS(XM)"
+                  />
+                  <span className="text-slate-400">d ({formatProductDaysToMonths(generalSalesDays)})</span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowColumnOrderModal(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer transition"
+                  title="Movimentar a ordem das colunas da grade (também é possível arrastar o título da coluna direto na tabela)"
+                >
+                  <Columns3 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span>Mover Colunas</span>
+                </button>
               </div>
 
               <div className="flex items-center gap-2 text-[11px] text-slate-500">
                 <span>
-                  Use <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">↑</kbd>{' '}
+                  Arraste os cabeçalhos para mover colunas • Use{' '}
+                  <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">↑</kbd>{' '}
                   <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">↓</kbd> e{' '}
-                  <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">Enter</kbd> ou{' '}
-                  <strong>Duplo Clique</strong> para abrir a ficha completa
+                  <kbd className="px-1.5 py-0.5 bg-slate-100 border border-slate-300 rounded font-mono text-[10px]">Enter</kbd>
                 </span>
               </div>
             </div>
@@ -2075,104 +2528,79 @@ export default function DbmProductsSearchPage() {
 
           {/* Grade Principal Estilo Planilha Excel Moderna */}
           <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
-            <table className="w-full border-collapse text-left table-fixed min-w-[1080px]">
+            <table className="w-full border-collapse text-left table-fixed min-w-[1260px]">
               <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider select-none">
                 <tr>
                   <th className="w-9 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">#</th>
-                  <th
-                    onClick={() => handleSortProductColumn('cod_horus')}
-                    title="Clique para ordenar todo o catálogo por Código Horus"
-                    className="group w-24 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="truncate">Cód Horus</span>
-                      {renderProductSortIcon('cod_horus')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('isbn')}
-                    title="Clique para ordenar todo o catálogo por ISBN Principal"
-                    className="group w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="truncate">ISBN Principal</span>
-                      {renderProductSortIcon('isbn')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('name')}
-                    title="Clique para ordenar todo o catálogo por Título da Obra (A-Z / Z-A)"
-                    className="group w-[32%] py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="truncate">Título da Obra</span>
-                      {renderProductSortIcon('name')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('brand')}
-                    title="Clique para ordenar todo o catálogo por Editora (A-Z / Z-A)"
-                    className="group w-32 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span className="truncate">Editora</span>
-                      {renderProductSortIcon('brand')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('launch_date')}
-                    title="Clique para ordenar todo o catálogo por Data de Lançamento"
-                    className="group w-36 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      <span className="truncate">Lançamento / Status</span>
-                      {renderProductSortIcon('launch_date')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('base_price')}
-                    title="Clique para ordenar todo o catálogo por Preço de Capa"
-                    className="group w-28 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-end gap-1">
-                      <span className="truncate">Preço Capa</span>
-                      {renderProductSortIcon('base_price')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('stock_quantity')}
-                    title="Clique para ordenar todo o catálogo por Saldo Disponível"
-                    className="group w-20 py-2 px-2.5 border-r border-slate-200 dark:border-slate-700 text-right cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-end gap-1">
-                      <span className="truncate">Saldo</span>
-                      {renderProductSortIcon('stock_quantity')}
-                    </div>
-                  </th>
-                  <th
-                    onClick={() => handleSortProductColumn('units_per_box')}
-                    title="Clique para ordenar todo o catálogo por Unidades por Caixa"
-                    className="group w-16 py-2 px-2 border-r border-slate-200 dark:border-slate-700 text-center cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors"
-                  >
-                    <div className="flex items-center justify-center gap-1">
-                      <span className="truncate">Un/Cx</span>
-                      {renderProductSortIcon('units_per_box')}
-                    </div>
-                  </th>
+                  {columnOrder.map((colKey) => {
+                    const widthClass =
+                      colKey === 'cod_horus'
+                        ? 'w-20'
+                        : colKey === 'isbn'
+                        ? 'w-32'
+                        : colKey === 'name'
+                        ? 'w-[24%]'
+                        : colKey === 'brand'
+                        ? 'w-28'
+                        : colKey === 'launch_date'
+                        ? 'w-32 text-center'
+                        : colKey === 'base_price'
+                        ? 'w-24 text-right'
+                        : colKey === 'stock_quantity'
+                        ? 'w-20 text-right'
+                        : colKey === 'consignment_stock'
+                        ? 'w-24 text-right'
+                        : colKey === 'sales_365'
+                        ? 'w-20 text-right'
+                        : colKey === 'sales_90'
+                        ? 'w-20 text-right'
+                        : 'w-16 text-center';
+
+                    const alignClass =
+                      colKey === 'base_price' ||
+                      colKey === 'stock_quantity' ||
+                      colKey === 'consignment_stock' ||
+                      colKey === 'sales_365' ||
+                      colKey === 'sales_90'
+                        ? 'justify-end'
+                        : colKey === 'launch_date' || colKey === 'units_per_box'
+                        ? 'justify-center'
+                        : 'justify-between';
+
+                    return (
+                      <th
+                        key={colKey}
+                        draggable
+                        onDragStart={() => setDragColKey(colKey)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => handleDropColumnHeader(colKey)}
+                        onClick={() => handleSortProductColumn(colKey)}
+                        title={`Clique para ordenar todo o catálogo por ${getColumnLabel(colKey)} • Arraste para mover a coluna`}
+                        className={`group ${widthClass} py-2 px-2 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors ${
+                          dragColKey === colKey ? 'opacity-50 bg-indigo-100' : ''
+                        }`}
+                      >
+                        <div className={`flex items-center ${alignClass} gap-1`}>
+                          <span className="truncate">{getColumnLabel(colKey)}</span>
+                          {renderProductSortIcon(colKey)}
+                        </div>
+                      </th>
+                    );
+                  })}
                   <th className="w-24 py-2 px-2 text-center">Ação</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800 text-xs">
                 {loading ? (
                   <tr>
-                    <td colSpan={10} className="py-16 text-center text-slate-500">
+                    <td colSpan={columnOrder.length + 2} className="py-16 text-center text-slate-500">
                       <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
                       Carregando planilha de produtos DBM...
                     </td>
                   </tr>
                 ) : filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="py-16 text-center text-slate-500">
+                    <td colSpan={columnOrder.length + 2} className="py-16 text-center text-slate-500">
                       Nenhum livro encontrado para este filtro. Use{' '}
                       <button
                         type="button"
@@ -2228,108 +2656,195 @@ export default function DbmProductsSearchPage() {
                           {isSelected ? '▶' : idx + 1}
                         </td>
 
-                        <td className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate">
-                          {item.horus_cod_item || item.sku}
-                        </td>
-
-                        <td className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate">
-                          {item.ean_gtin || item.isbn || '-'}
-                        </td>
-
-                        <td className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 truncate" title={item.name}>
-                          <div className="flex items-center gap-1.5 truncate">
-                            <span className="truncate font-medium text-slate-900 dark:text-slate-100">{item.name}</span>
-                            {item.is_ebook && (
-                              <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 text-[9px] font-bold rounded shrink-0">
-                                E-book
-                              </span>
-                            )}
-                            {item.is_out_of_print && (
-                              <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[9px] font-bold rounded shrink-0">
-                                Esgotado
-                              </span>
-                            )}
-                          </div>
-                        </td>
-
-                        <td className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 truncate text-[11px] text-slate-600 dark:text-slate-400">
-                          {item.brand || '-'}
-                        </td>
-
-                        {/* Coluna Data de Lançamento + Status da Janela (-9m a +6m) */}
-                        <td className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center">
-                          {excelInlineEditMode ? (
-                            <input
-                              type="date"
-                              value={item.launch_date ? String(item.launch_date).slice(0, 10) : ''}
-                              onChange={(e) => handleInlineGridChange(item.id, 'launch_date', e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleSaveInlineRow(item);
-                                }
-                              }}
-                              className="w-full px-1 py-0.5 text-[11px] font-mono bg-white border border-slate-300 rounded"
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center justify-center leading-tight">
-                              <span
-                                className={`inline-block px-1.5 py-0.5 rounded border text-[9px] font-semibold ${launchInfo.badgeClass}`}
-                                title={launchInfo.detail}
+                        {columnOrder.map((colKey) => {
+                          if (colKey === 'cod_horus') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-300 truncate"
                               >
-                                {launchInfo.label}
-                              </span>
-                              {item.launch_date && (
-                                <span className="text-[9px] font-mono text-slate-400 mt-0.5">
-                                  {String(item.launch_date).slice(0, 10).split('-').reverse().join('/')}
-                                </span>
+                                {item.horus_cod_item || item.sku}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'isbn') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate"
+                              >
+                                {item.ean_gtin || item.isbn || '-'}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'name') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 truncate"
+                                title={item.name}
+                              >
+                                <div className="flex items-center gap-1.5 truncate">
+                                  <span className="truncate font-medium text-slate-900 dark:text-slate-100">
+                                    {item.name}
+                                  </span>
+                                  {item.is_ebook && (
+                                    <span className="px-1.5 py-0.2 bg-indigo-100 text-indigo-700 text-[9px] font-bold rounded shrink-0">
+                                      E-book
+                                    </span>
+                                  )}
+                                  {item.is_out_of_print && (
+                                    <span className="px-1.5 py-0.2 bg-rose-100 text-rose-700 text-[9px] font-bold rounded shrink-0">
+                                      Esgotado
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                            );
+                          }
+                          if (colKey === 'brand') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-[11px] text-slate-600 dark:text-slate-400"
+                              >
+                                {item.brand || '-'}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'launch_date') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center"
+                              >
+                                {excelInlineEditMode ? (
+                                  <input
+                                    type="date"
+                                    value={item.launch_date ? String(item.launch_date).slice(0, 10) : ''}
+                                    onChange={(e) => handleInlineGridChange(item.id, 'launch_date', e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        handleSaveInlineRow(item);
+                                      }
+                                    }}
+                                    className="w-full px-1 py-0.5 text-[11px] font-mono bg-white border border-slate-300 rounded"
+                                  />
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center leading-tight">
+                                    <span
+                                      className={`inline-block px-1.5 py-0.5 rounded border text-[9px] font-semibold ${launchInfo.badgeClass}`}
+                                      title={launchInfo.detail}
+                                    >
+                                      {launchInfo.label}
+                                    </span>
+                                    {item.launch_date && (
+                                      <span className="text-[9px] font-mono text-slate-400 mt-0.5">
+                                        {String(item.launch_date).slice(0, 10).split('-').reverse().join('/')}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'base_price') {
+                            return (
+                              <td
+                                key={colKey}
+                                className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-medium"
+                              >
+                                {excelInlineEditMode ? (
+                                  <CurrencyInput
+                                    value={item.base_price}
+                                    onChangeValue={(val) => handleInlineGridChange(item.id, 'base_price', val)}
+                                    prefixStr="R$ "
+                                    className="w-full px-1.5 py-0.5 text-[11px] font-mono text-right bg-white border border-slate-300 rounded"
+                                  />
+                                ) : (
+                                  item.base_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                                )}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'stock_quantity') {
+                            return (
+                              <td
+                                key={colKey}
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-bold ${
+                                  item.stock_quantity > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600'
+                                }`}
+                              >
+                                {item.stock_quantity}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'consignment_stock') {
+                            const consigVal = Number(item.consignment_stock || 0);
+                            return (
+                              <td
+                                key={colKey}
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                  consigVal > 0 ? 'text-indigo-700 dark:text-indigo-400' : 'text-slate-400'
+                                }`}
+                              >
+                                {consigVal.toLocaleString('pt-BR')}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'sales_365') {
+                            const s365Val = Number(item.sales_365 || 0);
+                            return (
+                              <td
+                                key={colKey}
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                  s365Val > 0 ? 'text-slate-800 dark:text-slate-200' : 'text-slate-400'
+                                }`}
+                              >
+                                {s365Val.toLocaleString('pt-BR')}
+                              </td>
+                            );
+                          }
+                          if (colKey === 'sales_90') {
+                            const s90Val = Number(item.sales_90 || 0);
+                            return (
+                              <td
+                                key={colKey}
+                                className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-semibold ${
+                                  s90Val > 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-slate-400'
+                                }`}
+                              >
+                                {s90Val.toLocaleString('pt-BR')}
+                              </td>
+                            );
+                          }
+                          return (
+                            <td
+                              key={colKey}
+                              className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-[11px] text-slate-600"
+                            >
+                              {excelInlineEditMode ? (
+                                <input
+                                  type="text"
+                                  value={item.units_per_box ?? 0}
+                                  onChange={(e) =>
+                                    handleInlineGridChange(item.id, 'units_per_box', Number(e.target.value) || 0)
+                                  }
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      handleSaveInlineRow(item);
+                                    }
+                                  }}
+                                  className="w-full px-1 py-0.5 text-[11px] font-mono text-center bg-white border border-slate-300 rounded"
+                                />
+                              ) : (
+                                item.units_per_box || '-'
                               )}
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Coluna Preço de Capa */}
-                        <td className="py-1 px-2.5 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-medium">
-                          {excelInlineEditMode ? (
-                            <CurrencyInput
-                              value={item.base_price}
-                              onChangeValue={(val) => handleInlineGridChange(item.id, 'base_price', val)}
-                              prefixStr="R$ "
-                              className="w-full px-1.5 py-0.5 text-[11px] font-mono text-right bg-white border border-slate-300 rounded"
-                            />
-                          ) : (
-                            item.base_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-                          )}
-                        </td>
-
-                        {/* Coluna Saldo Disponível */}
-                        <td
-                          className={`py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-[11px] font-bold ${
-                            item.stock_quantity > 0 ? 'text-emerald-700 dark:text-emerald-400' : 'text-rose-600'
-                          }`}
-                        >
-                          {item.stock_quantity}
-                        </td>
-
-                        {/* Coluna Unid/Caixa */}
-                        <td className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-[11px] text-slate-600">
-                          {excelInlineEditMode ? (
-                            <input
-                              type="text"
-                              value={item.units_per_box ?? 0}
-                              onChange={(e) => handleInlineGridChange(item.id, 'units_per_box', Number(e.target.value) || 0)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleSaveInlineRow(item);
-                                }
-                              }}
-                              className="w-full px-1 py-0.5 text-[11px] font-mono text-center bg-white border border-slate-300 rounded"
-                            />
-                          ) : (
-                            item.units_per_box || '-'
-                          )}
-                        </td>
+                            </td>
+                          );
+                        })}
 
                         {/* Coluna Ação */}
                         <td className="py-1 px-2 text-center">
@@ -3158,7 +3673,7 @@ export default function DbmProductsSearchPage() {
               
               {/* SUB-PLANILHA ESTILO EXCEL: TIRAGENS & CUSTOS (8 COLUNAS) */}
               <div className="lg:col-span-8 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 flex flex-col overflow-hidden">
-                <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/70">
+                <div className="px-3.5 py-2 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 bg-slate-50/70">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                     <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
@@ -3168,13 +3683,24 @@ export default function DbmProductsSearchPage() {
                       ({bookForm.tiragens.length} tiragem(ns) • Total: {totalTiragemExemplares.toLocaleString('pt-BR')} ex.)
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleAddTiragemRow}
-                    className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[11px] rounded-md border border-emerald-200 cursor-pointer transition"
-                  >
-                    + Nova Linha (Excel)
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleExportSingleBookTiragensExcel}
+                      className="px-2.5 py-1 bg-white hover:bg-indigo-50 text-indigo-700 font-bold text-[11px] rounded-md border border-indigo-200 cursor-pointer transition inline-flex items-center gap-1"
+                      title="Exportar para Excel as tiragens deste livro (com ISBN, Título e dados de produção)"
+                    >
+                      <Download className="w-3 h-3 text-indigo-600" />
+                      Exportar Tiragens (Excel)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddTiragemRow}
+                      className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold text-[11px] rounded-md border border-emerald-200 cursor-pointer transition"
+                    >
+                      + Nova Linha (Excel)
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex-1 overflow-auto max-h-[220px]">
@@ -3917,6 +4443,240 @@ export default function DbmProductsSearchPage() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE EXPORTAÇÃO DE PLANILHAS EXCEL (MODELO 1 E TIRAGENS GERAIS) */}
+      <AnimatePresence>
+        {showExportModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden text-xs text-slate-700 dark:text-slate-200"
+            >
+              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Download className="w-4 h-4 text-emerald-400" />
+                  <div>
+                    <h3 className="text-sm font-bold">Exportar Planilha Excel — Produtos DBM</h3>
+                    <p className="text-[11px] text-slate-300">
+                      Selecione o modelo de planilha que deseja gerar
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowExportModal(false)}
+                  className="p-1 rounded-lg hover:bg-slate-800 text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Escolha o Modelo de Exportação
+                  </label>
+
+                  {/* Modelo 1 */}
+                  <label
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                      exportModel === 'MODEL_1_CATALOG'
+                        ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-400 ring-1 ring-emerald-400'
+                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="exportModel"
+                      checked={exportModel === 'MODEL_1_CATALOG'}
+                      onChange={() => setExportModel('MODEL_1_CATALOG')}
+                      className="mt-0.5 text-emerald-600"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        Modelo 1 — Catálogo, Datas de Lançamento & Link da Internet
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Colunas: <b>ISBN</b>, <b>Título</b>, <b>Data de Lançamento</b>, <b>Ano</b>, <b>Mês</b> e{' '}
+                        <b>Link do Item na Internet</b>.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Modelo 2: Tiragens Gerais */}
+                  <label
+                    className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                      exportModel === 'MODEL_2_TIRAGENS'
+                        ? 'bg-indigo-50/70 dark:bg-indigo-950/30 border-indigo-400 ring-1 ring-indigo-400'
+                        : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="exportModel"
+                      checked={exportModel === 'MODEL_2_TIRAGENS'}
+                      onChange={() => setExportModel('MODEL_2_TIRAGENS')}
+                      className="mt-0.5 text-indigo-600"
+                    />
+                    <div>
+                      <div className="font-bold text-slate-900 dark:text-white">
+                        Modelo 2 — Tiragens Gerais (Todos os Itens)
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Exporta todas as tiragens cadastradas com <b>ISBN</b>, <b>Título</b>, <b>Cód. Horus</b>,{' '}
+                        <b>Nº Tiragem</b>, <b>Data Tiragem</b>, <b>Qtd. Exemplares</b> e custos de produção.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+
+                {/* Escopo da exportação */}
+                <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-1.5">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Quais itens exportar?
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExportScope('FILTERED')}
+                      className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+                        exportScope === 'FILTERED'
+                          ? 'bg-slate-900 text-white border-slate-900 font-bold'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      Itens do filtro atual ({filteredProducts.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setExportScope('ALL')}
+                      className={`p-2 rounded-lg border text-left transition cursor-pointer ${
+                        exportScope === 'ALL'
+                          ? 'bg-slate-900 text-white border-slate-900 font-bold'
+                          : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      Catálogo completo ({products.length})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setShowExportModal(false)}
+                    className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 font-semibold hover:bg-slate-100 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleExportProductsExcel}
+                    className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Baixar Planilha Excel
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE MOVIMENTAÇÃO / ORDEM DAS COLUNAS DA GRADE (SALVO POR USUÁRIO) */}
+      <AnimatePresence>
+        {showColumnOrderModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full shadow-2xl overflow-hidden text-xs text-slate-700 dark:text-slate-200"
+            >
+              <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Columns3 className="w-4 h-4 text-indigo-600" />
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Ordem das Colunas da Planilha
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      Arraste ou use as setas para movimentar as colunas (salvo automaticamente no seu usuário).
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowColumnOrderModal(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-1.5 max-h-[60vh] overflow-y-auto">
+                {columnOrder.map((colKey, idx) => (
+                  <div
+                    key={colKey}
+                    draggable
+                    onDragStart={() => setDragColKey(colKey)}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={() => handleDropColumnHeader(colKey)}
+                    className="flex items-center justify-between gap-2 p-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50"
+                  >
+                    <div className="flex items-center gap-2">
+                      <GripVertical className="w-4 h-4 text-slate-400 cursor-grab" />
+                      <span className="w-5 text-center font-mono text-[10px] text-slate-400">{idx + 1}.</span>
+                      <span className="font-bold text-slate-800 dark:text-slate-100">{getColumnLabel(colKey)}</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => handleMoveColumnInOrder(idx, -1)}
+                        className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
+                        title="Mover para a esquerda / cima"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === columnOrder.length - 1}
+                        onClick={() => handleMoveColumnInOrder(idx, 1)}
+                        className="p-1 rounded hover:bg-white border border-transparent hover:border-slate-200 disabled:opacity-30 cursor-pointer"
+                        title="Mover para a direita / baixo"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/40 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
+                <button
+                  type="button"
+                  onClick={() => saveColumnOrder(DEFAULT_PRODUCT_COLUMNS)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Restaurar Padrão
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowColumnOrderModal(false)}
+                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold cursor-pointer"
+                >
+                  Concluído
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

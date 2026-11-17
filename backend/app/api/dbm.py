@@ -5298,6 +5298,179 @@ def delete_dbm_product(
     return {"success": True, "deleted_id": product_id, "name": prod_name}
 
 
+@router.post("/products/batch-enrich-metrics")
+def batch_enrich_dbm_products_metrics(
+    company_id: Optional[int] = Query(None),
+    general_sales_days: int = Query(90, ge=1, le=730),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Calcula em lote para todo o catálogo de produtos DBM do seller:
+    - VDS365 Geral (vendas dos últimos 365 dias)
+    - VDS(XM) Geral (vendas dos últimos `general_sales_days` dias, ex: 90d = 3M)
+    - Saldo Consignado Geral (soma do saldo consignado ativo no mercado)
+    Persiste nos campos `sales_365`, `sales_90` e `consignment_stock` de cada produto e devolve o mapa atualizado.
+    """
+    from datetime import timedelta
+    from app.models.product import Product
+    from app.models.horus_bi_sale import HorusBISale
+
+    seller_id = _resolve_seller_id(current_user, company_id)
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    products = db.query(Product).filter(Product.company_id == seller_id).all()
+    if not products:
+        return {"metrics": {}, "general_sales_days": general_sales_days}
+
+    def _clean_key(val: Any) -> str:
+        return str(val or "").strip().replace("-", "").replace(" ", "")
+
+    sales_365_map: dict[str, int] = {}
+    sales_period_map: dict[str, int] = {}
+    consig_map: dict[str, int] = {}
+
+    sql_client = _build_sql_client(settings) if settings else None
+    if sql_client:
+        try:
+            cfop_sales_in = ", ".join(f"'{c}'" for c in (list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST)))
+            clean_cfop_expr = "REPLACE(REPLACE(REPLACE(RTRIM(LTRIM(ISNULL(NFI.COD_NATUREZA, NF.COD_NATUREZA))), '.', ''), ',', ''), ' ', '')"
+
+            sql_sales_all = f"""
+                SELECT
+                    RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                    RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                    CAST(NFI.COD_ITEM AS VARCHAR) AS cod_item,
+                    SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS qty_365,
+                    SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS qty_period
+                FROM NF_ITENS NFI WITH (NOLOCK)
+                INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                    ON NF.COD_NF = NFI.COD_NF
+                    AND NF.COD_FILIAL = NFI.COD_FILIAL
+                    AND NF.COD_EMPRESA = NFI.COD_EMPRESA
+                INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = NFI.COD_ITEM
+                WHERE ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                  AND NF.DAT_EMISSAO_NF >= DATEADD(day, -370, GETDATE())
+                  AND {clean_cfop_expr} IN ({cfop_sales_in})
+                GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, NFI.COD_ITEM
+            """
+            s_rows = sql_client.query(sql_sales_all, (general_sales_days,), max_rows=5000)
+            for sr in (s_rows or []):
+                q365 = int(float(sr.get("qty_365") or 0))
+                qper = int(float(sr.get("qty_period") or 0))
+                for rk in (sr.get("cod_barra"), sr.get("cod_isbn"), sr.get("cod_item")):
+                    k = _clean_key(rk)
+                    if k:
+                        sales_365_map[k] = max(sales_365_map.get(k, 0), q365)
+                        sales_period_map[k] = max(sales_period_map.get(k, 0), qper)
+        except Exception as e:
+            log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar vendas gerais SQL: {e}")
+
+        try:
+            sql_consig_all = """
+                SELECT
+                    RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ''))) AS cod_barra,
+                    RTRIM(LTRIM(ISNULL(I.COD_ISBN_ITEM, ''))) AS cod_isbn,
+                    CAST(V.COD_ITEM AS VARCHAR) AS cod_item,
+                    SUM(ISNULL(V.SALDO, 0)) AS saldo_consig
+                FROM VW_ITENS_CONSIGNACAO V WITH (NOLOCK)
+                INNER JOIN ITENS_ESTOQUE_GERAL I WITH (NOLOCK) ON I.COD_ITEM = V.COD_ITEM
+                WHERE ISNULL(V.SALDO, 0) > 0
+                GROUP BY I.COD_BARRA_ITEM, I.COD_ISBN_ITEM, V.COD_ITEM
+            """
+            c_rows = sql_client.query(sql_consig_all, (), max_rows=5000)
+            for cr in (c_rows or []):
+                cs_v = int(float(cr.get("saldo_consig") or 0))
+                for rk in (cr.get("cod_barra"), cr.get("cod_isbn"), cr.get("cod_item")):
+                    k = _clean_key(rk)
+                    if k:
+                        consig_map[k] = max(consig_map.get(k, 0), cs_v)
+        except Exception as e:
+            log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar consignado geral SQL: {e}")
+
+    # Complemento via HorusBISale local
+    try:
+        now_dt = datetime.utcnow()
+        dt_365 = now_dt - timedelta(days=365)
+        dt_period = now_dt - timedelta(days=max(1, general_sales_days))
+        bi_365_rows = db.query(
+            HorusBISale.ean,
+            func.sum(HorusBISale.qty_fulfilled).label("qty")
+        ).filter(
+            HorusBISale.company_id == seller_id,
+            HorusBISale.sale_date >= dt_365,
+            HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
+        ).group_by(HorusBISale.ean).all()
+        for r in bi_365_rows:
+            k = _clean_key(r.ean)
+            if k and k not in sales_365_map:
+                sales_365_map[k] = int(r.qty or 0)
+
+        bi_per_rows = db.query(
+            HorusBISale.ean,
+            func.sum(HorusBISale.qty_fulfilled).label("qty")
+        ).filter(
+            HorusBISale.company_id == seller_id,
+            HorusBISale.sale_date >= dt_period,
+            HorusBISale.cfop.in_(list(CFOP_VENDA_LIST) + list(CFOP_ACERTO_LIST))
+        ).group_by(HorusBISale.ean).all()
+        for r in bi_per_rows:
+            k = _clean_key(r.ean)
+            if k and k not in sales_period_map:
+                sales_period_map[k] = int(r.qty or 0)
+    except Exception as e:
+        log.warning(f"[DBM Products Batch Metrics] Aviso ao consultar HorusBISale: {e}")
+
+    metrics_out: dict[str, dict[str, int]] = {}
+    dirty = False
+    for p in products:
+        keys_to_try = [
+            _clean_key(p.ean_gtin),
+            _clean_key(p.barcode),
+            _clean_key(p.horus_cod_item),
+            _clean_key(p.sku),
+        ]
+        keys_to_try = [k for k in keys_to_try if k]
+        s365 = 0
+        sper = 0
+        consig = 0
+        for k in keys_to_try:
+            if k in sales_365_map:
+                s365 = max(s365, sales_365_map[k])
+            if k in sales_period_map:
+                sper = max(sper, sales_period_map[k])
+            if k in consig_map:
+                consig = max(consig, consig_map[k])
+
+        # Mantém valores já gravados no banco caso nenhuma fonte tenha retornado maior que zero e já exista valor salvo
+        final_s365 = s365 if (sales_365_map or s365 > 0) else int(p.sales_365 or 0)
+        final_sper = sper if (sales_period_map or sper > 0) else int(p.sales_90 or 0)
+        final_consig = consig if (consig_map or consig > 0) else int(p.consignment_stock or 0)
+
+        if p.sales_365 != final_s365 or p.sales_90 != final_sper or p.consignment_stock != final_consig:
+            p.sales_365 = final_s365
+            p.sales_90 = final_sper
+            p.consignment_stock = final_consig
+            dirty = True
+
+        metrics_out[str(p.id)] = {
+            "consignment_stock": final_consig,
+            "sales_365": final_s365,
+            "sales_90": final_sper,
+        }
+
+    if dirty:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    return {
+        "metrics": metrics_out,
+        "general_sales_days": general_sales_days,
+    }
+
+
+
 
 
 

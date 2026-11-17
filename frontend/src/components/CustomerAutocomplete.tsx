@@ -139,7 +139,7 @@ export default function CustomerAutocomplete({ value, onChange, required = false
         <div className="flex-1 min-w-0 truncate">
           {selectedCustomer ? (
             <span className="text-slate-900 dark:text-white font-medium truncate block">
-              {selectedCustomer.id} - {selectedCustomer.name}
+              {selectedCustomer.horus_cod_cli || selectedCustomer.horus_cod_fornecedor || selectedCustomer.id} - {selectedCustomer.name}
               {selectedCustomer.corporate_name && selectedCustomer.corporate_name !== selectedCustomer.name && ` (${selectedCustomer.corporate_name})`}
             </span>
           ) : (
@@ -183,25 +183,28 @@ export default function CustomerAutocomplete({ value, onChange, required = false
               </div>
             ) : options.length > 0 ? (
               <ul className="space-y-1">
-                {options.map((customer) => (
-                  <li 
-                    key={customer.id}
-                    onClick={() => handleSelect(customer)}
-                    className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors text-sm
-                      ${value == customer.id.toString() 
-                        ? 'bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] font-medium' 
-                        : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                      }`}
-                  >
-                    <div className="flex flex-col">
-                      <span>{customer.id} - {customer.name}</span>
-                      {customer.document && (
-                        <span className="text-xs opacity-70 mt-0.5 font-mono">{customer.document}</span>
-                      )}
-                    </div>
-                    {value == customer.id.toString() && <Check className="w-4 h-4" />}
-                  </li>
-                ))}
+                {options.map((customer) => {
+                  const displayCode = customer.horus_cod_cli || customer.horus_cod_fornecedor || customer.id;
+                  return (
+                    <li 
+                      key={customer.id}
+                      onClick={() => handleSelect(customer)}
+                      className={`flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors text-sm
+                        ${value == customer.id.toString() 
+                          ? 'bg-[var(--color-primary-base)]/10 text-[var(--color-primary-base)] font-medium' 
+                          : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        }`}
+                    >
+                      <div className="flex flex-col">
+                        <span>{displayCode} - {customer.name}</span>
+                        {customer.document && (
+                          <span className="text-xs opacity-70 mt-0.5 font-mono">{customer.document}</span>
+                        )}
+                      </div>
+                      {value == customer.id.toString() && <Check className="w-4 h-4" />}
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <div className="p-4 text-center text-sm text-slate-500 dark:text-slate-400">

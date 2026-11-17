@@ -126,6 +126,8 @@ def read_customers(
         if search.isdigit():
             query = query.filter(
                 (Customer.id == int(search)) |
+                (Customer.horus_cod_cli == int(search)) |
+                (Customer.horus_cod_fornecedor == int(search)) |
                 (Customer.name.ilike(search_term)) | 
                 (Customer.document.ilike(search_term)) |
                 (Customer.corporate_name.ilike(search_term))

@@ -32,6 +32,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
 import { CurrencyInput } from '@/components/CurrencyInput';
 import { getToken } from '@/lib/auth';
 
@@ -907,7 +908,9 @@ export default function EbookPearsonPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 p-2 sm:p-4 space-y-3 font-sans">
+    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 p-2 sm:p-4 space-y-2.5 font-sans">
+      {/* ── Barra de Menus Fixos Persistentes por Usuário ───────────────── */}
+      <DbmPinnedNavBar />
       
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* 1. BARRA SUPERIOR DE COMANDO                                        */}

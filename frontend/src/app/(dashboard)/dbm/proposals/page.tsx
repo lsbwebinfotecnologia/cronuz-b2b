@@ -28,6 +28,7 @@ import {
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
+import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -180,7 +181,7 @@ export default function DbmProposalsListPage() {
       }
       const data = await res.json();
       const rawItems: any[] = Array.isArray(data.items) ? data.items : [];
-      const consolidated = rawItems.filter(
+      let consolidated = rawItems.filter(
         (it) => it && (it.tabCategory === 'pedido' || it.isAddedToOrder !== false)
       );
 
@@ -189,26 +190,107 @@ export default function DbmProposalsListPage() {
         return;
       }
 
+      // Determina a configuração de dias de venda do cliente (salva no snapshot ou no usuário)
+      let cliSalesDays = Number(data?.desk_snapshot?.clientSalesDays || 0);
+      if (!cliSalesDays && typeof window !== 'undefined') {
+        try {
+          const u = getUser();
+          const key = `cronuz_proposal_desk_config_${u?.company_id || 'default'}_${u?.id || u?.email || 'user'}`;
+          const savedRaw = localStorage.getItem(key) || localStorage.getItem('cronuz_proposal_desk_config');
+          if (savedRaw) {
+            const parsed = JSON.parse(savedRaw);
+            if (typeof parsed.clientSalesDays === 'number' && parsed.clientSalesDays > 0) {
+              cliSalesDays = parsed.clientSalesDays;
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!cliSalesDays || cliSalesDays <= 0) cliSalesDays = 30;
+      const monthsCount = Math.max(1, Math.round(cliSalesDays / 30));
+      const salesColHeader = `Vendas ${monthsCount} ${monthsCount === 1 ? 'Mês' : 'Meses'}`;
+
+      // Se for um pedido antigo em que consignado e vendas estejam zerados em todos os itens, enriquece sob demanda
+      const needsEnrich =
+        prop.customer_id &&
+        consolidated.every(
+          (it) =>
+            Number(it.consignedQty ?? it.consignedBalance ?? 0) === 0 &&
+            Number(it.clientSalesX ?? it.clientSalesPeriod ?? 0) === 0
+        );
+
+      if (needsEnrich) {
+        try {
+          const enrichRes = await fetch(`${API_URL}/dbm/proposals-desk/enrich-items`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              customer_id: Number(prop.customer_id),
+              client_sales_days: cliSalesDays,
+              general_sales_days: 90,
+              items: consolidated.map((it) => ({
+                isbn: it.isbn || it.sku || '',
+                sku: it.sku || it.isbn || '',
+                requestedQty: Number(it.requestedQty ?? it.quantity ?? 0),
+                discountPct: Number(it.discountPercent ?? it.discountPct ?? 50),
+                coverPrice: Number(it.coverPrice ?? 0),
+                title: it.title || '',
+                publisher: it.publisher || '',
+                subject: it.subject || '',
+                stockAvailable: Number(it.horusStock ?? it.stockAvailable ?? 0),
+                consignedBalance: Number(it.consignedQty ?? it.consignedBalance ?? 0),
+                clientSalesPeriod: Number(it.clientSalesX ?? it.clientSalesPeriod ?? 0),
+                clientSales365d: Number(it.generalSales365 ?? it.clientSales365d ?? 0),
+                generalSalesPeriod: Number(it.generalSalesX ?? it.generalSalesPeriod ?? 0),
+                boxQty: Number(it.boxUnits ?? it.boxQty ?? 12),
+              })),
+            }),
+          });
+          if (enrichRes.ok) {
+            const enrichData = await enrichRes.json();
+            if (Array.isArray(enrichData.items) && enrichData.items.length === consolidated.length) {
+              consolidated = consolidated.map((orig, idx) => ({
+                ...orig,
+                consignedQty: Number(enrichData.items[idx].consignedBalance ?? orig.consignedQty ?? 0),
+                clientSalesX: Number(enrichData.items[idx].clientSalesPeriod ?? orig.clientSalesX ?? 0),
+              }));
+            }
+          }
+        } catch {
+          // Segue com os dados existentes caso o enriquecimento falhe
+        }
+      }
+
+      // Ordem exata solicitada:
+      // A -> Motivo (Origem), B -> ISBN, C -> Título, D -> Assunto, E -> Quantidade, F -> Consignado do cliente, G -> Vendas X Meses
       const rows = consolidated.map((it) => {
         const req = Number(it.requestedQty ?? it.quantity ?? 0);
         const app = Number(it.approvedQty ?? req);
         const qty = req > 0 ? req : app;
         return {
+          Motivo: mapOriginLabel(it.originCategory || it.tabCategory),
           ISBN: String(it.isbn || it.sku || ''),
           Título: String(it.title || it.name || ''),
-          Quantidade: qty,
           Assunto: String(it.subject || 'Geral'),
-          Origem: mapOriginLabel(it.originCategory || it.tabCategory),
+          Quantidade: qty,
+          'Consignado do Cliente': Number(it.consignedQty ?? it.consignedBalance ?? 0),
+          [salesColHeader]: Number(it.clientSalesX ?? it.clientSalesPeriod ?? 0),
         };
       });
 
       const worksheet = XLSX.utils.json_to_sheet(rows);
       worksheet['!cols'] = [
-        { wch: 18 },
-        { wch: 46 },
-        { wch: 12 },
-        { wch: 24 },
-        { wch: 18 },
+        { wch: 18 }, // A: Motivo
+        { wch: 18 }, // B: ISBN
+        { wch: 46 }, // C: Título
+        { wch: 24 }, // D: Assunto
+        { wch: 12 }, // E: Quantidade
+        { wch: 22 }, // F: Consignado do Cliente
+        { wch: 18 }, // G: Vendas X Meses
       ];
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, 'Pedido Consolidado');
@@ -344,43 +426,8 @@ export default function DbmProposalsListPage() {
 
   return (
     <div className="space-y-4 pb-16">
-      {/* ── Barra Superior Estilo Access Moderno (Menu | Orçamentos & Propostas | + Novo) ── */}
-      <div className="flex items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 p-1.5 rounded-2xl backdrop-blur-sm overflow-x-auto scrollbar-none">
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={() => router.push('/dbm')}
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition-colors shrink-0"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            Menu DBM
-          </button>
-
-          <span className="text-slate-300 dark:text-slate-700">|</span>
-
-          <div className="flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/80 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60 shadow-xs shrink-0">
-            <FileText className="h-3.5 w-3.5" />
-            Orçamentos & Propostas
-          </div>
-
-          <span className="text-slate-300 dark:text-slate-700">|</span>
-
-          <button
-            onClick={() => router.push('/dbm/companies')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 dark:text-slate-400 dark:hover:text-white dark:hover:bg-slate-800 transition-colors shrink-0"
-          >
-            <Building2 className="h-3.5 w-3.5" />
-            Empresas
-          </button>
-        </div>
-
-        <Link
-          href="/proposals/desk"
-          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-1.5 text-xs font-bold text-white shadow-sm hover:bg-indigo-500 transition-colors shrink-0"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Novo Orçamento
-        </Link>
-      </div>
+      {/* ── Barra de Menus Fixos Persistentes por Usuário ───────────────── */}
+      <DbmPinnedNavBar />
 
       {/* ── Painel de Filtro Limpo e Direto ───────────────────────────────── */}
       <div className="rounded-2xl border border-slate-200/80 bg-white p-4 sm:p-5 shadow-sm dark:border-slate-800/80 dark:bg-slate-900 space-y-3.5">
@@ -405,6 +452,14 @@ export default function DbmProposalsListPage() {
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin text-indigo-600' : ''}`} />
               Atualizar
             </button>
+
+            <Link
+              href="/proposals/desk"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-indigo-500 transition-colors shrink-0"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Novo Orçamento
+            </Link>
           </div>
         </div>
 

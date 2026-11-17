@@ -50,6 +50,7 @@ import {
   SlidersHorizontal
 } from 'lucide-react';
 import CustomerAutocomplete from '@/components/CustomerAutocomplete';
+import DbmPinnedNavBar from '@/components/DbmPinnedNavBar';
 import { getUser, getToken } from '@/lib/auth';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -1898,25 +1899,34 @@ export default function ProposalsDeskPage() {
       return;
     }
 
+    const monthsCount = Math.max(1, Math.round((Number(clientSalesDays) || 30) / 30));
+    const salesColHeader = `Vendas ${monthsCount} ${monthsCount === 1 ? 'Mês' : 'Meses'}`;
+
+    // Ordem exata solicitada:
+    // A -> Motivo (Origem), B -> ISBN, C -> Título, D -> Assunto, E -> Quantidade, F -> Consignado do cliente, G -> Vendas X Meses
     const rows = proposalItems.map((it) => {
       const originBadge = getOriginBadge(it.originCategory, it.tabCategory);
       const qty = it.requestedQty > 0 ? it.requestedQty : it.approvedQty;
       return {
+        Motivo: originBadge.label,
         ISBN: it.isbn || '',
         Título: it.title || '',
-        Quantidade: Number(qty || 0),
         Assunto: it.subject || '',
-        Origem: originBadge.label,
+        Quantidade: Number(qty || 0),
+        'Consignado do Cliente': Number(it.consignedQty || 0),
+        [salesColHeader]: Number(it.clientSalesX || 0),
       };
     });
 
     const worksheet = XLSX.utils.json_to_sheet(rows);
     worksheet['!cols'] = [
-      { wch: 18 }, // ISBN
-      { wch: 46 }, // Título
-      { wch: 12 }, // Quantidade
-      { wch: 24 }, // Assunto
-      { wch: 18 }, // Origem
+      { wch: 18 }, // A: Motivo
+      { wch: 18 }, // B: ISBN
+      { wch: 46 }, // C: Título
+      { wch: 24 }, // D: Assunto
+      { wch: 12 }, // E: Quantidade
+      { wch: 22 }, // F: Consignado do Cliente
+      { wch: 18 }, // G: Vendas X Meses
     ];
 
     const workbook = XLSX.utils.book_new();
@@ -2033,7 +2043,9 @@ export default function ProposalsDeskPage() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 p-2 sm:p-4 space-y-3 font-sans">
+    <div className="min-h-screen bg-slate-100/70 dark:bg-slate-950 p-2 sm:p-4 space-y-2.5 font-sans">
+      {/* ── Barra de Menus Fixos Persistentes por Usuário ───────────────── */}
+      <DbmPinnedNavBar />
       
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {/* 1. BARRA DE COMANDO SUPERIOR (Bem Distribuída, Fluida e Sem Gargalo) */}
