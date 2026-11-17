@@ -2309,19 +2309,6 @@ export default function DbmProductsSearchPage() {
                       </div>
                     )}
                   </div>
-                  <div className="w-full mt-2">
-                    <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">URL da Capa</label>
-                    <input
-                      type="text"
-                      value={bookForm.cover_url}
-                      onChange={(e) => {
-                        setCoverCandidateStep(0);
-                        setBookForm(prev => ({ ...prev, cover_url: e.target.value }));
-                      }}
-                      placeholder="https://..."
-                      className="w-full px-2 py-1 text-[11px] bg-slate-50 border border-slate-200 rounded-md text-slate-800 focus:bg-white focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
                 </div>
 
                 {/* Resumo Rápido de Estoque Disponível, Saldo Consignado e Estoque Total no Horus */}
