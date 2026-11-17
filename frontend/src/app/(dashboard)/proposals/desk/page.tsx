@@ -80,7 +80,8 @@ export interface ProposalDeskConfig {
   hideOutOfPrintInSearch?: boolean;
   clientSalesDays: number;
   generalSalesDays: number;
-  replenishmentSalesDays: number;
+  replenishmentSalesDays?: number;
+  replenishmentMode?: 'REMESSA' | 'VENDA_ACERTO' | 'AMBOS';
   globalDiscountInput: number;
   columnWidths: Record<string, number>;
   statuses: SellerCustomStatus[];
@@ -272,11 +273,11 @@ export default function ProposalsDeskPage() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [isAnalysing, setIsAnalysing] = useState(false);
 
-  // Parametrizações de Vendas Solicitadas (Dias Cliente, Dias Geral e Dias Base Reposição)
+  // Parametrizações de Vendas Solicitadas (Dias Cliente, Dias Geral e Regra da Aba Reposição)
   const [clientSalesDays, setClientSalesDays] = useState<number>(30);
   const [generalSalesDays, setGeneralSalesDays] = useState<number>(90);
   const [replenishmentSalesDays, setReplenishmentSalesDays] = useState<number>(90);
-  const [isReplenishmentConfigOpen, setIsReplenishmentConfigOpen] = useState<boolean>(false);
+  const [replenishmentMode, setReplenishmentMode] = useState<'REMESSA' | 'VENDA_ACERTO' | 'AMBOS'>('REMESSA');
   const [isLoadingReplenishment, setIsLoadingReplenishment] = useState<boolean>(false);
   const [replenishmentMeta, setReplenishmentMeta] = useState<{
     consignedCount: number;
@@ -400,6 +401,9 @@ export default function ProposalsDeskPage() {
         if (typeof parsed.replenishmentSalesDays === 'number') {
           setReplenishmentSalesDays(parsed.replenishmentSalesDays);
         }
+        if (parsed.replenishmentMode && ['REMESSA', 'VENDA_ACERTO', 'AMBOS'].includes(parsed.replenishmentMode)) {
+          setReplenishmentMode(parsed.replenishmentMode);
+        }
         if (typeof parsed.globalDiscountInput === 'number') {
           setGlobalDiscountInput(parsed.globalDiscountInput);
           setManualDiscount(parsed.globalDiscountInput);
@@ -431,6 +435,7 @@ export default function ProposalsDeskPage() {
         clientSalesDays,
         generalSalesDays,
         replenishmentSalesDays,
+        replenishmentMode,
         globalDiscountInput,
         columnWidths,
         statuses: availableStatuses
@@ -458,6 +463,7 @@ export default function ProposalsDeskPage() {
     clientSalesDays,
     generalSalesDays,
     replenishmentSalesDays,
+    replenishmentMode,
     globalDiscountInput,
     columnWidths,
     availableStatuses
@@ -1002,7 +1008,7 @@ export default function ProposalsDeskPage() {
         .join(',');
 
       const res = await fetch(
-        `${API_URL}/dbm/proposals-desk/replenishment-items?customer_id=${customer.id}&replenishment_sales_days=${replenishmentSalesDays}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
+        `${API_URL}/dbm/proposals-desk/replenishment-items?customer_id=${customer.id}&replenishment_mode=${replenishmentMode}&client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(existingIsbns)}`,
         { headers: { 'Authorization': `Bearer ${getToken()}` } }
       );
       if (!res.ok) {
@@ -1063,15 +1069,12 @@ export default function ProposalsDeskPage() {
       });
 
       if (loadedRep.length > 0) {
-        const consigOriginLabel = Number(data.consignedFromApiCount || 0) > 0
-          ? `Consignado API: ${data.consignedFromApiCount}`
-          : `Consignado BD: ${data.consignedFromSqlCount || 0}`;
         toast.success(
-          `${loadedRep.length} itens carregados na Reposição (${consigOriginLabel} • Vendas ${replenishmentSalesDays}d: ${data.soldInWindowCount || 0}).`
+          `${loadedRep.length} itens carregados na aba Reposição.`
         );
       } else {
         toast.info(
-          `Nenhum item com saldo disponível encontrado no consignado ou histórico dos últimos ${replenishmentSalesDays} dias (que já não esteja no Pedido/Novidades).`
+          'Nenhum item com saldo disponível encontrado no histórico de reposição deste cliente (que já não esteja no Pedido ou em Novidades).'
         );
       }
     } catch (e: any) {
@@ -3081,7 +3084,7 @@ export default function ProposalsDeskPage() {
             {/* Esquerda: Controles específicos da aba ativa */}
             <div className="flex flex-wrap items-center gap-2">
               
-              {/* ABA REPOSIÇÃO (Regra 8): Botão Buscar + Configuração Discreta de X dias */}
+              {/* ABA REPOSIÇÃO: Botão Buscar limpo */}
               {activeTab === 'reposicao' && (
                 <>
                   <button
@@ -3089,7 +3092,7 @@ export default function ProposalsDeskPage() {
                     disabled={!customer || isLoadingReplenishment}
                     onClick={handleFetchReplenishment}
                     className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-slate-800 hover:bg-slate-700 dark:bg-indigo-600 dark:hover:bg-indigo-500 text-white text-xs font-bold shadow-2xs transition-all disabled:opacity-50"
-                    title="Coleta os itens com saldo consignado ativo no cliente (via API Horus) + histórico de itens vendidos ao cliente nos últimos X dias"
+                    title="Buscar itens de reposição para o cliente que ainda não estão no Pedido nem em Novidades"
                   >
                     {isLoadingReplenishment ? (
                       <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -3099,143 +3102,14 @@ export default function ProposalsDeskPage() {
                     <span>Buscar</span>
                   </button>
 
-                  {/* Abinha discreta para configurar a base de dias da Reposição */}
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setIsReplenishmentConfigOpen(!isReplenishmentConfigOpen)}
-                      className={`inline-flex items-center gap-1 px-2 py-1 rounded-md border text-[11px] font-medium transition-colors ${
-                        isReplenishmentConfigOpen
-                          ? 'bg-indigo-50 border-indigo-300 text-indigo-700 dark:bg-indigo-950/50 dark:border-indigo-700 dark:text-indigo-300'
-                          : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100'
-                      }`}
-                      title="Configurar a janela de dias do histórico de vendas do cliente usada na busca de Reposição"
-                    >
-                      <SlidersHorizontal className="h-3 w-3 text-slate-400" />
-                      <span>Base Vendas: <b>{replenishmentSalesDays}d</b></span>
-                    </button>
-
-                    {isReplenishmentConfigOpen && (
-                      <div className="absolute left-0 mt-1.5 w-72 p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-xl z-40 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">
-                            Base Histórica de Reposição
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setIsReplenishmentConfigOpen(false)}
-                            className="text-slate-400 hover:text-slate-600"
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-slate-500 leading-snug">
-                          Ao clicar em <b>Buscar</b>, o sistema traz os itens com <b>Saldo Consignado (API)</b> + itens vendidos ao cliente nos últimos <b>X dias</b>:
-                        </p>
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="number"
-                            min={1}
-                            max={730}
-                            value={replenishmentSalesDays}
-                            onChange={(e) => {
-                              const v = Math.max(1, parseInt(e.target.value) || 90);
-                              setReplenishmentSalesDays(v);
-                              saveConfigToStorage({ replenishmentSalesDays: v });
-                            }}
-                            className="w-16 rounded border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-center font-mono font-bold text-xs text-indigo-600"
-                          />
-                          <span className="text-[11px] text-slate-500">dias</span>
-                          <div className="flex gap-1 ml-auto">
-                            {[30, 60, 90, 180].map(d => (
-                              <button
-                                key={d}
-                                type="button"
-                                onClick={() => {
-                                  setReplenishmentSalesDays(d);
-                                  saveConfigToStorage({ replenishmentSalesDays: d });
-                                }}
-                                className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                                  replenishmentSalesDays === d
-                                    ? 'bg-indigo-600 text-white'
-                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                                }`}
-                              >
-                                {d}d
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
                   {replenishmentMeta && (
                     <div className="relative flex flex-wrap items-center gap-2">
                       <span className="text-[11px] text-slate-600 dark:text-slate-300 font-mono">
-                        Consignado API: <b>{replenishmentMeta.consignedFromApiCount}</b>
-                        {replenishmentMeta.consignedFromSqlCount > 0 && (
-                          <> • Consignado BD: <b className="text-indigo-600 dark:text-indigo-400">{replenishmentMeta.consignedFromSqlCount}</b></>
+                        Títulos localizados: <b className="text-indigo-600 dark:text-indigo-400">{exclusiveItemsByTab.reposicao.length}</b>
+                        {replenishmentMeta.consignedCount > 0 && (
+                          <> • Com saldo consignado no cliente: <b className="text-emerald-600 dark:text-emerald-400">{replenishmentMeta.consignedCount}</b></>
                         )}
-                        {' '}• Histórico BD ({replenishmentMeta.days}d): <b className="text-emerald-600 dark:text-emerald-400">{replenishmentMeta.salesHistoryCount}</b>
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowReplenishmentDiag(!showReplenishmentDiag)}
-                        className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[10px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50"
-                        title="Ver retorno detalhado da API Horus e consultas SQL de Consignação e Vendas"
-                      >
-                        {showReplenishmentDiag ? 'Ocultar Retorno API/BD' : 'Ver Retorno API/BD'}
-                      </button>
-
-                      {showReplenishmentDiag && (
-                        <div className="absolute left-0 top-7 w-[520px] max-w-[90vw] p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 shadow-2xl z-50 text-[11px] space-y-2">
-                          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
-                            <span className="font-bold text-slate-800 dark:text-slate-100">
-                              Diagnóstico Híbrido: API Horus + Banco SQL Server
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => setShowReplenishmentDiag(false)}
-                              className="text-slate-400 hover:text-slate-600"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                          {replenishmentMeta.apiDiagnostic && (
-                            <div className="space-y-1 bg-slate-50 dark:bg-slate-800/60 p-2 rounded-lg border border-slate-200 dark:border-slate-700">
-                              <div className="font-bold text-slate-700 dark:text-slate-200">
-                                1. API Horus ({replenishmentMeta.apiDiagnostic.endpoint}) — Status: <span className="text-amber-600 dark:text-amber-400">{replenishmentMeta.apiDiagnostic.status}</span>
-                              </div>
-                              <div className="text-slate-600 dark:text-slate-300">
-                                {replenishmentMeta.apiDiagnostic.message}
-                              </div>
-                              <pre className="text-[10px] font-mono bg-slate-900 text-slate-100 p-2 rounded overflow-x-auto max-h-32">
-                                {JSON.stringify(replenishmentMeta.apiDiagnostic.rawResponse, null, 2)}
-                              </pre>
-                            </div>
-                          )}
-                          {replenishmentMeta.sqlDiagnostic && (
-                            <div className="space-y-1 bg-indigo-50/50 dark:bg-indigo-950/30 p-2 rounded-lg border border-indigo-200 dark:border-indigo-800">
-                              <div className="font-bold text-indigo-900 dark:text-indigo-200">
-                                2. Banco de Dados SQL Server (COD_CLI #{replenishmentMeta.sqlDiagnostic.codCli} • Filial #{replenishmentMeta.sqlDiagnostic.codFilial})
-                              </div>
-                              <div className="text-slate-700 dark:text-slate-300 font-mono text-[10px]">
-                                • Consignação ({replenishmentMeta.sqlDiagnostic.consignmentSource}): <b>{replenishmentMeta.sqlDiagnostic.consignedSkusFound} SKUs</b> com saldo &gt; 0 no cliente<br />
-                                • Vendas/Acertos (NF_MESTRE + NF_ITENS últimos {replenishmentMeta.sqlDiagnostic.salesWindowDays}d): <b>{replenishmentMeta.sqlDiagnostic.salesSkusFound} SKUs</b> ({replenishmentMeta.sqlDiagnostic.salesTotalUnits} exemplares)
-                              </div>
-                              {Array.isArray(replenishmentMeta.sqlDiagnostic.sqlErrors) && replenishmentMeta.sqlDiagnostic.sqlErrors.length > 0 && (
-                                <div className="mt-1.5 p-2 rounded bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 font-mono text-[10px] space-y-0.5">
-                                  <div className="font-bold">Avisos / Erros SQL detectados:</div>
-                                  {replenishmentMeta.sqlDiagnostic.sqlErrors.map((errStr: string, idx: number) => (
-                                    <div key={idx}>• {errStr}</div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      )}
                     </div>
                   )}
                 </>
@@ -4225,10 +4099,10 @@ export default function ProposalsDeskPage() {
 
               <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-850 border border-slate-200 dark:border-slate-800 space-y-1">
                 <div className="font-bold text-slate-900 dark:text-white">
-                  3. Aba Reposição (Botão Buscar + Base Vendas X Dias)
+                  3. Aba Reposição (Histórico Completo do Cliente)
                 </div>
                 <p>
-                  Ao clicar em <b>Buscar</b> na aba <b>Reposição</b>, o sistema consulta o <b>Saldo Consignado ativo no cliente (via API Hórus)</b> somado ao <b>histórico de itens vendidos ao cliente nos últimos X dias</b> (configurável no botão discreto <i>Base Vendas: Xd</i> ao lado da busca).
+                  Ao clicar em <b>Buscar</b> na aba <b>Reposição</b>, o sistema traz automaticamente o histórico de livros do cliente (que tenham estoque disponível e ainda não estejam em <b>Pedidos</b> nem em <b>Novidades</b>), seguindo o critério definido nas configurações da mesa.
                 </p>
               </div>
 
@@ -4372,8 +4246,8 @@ export default function ProposalsDeskPage() {
                   </div>
                 </div>
 
-                {/* Parâmetros Padrão de Dias */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                {/* Parâmetros Padrão de Dias e Regra da Aba Reposição */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                   <div className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
                     <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">
                       Dias Vendas Cliente
@@ -4407,22 +4281,89 @@ export default function ProposalsDeskPage() {
                       <span className="text-xs text-slate-400">dias</span>
                     </div>
                   </div>
+                </div>
 
-                  <div className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-                    <label className="text-[10px] uppercase font-bold text-slate-500 block mb-1">
-                      Base Busca Reposição
-                    </label>
-                    <div className="flex items-center gap-1.5">
+                {/* Critério Didático do Botão Reposição */}
+                <div className="pt-2 border-t border-slate-200/80 dark:border-slate-700/80 space-y-2">
+                  <div className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+                    <RefreshCw className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                    <span>Como o botão &quot;Buscar&quot; da aba Reposição deve montar a lista do cliente?</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label
+                      onClick={() => setReplenishmentMode('REMESSA')}
+                      className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        replenishmentMode === 'REMESSA'
+                          ? 'border-indigo-600 bg-indigo-50/70 dark:border-indigo-500 dark:bg-indigo-950/30'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
                       <input
-                        type="number"
-                        min={1}
-                        max={730}
-                        value={replenishmentSalesDays}
-                        onChange={(e) => setReplenishmentSalesDays(Math.max(1, parseInt(e.target.value) || 90))}
-                        className="w-16 rounded border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-800 px-2 py-1 text-xs font-bold font-mono text-indigo-600 text-center"
+                        type="radio"
+                        name="replenishmentMode"
+                        checked={replenishmentMode === 'REMESSA'}
+                        onChange={() => setReplenishmentMode('REMESSA')}
+                        className="mt-0.5 h-3.5 w-3.5 text-indigo-600"
                       />
-                      <span className="text-xs text-slate-400">dias</span>
-                    </div>
+                      <div className="text-xs">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          Considerar apenas envios em consignação
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                          Quando ativa, busca todas as obras que já foram enviadas em consignação para o cliente ao longo do histórico e que ainda não estão no Pedido nem em Novidades.
+                        </p>
+                      </div>
+                    </label>
+
+                    <label
+                      onClick={() => setReplenishmentMode('VENDA_ACERTO')}
+                      className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        replenishmentMode === 'VENDA_ACERTO'
+                          ? 'border-indigo-600 bg-indigo-50/70 dark:border-indigo-500 dark:bg-indigo-950/30'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="replenishmentMode"
+                        checked={replenishmentMode === 'VENDA_ACERTO'}
+                        onChange={() => setReplenishmentMode('VENDA_ACERTO')}
+                        className="mt-0.5 h-3.5 w-3.5 text-indigo-600"
+                      />
+                      <div className="text-xs">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          Considerar apenas vendas e acertos
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                          Quando ativa, busca apenas as obras que o cliente efetivamente comprou em venda firme ou prestou acerto de consignação ao longo do histórico e que não estão no Pedido nem em Novidades.
+                        </p>
+                      </div>
+                    </label>
+
+                    <label
+                      onClick={() => setReplenishmentMode('AMBOS')}
+                      className={`flex items-start gap-2.5 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        replenishmentMode === 'AMBOS'
+                          ? 'border-indigo-600 bg-indigo-50/70 dark:border-indigo-500 dark:bg-indigo-950/30'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="replenishmentMode"
+                        checked={replenishmentMode === 'AMBOS'}
+                        onChange={() => setReplenishmentMode('AMBOS')}
+                        className="mt-0.5 h-3.5 w-3.5 text-indigo-600"
+                      />
+                      <div className="text-xs">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          Considerar ambos (consignação + vendas e acertos)
+                        </div>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-snug mt-0.5">
+                          Quando ativa, une todo o histórico comercial do cliente, sugerindo tanto os livros já enviados em consignação quanto os livros já comprados ou acertados (fora do Pedido e de Novidades).
+                        </p>
+                      </div>
+                    </label>
                   </div>
                 </div>
               </div>
@@ -4484,7 +4425,7 @@ export default function ProposalsDeskPage() {
                   setHideOutOfPrintInSearch(true);
                   setClientSalesDays(30);
                   setGeneralSalesDays(90);
-                  setReplenishmentSalesDays(90);
+                  setReplenishmentMode('REMESSA');
                   setColumnWidths(DEFAULT_COLUMN_WIDTHS);
                 }}
                 className="text-xs font-bold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition-colors"
@@ -4514,7 +4455,7 @@ export default function ProposalsDeskPage() {
                       hideOutOfPrintInSearch,
                       clientSalesDays,
                       generalSalesDays,
-                      replenishmentSalesDays,
+                      replenishmentMode,
                       globalDiscountInput,
                       columnWidths
                     });

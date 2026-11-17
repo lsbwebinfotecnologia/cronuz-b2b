@@ -764,7 +764,6 @@ export default function DbmProductsSearchPage() {
               sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
               sales_90: Number(m.sales_90 ?? item.sales_90 ?? 0),
               stock_quantity: m.stock_quantity != null ? Number(m.stock_quantity) : item.stock_quantity,
-              stock: m.stock_quantity != null ? Number(m.stock_quantity) : item.stock,
             };
           })
         );
