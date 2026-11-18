@@ -700,7 +700,7 @@ export default function ProposalsDeskPage() {
     let resolvedDisc = globalDiscountInput;
     let baseSavedItems: DbmItem[] = savedProposalItems
       ? savedProposalItems.map(it => normalizeSavedDbmItem(it, resolvedDisc))
-      : itemsRef.current.filter(it => it.tabCategory === 'pedido');
+      : itemsRef.current.filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder === true);
 
     if (!custId) {
       setCustomer(null);
@@ -1029,9 +1029,9 @@ export default function ProposalsDeskPage() {
 
     setIsLoadingReplenishment(true);
     try {
-      // Coleta ISBNs que já estão no Pedido ou em Novidades para não repetir
+      // Coleta ISBNs que já estão no Pedido / Consolidado ou em Último Acerto para não repetir
       const existingIsbns = items
-        .filter(it => it.tabCategory === 'pedido' || it.tabCategory === 'novidades')
+        .filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder === true || it.tabCategory === 'ultimo_acerto')
         .map(it => it.isbn)
         .filter(Boolean)
         .join(',');
@@ -1077,7 +1077,7 @@ export default function ProposalsDeskPage() {
         const otherTabs = prev.filter(it => it.tabCategory !== 'reposicao');
         const otherOccupiedIsbns = new Set(
           otherTabs
-            .filter(it => it.tabCategory === 'pedido' || it.tabCategory === 'novidades')
+            .filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder === true || it.tabCategory === 'ultimo_acerto')
             .map(it => it.isbn)
         );
 
@@ -1086,9 +1086,9 @@ export default function ProposalsDeskPage() {
         );
         const repAllIsbns = new Set([...Array.from(keptIsbns), ...freshRep.map(it => it.isbn)]);
 
-        // Garante que itens carregados em Reposição não fiquem duplicados em Fundo ou Último Acerto
+        // Garante que itens carregados em Reposição não fiquem duplicados em Novidades, Fundo ou Último Acerto (exceto se já adicionados ao pedido)
         const deduplicatedOthers = otherTabs.filter(it => {
-          if ((it.tabCategory === 'fundo' || it.tabCategory === 'ultimo_acerto') && !it.isAddedToOrder) {
+          if ((it.tabCategory === 'novidades' || it.tabCategory === 'fundo' || it.tabCategory === 'ultimo_acerto') && !it.isAddedToOrder) {
             return !repAllIsbns.has(it.isbn);
           }
           return true;
@@ -1160,10 +1160,23 @@ export default function ProposalsDeskPage() {
         .filter((it: DbmItem) => it.horusStock > 0);
 
       setItems(prev => {
+        const keptAddedLastOp = prev.filter(it => it.tabCategory === 'ultimo_acerto' && it.isAddedToOrder);
+        const keptIsbns = new Set(keptAddedLastOp.map(it => it.isbn));
         const withoutLastOp = prev.filter(it => it.tabCategory !== 'ultimo_acerto');
-        const occupiedIsbns = new Set(withoutLastOp.map(it => it.isbn));
-        const uniqueLoaded = loadedItems.filter(it => !occupiedIsbns.has(it.isbn));
-        return [...withoutLastOp, ...uniqueLoaded];
+        const occupiedIsbns = new Set(
+          withoutLastOp
+            .filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder === true)
+            .map(it => it.isbn)
+        );
+        const uniqueLoaded = loadedItems.filter(it => !keptIsbns.has(it.isbn) && !occupiedIsbns.has(it.isbn));
+        const lastOpAllIsbns = new Set([...Array.from(keptIsbns), ...uniqueLoaded.map(it => it.isbn)]);
+        const deduplicatedOthers = withoutLastOp.filter(it => {
+          if (it.tabCategory !== 'pedido' && !it.isAddedToOrder) {
+            return !lastOpAllIsbns.has(it.isbn);
+          }
+          return true;
+        });
+        return [...deduplicatedOthers, ...keptAddedLastOp, ...uniqueLoaded];
       });
 
       if (loadedItems.length > 0) {
@@ -1175,6 +1188,151 @@ export default function ProposalsDeskPage() {
       toast.error(e?.message || 'Erro ao buscar itens da última operação.');
     } finally {
       setIsLoadingLastOp(false);
+    }
+  };
+
+  // Conciliação cirúrgica da aba NOVIDADES (preserva Pedido Consolidado, Reposição, Último Acerto e Fundo)
+  const handleRefreshNovidades = async () => {
+    setIsLoadingCatalog(true);
+    try {
+      const custId = customer?.id || selectedCustomerId || '';
+      const custQueryParam = custId ? `customer_id=${custId}&` : '';
+      // Exclui tudo que já está no Pedido / Pedido Consolidado ou nas abas anteriores (Último Acerto e Reposição)
+      const excludeList = items
+        .filter(
+          it =>
+            it.tabCategory === 'pedido' ||
+            it.isAddedToOrder === true ||
+            it.tabCategory === 'ultimo_acerto' ||
+            it.tabCategory === 'reposicao'
+        )
+        .map(it => it.isbn)
+        .filter(Boolean)
+        .join(',');
+
+      const resCat = await fetch(
+        `${API_URL}/dbm/proposals-desk/catalog-tabs?${custQueryParam}client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=150&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(excludeList)}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      );
+      if (!resCat.ok) {
+        throw new Error(`HTTP ${resCat.status}`);
+      }
+      const dataCat = await resCat.json();
+      const loadedNov: DbmItem[] = (dataCat.novidades || [])
+        .map((r: any) => mapApiItemToDbmItem(r, 'novidades', globalDiscountInput))
+        .filter((it: DbmItem) => it.horusStock > 0);
+
+      let addedCount = 0;
+      setItems(prev => {
+        // Mantém novidades que o usuário já havia adicionado ao Pedido Consolidado
+        const keptAddedNov = prev.filter(it => it.tabCategory === 'novidades' && it.isAddedToOrder);
+        const keptNovIsbns = new Set(keptAddedNov.map(it => it.isbn));
+        const otherTabs = prev.filter(it => it.tabCategory !== 'novidades');
+
+        // Concilia com Pedido, Pedido Consolidado, Último Acerto e Reposição
+        const priorOccupiedIsbns = new Set(
+          otherTabs
+            .filter(
+              it =>
+                it.tabCategory === 'pedido' ||
+                it.isAddedToOrder === true ||
+                it.tabCategory === 'ultimo_acerto' ||
+                it.tabCategory === 'reposicao'
+            )
+            .map(it => it.isbn)
+        );
+
+        const freshNov = loadedNov.filter(
+          it => it.isbn && !keptNovIsbns.has(it.isbn) && !priorOccupiedIsbns.has(it.isbn)
+        );
+        addedCount = keptAddedNov.length + freshNov.length;
+        const allNovIsbns = new Set([...Array.from(keptNovIsbns), ...freshNov.map(it => it.isbn)]);
+
+        // Remove de Fundo de Catálogo apenas itens que ainda não foram adicionados ao pedido e que entraram em Novidades
+        const deduplicatedOthers = otherTabs.filter(it => {
+          if (it.tabCategory === 'fundo' && !it.isAddedToOrder) {
+            return !allNovIsbns.has(it.isbn);
+          }
+          return true;
+        });
+
+        return [...deduplicatedOthers, ...keptAddedNov, ...freshNov];
+      });
+
+      toast.success(`Novidades conciliadas: ${addedCount} títulos disponíveis que não estão nas abas anteriores nem no pedido.`);
+    } catch (e: any) {
+      toast.error(`Erro ao atualizar Novidades (${e?.message || 'falha de comunicação'}).`);
+    } finally {
+      setIsLoadingCatalog(false);
+    }
+  };
+
+  // Conciliação cirúrgica da aba FUNDO DE CATÁLOGO (mostra apenas itens que não estão em nenhuma situação anterior e preserva todo o Pedido Consolidado)
+  const handleRefreshFundo = async () => {
+    setIsLoadingCatalog(true);
+    try {
+      const custId = customer?.id || selectedCustomerId || '';
+      const custQueryParam = custId ? `customer_id=${custId}&` : '';
+      // Exclui tudo que já está em Pedidos, Pedido Consolidado, Último Acerto, Reposição ou Novidades
+      const excludeList = items
+        .filter(
+          it =>
+            it.tabCategory === 'pedido' ||
+            it.isAddedToOrder === true ||
+            it.tabCategory === 'ultimo_acerto' ||
+            it.tabCategory === 'reposicao' ||
+            it.tabCategory === 'novidades'
+        )
+        .map(it => it.isbn)
+        .filter(Boolean)
+        .join(',');
+
+      const resCat = await fetch(
+        `${API_URL}/dbm/proposals-desk/catalog-tabs?${custQueryParam}client_sales_days=${clientSalesDays}&general_sales_days=${generalSalesDays}&limit=200&hide_ebooks=${hideEbooksInSearch}&hide_out_of_print=${hideOutOfPrintInSearch}&exclude_isbns=${encodeURIComponent(excludeList)}`,
+        { headers: { Authorization: `Bearer ${getToken()}` } }
+      );
+      if (!resCat.ok) {
+        throw new Error(`HTTP ${resCat.status}`);
+      }
+      const dataCat = await resCat.json();
+      const loadedFnd: DbmItem[] = (dataCat.fundo || [])
+        .map((r: any) => mapApiItemToDbmItem(r, 'fundo', globalDiscountInput))
+        .filter((it: DbmItem) => it.horusStock > 0);
+
+      let totalFndCount = 0;
+      setItems(prev => {
+        // Mantém itens de Fundo que o usuário já havia adicionado ao Pedido Consolidado
+        const keptAddedFnd = prev.filter(it => it.tabCategory === 'fundo' && it.isAddedToOrder);
+        const keptFndIsbns = new Set(keptAddedFnd.map(it => it.isbn));
+        const otherTabs = prev.filter(it => it.tabCategory !== 'fundo');
+
+        // Concilia com todas as situações anteriores (Pedidos, Pedido Consolidado, Último Acerto, Reposição e Novidades)
+        const allPriorIsbns = new Set(
+          otherTabs
+            .filter(
+              it =>
+                it.tabCategory === 'pedido' ||
+                it.isAddedToOrder === true ||
+                it.tabCategory === 'ultimo_acerto' ||
+                it.tabCategory === 'reposicao' ||
+                it.tabCategory === 'novidades'
+            )
+            .map(it => it.isbn)
+        );
+
+        const freshFnd = loadedFnd.filter(
+          it => it.isbn && !keptFndIsbns.has(it.isbn) && !allPriorIsbns.has(it.isbn)
+        );
+        totalFndCount = keptAddedFnd.length + freshFnd.length;
+
+        return [...otherTabs, ...keptAddedFnd, ...freshFnd];
+      });
+
+      toast.success(`Fundo de Catálogo conciliado: ${totalFndCount} títulos disponíveis que não estão nas situações anteriores.`);
+    } catch (e: any) {
+      toast.error(`Erro ao atualizar Fundo de Catálogo (${e?.message || 'falha de comunicação'}).`);
+    } finally {
+      setIsLoadingCatalog(false);
     }
   };
 
@@ -1336,51 +1494,56 @@ export default function ProposalsDeskPage() {
   const exclusiveItemsByTab = useMemo(() => {
     const claimedIsbns = new Set<string>();
 
+    // 1. Itens da aba 'pedido' + qualquer item já adicionado ao Pedido Consolidado (isAddedToOrder)
+    // garantem prioridade absoluta para NUNCA serem ocultados ou sobrescritos por outras abas.
     const pedidoList: DbmItem[] = [];
     for (const it of items) {
       if (it.tabCategory === 'pedido') {
         if (it.isbn) claimedIsbns.add(it.isbn);
         pedidoList.push(it);
+      } else if (it.isAddedToOrder && it.isbn) {
+        claimedIsbns.add(it.isbn);
       }
     }
 
-    const novidadesList: DbmItem[] = [];
-    for (const it of items) {
-      if (it.tabCategory === 'novidades' && it.horusStock > 0) {
-        if (it.isbn && claimedIsbns.has(it.isbn)) continue;
-        if (it.isbn) claimedIsbns.add(it.isbn);
-        novidadesList.push(it);
-      }
-    }
-
-    const reposicaoList: DbmItem[] = [];
-    for (const it of items) {
-      if (it.tabCategory === 'reposicao' && it.horusStock > 0) {
-        if (it.isbn && claimedIsbns.has(it.isbn)) continue;
-        if (it.isbn) claimedIsbns.add(it.isbn);
-        reposicaoList.push(it);
-      }
-    }
-
-    const fundoList: DbmItem[] = [];
-    for (const it of items) {
-      if (it.tabCategory === 'fundo' && it.horusStock > 0) {
-        if (it.isbn && claimedIsbns.has(it.isbn)) continue;
-        if (it.isbn) claimedIsbns.add(it.isbn);
-        fundoList.push(it);
-      }
-    }
-
+    // 2. Ordem progressiva das abas de sugestão: Último Acerto -> Reposição -> Novidades -> Fundo
     const ultimoAcertoList: DbmItem[] = [];
     for (const it of items) {
-      if (it.tabCategory === 'ultimo_acerto' && it.horusStock > 0) {
-        if (it.isbn && claimedIsbns.has(it.isbn)) continue;
+      if (it.tabCategory === 'ultimo_acerto' && (it.horusStock > 0 || it.isAddedToOrder)) {
+        if (!it.isAddedToOrder && it.isbn && claimedIsbns.has(it.isbn)) continue;
         if (it.isbn) claimedIsbns.add(it.isbn);
         ultimoAcertoList.push(it);
       }
     }
 
-  // Consolidado reúne todos os itens do Pedido + todos os itens adicionados das outras abas
+    const reposicaoList: DbmItem[] = [];
+    for (const it of items) {
+      if (it.tabCategory === 'reposicao' && (it.horusStock > 0 || it.isAddedToOrder)) {
+        if (!it.isAddedToOrder && it.isbn && claimedIsbns.has(it.isbn)) continue;
+        if (it.isbn) claimedIsbns.add(it.isbn);
+        reposicaoList.push(it);
+      }
+    }
+
+    const novidadesList: DbmItem[] = [];
+    for (const it of items) {
+      if (it.tabCategory === 'novidades' && (it.horusStock > 0 || it.isAddedToOrder)) {
+        if (!it.isAddedToOrder && it.isbn && claimedIsbns.has(it.isbn)) continue;
+        if (it.isbn) claimedIsbns.add(it.isbn);
+        novidadesList.push(it);
+      }
+    }
+
+    const fundoList: DbmItem[] = [];
+    for (const it of items) {
+      if (it.tabCategory === 'fundo' && (it.horusStock > 0 || it.isAddedToOrder)) {
+        if (!it.isAddedToOrder && it.isbn && claimedIsbns.has(it.isbn)) continue;
+        if (it.isbn) claimedIsbns.add(it.isbn);
+        fundoList.push(it);
+      }
+    }
+
+    // Consolidado reúne todos os itens do Pedido + todos os itens adicionados das outras abas
     const allExclusive = [
       ...pedidoList,
       ...ultimoAcertoList,
@@ -3165,13 +3328,13 @@ export default function ProposalsDeskPage() {
                 <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-300">
                   <Sparkles className="h-3.5 w-3.5 text-amber-500" />
                   <span>
-                    Janela de Novidades: <strong>-9 meses</strong> até <strong>+6 meses</strong> (apenas com estoque disponível e fora do Pedido).
+                    Janela de Novidades: <strong>-9 meses</strong> até <strong>+6 meses</strong> (conciliado com Pedido e abas anteriores).
                   </span>
                   <button
                     type="button"
                     disabled={isLoadingCatalog}
-                    onClick={() => loadCustomerDeskData(selectedCustomerId || '', customer, items.filter(it => it.tabCategory === 'pedido'))}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
+                    onClick={handleRefreshNovidades}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`h-3 w-3 ${isLoadingCatalog ? 'animate-spin text-indigo-600' : ''}`} />
                     <span>Atualizar Novidades</span>
@@ -3184,13 +3347,13 @@ export default function ProposalsDeskPage() {
                 <div className="flex flex-wrap items-center gap-2 text-slate-600 dark:text-slate-300">
                   <BookOpen className="h-3.5 w-3.5 text-sky-600" />
                   <span>
-                    Fundo de Catálogo: títulos de giro consolidado com saldo disponível (sem repetir itens de Pedido, Reposição ou Novidades).
+                    Fundo de Catálogo: títulos com saldo disponível que não estão em nenhuma das situações anteriores.
                   </span>
                   <button
                     type="button"
                     disabled={isLoadingCatalog}
-                    onClick={() => loadCustomerDeskData(selectedCustomerId || '', customer, items.filter(it => it.tabCategory === 'pedido'))}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50"
+                    onClick={handleRefreshFundo}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:bg-slate-100 text-[11px] font-semibold text-slate-700 dark:text-slate-300 transition-colors disabled:opacity-50 cursor-pointer"
                   >
                     <RefreshCw className={`h-3 w-3 ${isLoadingCatalog ? 'animate-spin text-indigo-600' : ''}`} />
                     <span>Atualizar Catálogo</span>

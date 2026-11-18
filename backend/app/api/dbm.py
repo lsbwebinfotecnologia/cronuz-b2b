@@ -2402,7 +2402,8 @@ async def get_proposals_desk_catalog_tabs(
     company_id: Optional[int] = Query(None),
     client_sales_days: int = Query(30, ge=1, le=730),
     general_sales_days: int = Query(90, ge=1, le=730),
-    limit: int = Query(40, ge=1, le=200),
+    limit: int = Query(80, ge=1, le=500),
+    exclude_isbns: Optional[str] = Query(None, description="ISBNs separados por vírgula já presentes no pedido ou nas abas anteriores"),
     hide_ebooks: bool = Query(True, description="Ocultar e-books nas buscas"),
     hide_out_of_print: bool = Query(True, description="Ocultar obras esgotadas nas buscas"),
     db: Session = Depends(get_db),
@@ -2453,6 +2454,12 @@ async def get_proposals_desk_catalog_tabs(
     fundo_items: list[dict] = []
     seen_isbns: set[str] = set()
     excluded_keys = _load_seller_product_exclusion_sets(db, seller_id, hide_ebooks=hide_ebooks, hide_out_of_print=hide_out_of_print)
+    if exclude_isbns:
+        for raw_ex in exclude_isbns.split(","):
+            cl = raw_ex.strip().replace("-", "").replace(" ", "")
+            if cl:
+                excluded_keys.add(cl)
+                seen_isbns.add(cl)
 
     # ── 1. ABA NOVIDADES (-9 meses até +6 meses, APENAS COM SALDO > 0) ────────
     if sql_client:
