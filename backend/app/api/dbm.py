@@ -2200,6 +2200,99 @@ def _enrich_items_with_bi_metrics(
         if not it.get("consignedQty") and cs_bal > 0:
             it["consignedQty"] = cs_bal
 
+    _apply_cronuz_units_per_box(db, seller_id, items_list)
+
+    return items_list
+
+
+def _apply_cronuz_units_per_box(
+    db: Session,
+    seller_id: int,
+    items_list: list[dict],
+) -> list[dict]:
+    """
+    Cruza os itens da grade com o cadastro do produto no Cronuz (prd_product.units_per_box)
+    pelo ISBN, SKU, Código Horus ou Título, garantindo que a coluna CX sempre exiba a
+    quantidade real por caixa salva no item no Cronuz.
+    """
+    if not items_list:
+        return items_list
+
+    from app.models.product import Product
+
+    def _norm_code(val: Any) -> str:
+        return str(val or "").strip().replace("-", "").replace(" ", "").lstrip("0") or str(val or "").strip()
+
+    def _norm_title(val: Any) -> str:
+        return " ".join(str(val or "").strip().lower().split())
+
+    try:
+        rows = db.query(
+            Product.ean_gtin,
+            Product.barcode,
+            Product.sku,
+            Product.horus_cod_item,
+            Product.additional_isbns,
+            Product.name,
+            Product.units_per_box,
+        ).filter(
+            Product.company_id == seller_id,
+            Product.units_per_box.isnot(None),
+        ).all()
+
+        box_by_code: dict[str, int] = {}
+        box_by_title: dict[str, int] = {}
+
+        for ean_gtin, barcode, sku, horus_cod_item, additional_isbns, name, units_per_box in rows:
+            u_val = int(units_per_box or 0)
+            if u_val <= 0:
+                continue
+            for raw_k in (ean_gtin, barcode, sku, horus_cod_item):
+                if raw_k is not None and str(raw_k).strip():
+                    c_raw = str(raw_k).strip().replace("-", "").replace(" ", "")
+                    c_norm = _norm_code(c_raw)
+                    if c_raw:
+                        box_by_code[c_raw] = u_val
+                    if c_norm:
+                        box_by_code[c_norm] = u_val
+            if additional_isbns:
+                for sub in str(additional_isbns).replace(";", ",").split(","):
+                    c_sub = sub.strip().replace("-", "").replace(" ", "")
+                    if c_sub:
+                        box_by_code[c_sub] = u_val
+                        box_by_code[_norm_code(c_sub)] = u_val
+            t_key = _norm_title(name)
+            if t_key:
+                box_by_title[t_key] = u_val
+
+        for it in items_list:
+            if not isinstance(it, dict):
+                continue
+            matched_box: Optional[int] = None
+            for field in ("isbn", "sku", "cod_item", "horusCode"):
+                raw_v = it.get(field)
+                if raw_v is not None and str(raw_v).strip():
+                    c_raw = str(raw_v).strip().replace("-", "").replace(" ", "")
+                    c_norm = _norm_code(c_raw)
+                    matched_box = box_by_code.get(c_raw) or box_by_code.get(c_norm)
+                    if matched_box:
+                        break
+            if not matched_box and it.get("title"):
+                matched_box = box_by_title.get(_norm_title(it.get("title")))
+
+            if matched_box and matched_box > 0:
+                it["boxQty"] = matched_box
+                it["boxUnits"] = matched_box
+                it["units_per_box"] = matched_box
+            else:
+                # Se estava com o fallback legado fixo 12 sem ter caixa cadastrada no Cronuz, zera para exibir '-'
+                cur_box = int(it.get("boxUnits") or it.get("boxQty") or 0)
+                if cur_box == 12 and box_by_code:
+                    it["boxQty"] = 0
+                    it["boxUnits"] = 0
+    except Exception as exc:
+        log.warning(f"[DBM Desk] Aviso ao enriquecer CX (units_per_box) do Cronuz: {exc}")
+
     return items_list
 
 
@@ -2483,7 +2576,7 @@ async def get_proposals_desk_catalog_tabs(
                 "consignedBalance": 0,
                 "clientSalesPeriod": 0,
                 "stockAvailable": est_loc,
-                "boxQty": max(1, int(p.units_per_box or 12)),
+                "boxQty": int(p.units_per_box or 0),
                 "clientSales365d": 0,
                 "generalSalesPeriod": 0,
                 "sourceTab": "NOVIDADES",
@@ -2607,7 +2700,7 @@ async def get_proposals_desk_catalog_tabs(
                     "consignedBalance": 0,
                     "clientSalesPeriod": 0,
                     "stockAvailable": est_loc,
-                    "boxQty": max(1, int(p.units_per_box or 12)),
+                    "boxQty": int(p.units_per_box or 0),
                     "clientSales365d": 0,
                     "generalSalesPeriod": 0,
                     "sourceTab": "FUNDO_CATALOGO",
@@ -3563,7 +3656,7 @@ async def lookup_proposals_desk_product(
                 "consignedBalance": 0,
                 "clientSalesPeriod": 0,
                 "stockAvailable": max(0, int(p.stock_quantity or 0)),
-                "boxQty": 12,
+                "boxQty": int(p.units_per_box or 0),
                 "clientSales365d": 0,
                 "generalSalesPeriod": 0,
                 "sourceTab": "PEDIDO",
@@ -3783,7 +3876,7 @@ async def import_proposals_desk_order(
                     "subject": c_name or "Catálogo",
                     "coverPrice": float(p.promotional_price or p.base_price or 0.0),
                     "stockAvailable": max(0, int(p.stock_quantity or 0)),
-                    "boxQty": 12,
+                    "boxQty": int(p.units_per_box or 0),
                     "foundInCatalog": True,
                 }
                 if k_ean:
@@ -4165,6 +4258,12 @@ def get_dbm_proposal(
 
     saved_items = list(prop.items_json or [])
     saved_snapshot = getattr(prop, "desk_snapshot_json", None)
+
+    # Sempre sincroniza CX (units_per_box) salvo no produto do Cronuz tanto em saved_items quanto no snapshot
+    if saved_items:
+        _apply_cronuz_units_per_box(db, seller_id, saved_items)
+    if isinstance(saved_snapshot, dict) and isinstance(saved_snapshot.get("allItems"), list):
+        _apply_cronuz_units_per_box(db, seller_id, saved_snapshot["allItems"])
 
     # Backfill único para propostas antigas que foram salvas sem consignado/cliXdias
     if saved_items and saved_snapshot is None:
