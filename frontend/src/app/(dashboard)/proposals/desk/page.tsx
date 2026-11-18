@@ -706,6 +706,10 @@ export default function ProposalsDeskPage() {
       setCustomer(null);
       setOperationsMetrics(EMPTY_OPERATIONS_METRICS);
       setIsLoadingCustomerContext(false);
+      setIsLoadingCatalog(false);
+      itemsRef.current = [];
+      setItems([]);
+      return;
     } else {
       setIsLoadingCustomerContext(true);
       try {
@@ -2136,6 +2140,8 @@ export default function ProposalsDeskPage() {
   };
 
   const handleNewProposalInDesk = () => {
+    itemsRef.current = [];
+    setItems([]);
     setProposalId(null);
     setProposalLocalId(null);
     setProposalSubject('');
@@ -2147,9 +2153,17 @@ export default function ProposalsDeskPage() {
     setLastOpInvoiceMeta(null);
     setLastOpTypeSelected(null);
     setReplenishmentMeta(null);
+    setShowReplenishmentDiag(false);
     setManualQuery('');
     setManualSuggestions([]);
     setSelectedManualProduct(null);
+    setShowManualDropdown(false);
+    setGridSearch('');
+    setSituationFilter('ALL');
+    setRawText('');
+    setUploadedFile(null);
+    setIsIntakeDrawerOpen(false);
+    setHorusSuccessResponse(null);
     setActiveTab('pedido');
     if (availableStatuses.length > 0) {
       setCurrentStatusId(availableStatuses[0].id);
@@ -2157,7 +2171,6 @@ export default function ProposalsDeskPage() {
     if (typeof window !== 'undefined') {
       window.history.replaceState({}, '', '/proposals/desk');
     }
-    loadCustomerDeskData('');
     toast.info('Mesa limpa para iniciar um Novo Orçamento. Selecione o cliente acima.');
   };
 
@@ -2243,12 +2256,12 @@ export default function ProposalsDeskPage() {
       <DbmPinnedNavBar />
       
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* 1. BARRA DE COMANDO SUPERIOR (Bem Distribuída, Fluida e Sem Gargalo) */}
+      {/* 1. BARRA DE COMANDO SUPERIOR (Fluxo: Cliente ➔ Assunto ➔ Importar)  */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      <div className="bg-white dark:bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-wrap items-center justify-between gap-2.5">
+      <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm flex flex-wrap items-center justify-between gap-2">
         
-        {/* Esquerda: Voltar + Título + Campo de Busca de Cliente Compacto */}
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 flex-1 min-w-[280px]">
+        {/* Esquerda: Voltar + Título + Busca de Cliente + Campo Assunto (compacto) */}
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 min-w-[280px]">
           <Link 
             href="/dbm/proposals"
             title="Voltar para listagem de orçamentos e propostas DBM"
@@ -2273,23 +2286,44 @@ export default function ProposalsDeskPage() {
 
           <div className="h-5 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block shrink-0" />
 
-          {/* Autocomplete do Cliente em formato compacto de barra sem sobreposição */}
-          <div className="w-full sm:w-64 lg:w-72 xl:w-80 min-w-0 shrink">
+          {/* 1. Autocomplete do Cliente */}
+          <div className="w-full sm:w-56 lg:w-64 xl:w-72 min-w-0 shrink">
             <CustomerAutocomplete
               compact
               value={selectedCustomerId}
               onChange={(id, cust) => {
+                const wasEditingSavedProposal = Boolean(proposalId);
                 setSelectedCustomerId(id);
                 setProposalId(null);
                 setProposalLocalId(null);
-                loadCustomerDeskData(id, cust);
+                if (wasEditingSavedProposal || !id) {
+                  setProposalSubject('');
+                  itemsRef.current = [];
+                  setItems([]);
+                  loadCustomerDeskData(id, cust, []);
+                } else {
+                  loadCustomerDeskData(id, cust);
+                }
               }}
               placeholder="🔍 Selecionar cliente (nome ou CNPJ)..."
             />
           </div>
+
+          {/* 2. Campo Assunto compacto entre o Cliente e o botão Importar Pedido */}
+          <div className="w-full sm:w-44 lg:w-52 xl:w-60 min-w-0 shrink">
+            <input
+              id="proposal-subject-input"
+              type="text"
+              value={proposalSubject}
+              onChange={(e) => setProposalSubject(e.target.value)}
+              placeholder="Assunto (ex: Reposição, Feira)..."
+              title="Assunto / identificação deste orçamento para pesquisar depois"
+              className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1.5 text-xs text-slate-900 dark:text-white font-medium focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none placeholder:text-slate-400"
+            />
+          </div>
         </div>
 
-        {/* Direita: Importar Pedido + Status do Seller + Configurações + Salvar + Novo Orçamento + Ajuda (?) */}
+        {/* Direita: 3. Importar Pedido + Status do Seller + Configurações + Salvar + Novo Orçamento + Ajuda (?) */}
         <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           
           {/* Botão de Toggle da Gaveta de Origem / Leitura de Pedidos */}
@@ -2305,7 +2339,6 @@ export default function ProposalsDeskPage() {
           >
             <Sparkles className="h-3.5 w-3.5 shrink-0" />
             <span>Importar Pedido</span>
-            <span className="text-[10px] font-mono opacity-80 hidden 2xl:inline">(Excel / PDF / Texto)</span>
             {isIntakeDrawerOpen ? <ChevronUp className="h-3.5 w-3.5 shrink-0" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0" />}
           </button>
 
@@ -2399,145 +2432,110 @@ export default function ProposalsDeskPage() {
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════ */}
-      {/* 2. BARRA DE DADOS DO CLIENTE, CAMPO ASSUNTO & MINI CARDS EXPANDIDOS */}
+      {/* 2. DADOS CARREGADOS DO CLIENTE + 4 CARDS DE HISTÓRICO ABAIXO        */}
       {/* ═══════════════════════════════════════════════════════════════════ */}
       {!customer ? (
-        <div className="bg-white dark:bg-slate-900 px-4 py-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 shadow-2xs space-y-2.5">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0">
-                {isLoadingCustomerContext ? <RefreshCw className="h-4 w-4 animate-spin text-indigo-600" /> : <Search className="h-4 w-4" />}
-              </div>
-              <div>
-                <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                  {isLoadingCustomerContext ? 'Carregando dados híbridos do cliente (Hórus + Cronuz)...' : 'Selecione um cliente acima para iniciar a análise comercial'}
-                </h2>
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Assim que o cliente for selecionado, os cards de Última Remessa, Venda, Acerto, Devolução e as abas serão preenchidos.
-                </p>
-              </div>
+        <div className="bg-white dark:bg-slate-900 px-3.5 py-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <div className="h-7 w-7 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 flex items-center justify-center shrink-0">
+              {isLoadingCustomerContext ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-indigo-600" /> : <Search className="h-3.5 w-3.5" />}
             </div>
-            <span className="text-[10px] font-mono font-semibold px-2.5 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
-              Aguardando seleção de cliente
-            </span>
+            <div>
+              <h2 className="text-xs font-bold text-slate-800 dark:text-slate-100">
+                {isLoadingCustomerContext
+                  ? 'Carregando dados híbridos do cliente (Hórus + Cronuz)...'
+                  : '1. Selecione o cliente acima ➔ 2. Informe o assunto ➔ 3. Importe o pedido ou faça as análises nas abas'}
+              </h2>
+            </div>
           </div>
-
-          {/* Campo Assunto abaixo da identificação do cliente */}
-          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
-            <label htmlFor="proposal-subject-empty" className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 shrink-0">
-              Assunto:
-            </label>
-            <input
-              id="proposal-subject-empty"
-              type="text"
-              value={proposalSubject}
-              onChange={(e) => setProposalSubject(e.target.value)}
-              placeholder="Escreva o assunto / identificação deste orçamento (pode ser pesquisado depois na lista de propostas)..."
-              className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 text-xs text-slate-800 dark:text-slate-100 focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none"
-            />
-          </div>
+          <span className="text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 shrink-0">
+            Aguardando cliente
+          </span>
         </div>
       ) : (
-        <div className="space-y-2">
-          {/* Faixa do Cliente + Campo Assunto logo abaixo */}
-          <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-2 text-xs">
-            <div className="flex flex-wrap items-center justify-between gap-y-2">
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Cliente:</span>
-                  <span className="truncate max-w-[200px] sm:max-w-xs">{customer.corporate_name || customer.name}</span>
-                  {isLoadingCustomerContext && (
-                    <RefreshCw className="h-3 w-3 animate-spin text-indigo-600 ml-1" />
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">CNPJ:</span>
-                  <span>{customer.document}</span>
-                </div>
-
-                <div className="flex items-center gap-1 text-[11px] text-indigo-700 dark:text-indigo-400 font-medium">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">Apelido:</span>
-                  <span className="truncate max-w-[150px]">{customer.nickname || customer.name}</span>
-                </div>
-
-                <div className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800">
-                  <Scale className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
-                  <span className="text-[10px] font-bold uppercase text-indigo-900 dark:text-indigo-300">Ped. Mín:</span>
-                  <span className="font-bold text-indigo-950 dark:text-white font-mono">
-                    {customer.minOrderValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                  </span>
-                  <span className={`text-[9px] font-black px-1 rounded ${
-                    summary.minOrderReached ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
-                  }`}>
-                    {summary.minOrderReached ? '✓ OK' : 'PENDENTE'}
-                  </span>
-                </div>
+        <div className="space-y-1.5">
+          {/* Card de Identificação do Cliente */}
+          <div className="bg-white dark:bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-y-1.5 text-xs">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+              <div className="flex items-center gap-1.5 font-bold text-slate-900 dark:text-white">
+                <span className="text-[10px] uppercase font-bold text-slate-400">Cliente:</span>
+                <span className="truncate max-w-[220px] sm:max-w-xs">{customer.corporate_name || customer.name}</span>
+                {isLoadingCustomerContext && (
+                  <RefreshCw className="h-3 w-3 animate-spin text-indigo-600 ml-1" />
+                )}
               </div>
 
-              <div className="flex items-center gap-2">
-                {proposalId && (
-                  <button
-                    type="button"
-                    disabled={isLoadingCustomerContext || isLoadingCatalog}
-                    onClick={() => loadCustomerDeskData(customer.id, customer, items.filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder))}
-                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 transition-colors disabled:opacity-50"
-                    title="Recalcular saldos e métricas deste orçamento diretamente no Hórus"
-                  >
-                    <RefreshCw className={`h-3 w-3 ${isLoadingCustomerContext || isLoadingCatalog ? 'animate-spin' : ''}`} />
-                    <span>Recalcular Hórus</span>
-                  </button>
-                )}
+              <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600 dark:text-slate-400">
+                <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">CNPJ:</span>
+                <span>{customer.document}</span>
+              </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowHistoryCards(!showHistoryCards)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors border border-slate-300 dark:border-slate-700 shadow-2xs"
-                  title={showHistoryCards ? "Recolher cards para dar espaço total à grade" : "Expandir cards de histórico"}
-                >
-                  {showHistoryCards ? <EyeOff className="h-3.5 w-3.5 text-slate-500" /> : <Eye className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />}
-                  <span>{showHistoryCards ? "Ocultar Cards (Foco na Grade)" : "Exibir Cards de Histórico"}</span>
-                </button>
+              <div className="flex items-center gap-1 text-[11px] text-indigo-700 dark:text-indigo-400 font-medium">
+                <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">Apelido:</span>
+                <span className="truncate max-w-[150px]">{customer.nickname || customer.name}</span>
+              </div>
 
-                <div className="text-[11px] text-slate-400 font-medium hidden lg:block">
-                  {customer.city} / {customer.state} • Cód. #{customer.horus_cod_cli} • {customer.paymentCondition}
-                </div>
+              <div className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded-lg border border-indigo-200 dark:border-indigo-800">
+                <Scale className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+                <span className="text-[10px] font-bold uppercase text-indigo-900 dark:text-indigo-300">Ped. Mín:</span>
+                <span className="font-bold text-indigo-950 dark:text-white font-mono">
+                  {customer.minOrderValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </span>
+                <span className={`text-[9px] font-black px-1 rounded ${
+                  summary.minOrderReached ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
+                }`}>
+                  {summary.minOrderReached ? '✓ OK' : 'PENDENTE'}
+                </span>
               </div>
             </div>
 
-            {/* Linha Abaixo do Cliente: Campo Assunto Pesquisável */}
-            <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
-              <label htmlFor="proposal-subject-input" className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 shrink-0">
-                Assunto:
-              </label>
-              <input
-                id="proposal-subject-input"
-                type="text"
-                value={proposalSubject}
-                onChange={(e) => setProposalSubject(e.target.value)}
-                placeholder="Escreva o assunto / identificação deste orçamento para pesquisar depois (ex: Reposição Mensal, Feira, Campanha)..."
-                className="flex-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 px-2.5 py-1 text-xs text-slate-900 dark:text-white font-medium focus:border-indigo-500 focus:bg-white dark:focus:bg-slate-900 focus:outline-none"
-              />
+            <div className="flex items-center gap-2">
+              {proposalId && (
+                <button
+                  type="button"
+                  disabled={isLoadingCustomerContext || isLoadingCatalog}
+                  onClick={() => loadCustomerDeskData(customer.id, customer, items.filter(it => it.tabCategory === 'pedido' || it.isAddedToOrder))}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 border border-indigo-200 dark:border-indigo-800 transition-colors disabled:opacity-50"
+                  title="Recalcular saldos e métricas deste orçamento diretamente no Hórus"
+                >
+                  <RefreshCw className={`h-3 w-3 ${isLoadingCustomerContext || isLoadingCatalog ? 'animate-spin' : ''}`} />
+                  <span>Recalcular Hórus</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setShowHistoryCards(!showHistoryCards)}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-bold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors border border-slate-300 dark:border-slate-700 shadow-2xs"
+                title={showHistoryCards ? "Recolher cards para dar espaço total à grade" : "Expandir cards de histórico"}
+              >
+                {showHistoryCards ? <EyeOff className="h-3 w-3 text-slate-500" /> : <Eye className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />}
+                <span>{showHistoryCards ? "Ocultar Cards" : "Exibir Cards"}</span>
+              </button>
+
+              <div className="text-[11px] text-slate-400 font-medium hidden lg:block">
+                {customer.city} / {customer.state} • Cód. #{customer.horus_cod_cli} • {customer.paymentCondition}
+              </div>
             </div>
           </div>
 
-          {/* 4 Cards de Histórico de Operações */}
+          {/* 4 Cards de Histórico de Operações logo abaixo do card do cliente */}
           {showHistoryCards ? (
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 animate-in fade-in duration-200">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 animate-in fade-in duration-200">
               
               {/* Card Remessa */}
-              <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between hover:border-indigo-400 transition-colors">
-                <div className="flex items-center justify-between gap-1.5 mb-1.5">
+              <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-between hover:border-indigo-400 transition-colors">
+                <div className="flex items-center justify-between gap-1.5 mb-1">
                   <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1.5">
                     <Package className="h-3.5 w-3.5" />
                     Última Remessa
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-xs text-indigo-950 dark:text-indigo-200 shadow-2xs">
-                    <Calendar className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 font-mono font-bold text-[11px] text-indigo-950 dark:text-indigo-200">
+                    <Calendar className="h-2.5 w-2.5 text-indigo-600 dark:text-indigo-400" />
                     {operationsMetrics.remessa.date}
                   </span>
                 </div>
-                <div className="flex items-baseline justify-between pt-0.5">
+                <div className="flex items-baseline justify-between">
                   <span className="text-sm font-black font-mono text-slate-900 dark:text-white">
                     {operationsMetrics.remessa.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </span>
@@ -2548,18 +2546,18 @@ export default function ProposalsDeskPage() {
               </div>
 
               {/* Card Venda */}
-              <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between hover:border-emerald-400 transition-colors">
-                <div className="flex items-center justify-between gap-1.5 mb-1.5">
+              <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-between hover:border-emerald-400 transition-colors">
+                <div className="flex items-center justify-between gap-1.5 mb-1">
                   <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
                     <DollarSign className="h-3.5 w-3.5" />
                     Última Venda
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 font-mono font-bold text-xs text-emerald-950 dark:text-emerald-200 shadow-2xs">
-                    <Calendar className="h-3 w-3 text-emerald-600 dark:text-emerald-400" />
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 font-mono font-bold text-[11px] text-emerald-950 dark:text-emerald-200">
+                    <Calendar className="h-2.5 w-2.5 text-emerald-600 dark:text-emerald-400" />
                     {operationsMetrics.venda.date}
                   </span>
                 </div>
-                <div className="flex items-baseline justify-between pt-0.5">
+                <div className="flex items-baseline justify-between">
                   <span className="text-sm font-black font-mono text-emerald-700 dark:text-emerald-400">
                     {operationsMetrics.venda.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </span>
@@ -2570,18 +2568,18 @@ export default function ProposalsDeskPage() {
               </div>
 
               {/* Card Acerto */}
-              <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between hover:border-sky-400 transition-colors">
-                <div className="flex items-center justify-between gap-1.5 mb-1.5">
+              <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-between hover:border-sky-400 transition-colors">
+                <div className="flex items-center justify-between gap-1.5 mb-1">
                   <span className="text-xs font-bold text-sky-700 dark:text-sky-400 flex items-center gap-1.5">
                     <Scale className="h-3.5 w-3.5" />
                     Último Acerto
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 font-mono font-bold text-xs text-sky-950 dark:text-sky-200 shadow-2xs">
-                    <Calendar className="h-3 w-3 text-sky-600 dark:text-sky-400" />
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-sky-50 dark:bg-sky-950/60 border border-sky-200 dark:border-sky-800 font-mono font-bold text-[11px] text-sky-950 dark:text-sky-200">
+                    <Calendar className="h-2.5 w-2.5 text-sky-600 dark:text-sky-400" />
                     {operationsMetrics.acerto.date}
                   </span>
                 </div>
-                <div className="flex items-baseline justify-between pt-0.5">
+                <div className="flex items-baseline justify-between">
                   <span className="text-sm font-black font-mono text-slate-900 dark:text-white">
                     {operationsMetrics.acerto.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </span>
@@ -2592,18 +2590,18 @@ export default function ProposalsDeskPage() {
               </div>
 
               {/* Card Devolução */}
-              <div className="bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between hover:border-amber-400 transition-colors">
-                <div className="flex items-center justify-between gap-1.5 mb-1.5">
+              <div className="bg-white dark:bg-slate-900 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col justify-between hover:border-amber-400 transition-colors">
+                <div className="flex items-center justify-between gap-1.5 mb-1">
                   <span className="text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
                     <RotateCcw className="h-3.5 w-3.5" />
                     Última Devolução
                   </span>
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 font-mono font-bold text-xs text-amber-950 dark:text-amber-200 shadow-2xs">
-                    <Calendar className="h-3 w-3 text-amber-600 dark:text-amber-400" />
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded-md bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 font-mono font-bold text-[11px] text-amber-950 dark:text-amber-200">
+                    <Calendar className="h-2.5 w-2.5 text-amber-600 dark:text-amber-400" />
                     {operationsMetrics.devolucao.date}
                   </span>
                 </div>
-                <div className="flex items-baseline justify-between pt-0.5">
+                <div className="flex items-baseline justify-between">
                   <span className="text-sm font-black font-mono text-slate-900 dark:text-white">
                     {operationsMetrics.devolucao.totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </span>
