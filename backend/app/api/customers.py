@@ -122,22 +122,30 @@ def read_customers(
     query = query.outerjoin(last_orders_subq, Customer.id == last_orders_subq.c.customer_id)
 
     if search:
-        search_term = f"%{search}%"
-        if search.isdigit():
-            query = query.filter(
-                (Customer.id == int(search)) |
-                (Customer.horus_cod_cli == int(search)) |
-                (Customer.horus_cod_fornecedor == int(search)) |
-                (Customer.name.ilike(search_term)) | 
-                (Customer.document.ilike(search_term)) |
-                (Customer.corporate_name.ilike(search_term))
-            )
-        else:
-            query = query.filter(
-                (Customer.name.ilike(search_term)) | 
-                (Customer.document.ilike(search_term)) |
-                (Customer.corporate_name.ilike(search_term))
-            )
+        import re
+        from sqlalchemy import or_
+        raw_search = search.strip()
+        search_term = f"%{raw_search}%"
+        clean_digits = re.sub(r'\D', '', raw_search)
+        conditions = [
+            Customer.name.ilike(search_term),
+            Customer.document.ilike(search_term),
+            Customer.corporate_name.ilike(search_term),
+            Customer.phone.ilike(search_term),
+        ]
+        if clean_digits and clean_digits != raw_search:
+            digits_term = f"%{clean_digits}%"
+            conditions.append(Customer.document.ilike(digits_term))
+            conditions.append(Customer.phone.ilike(digits_term))
+        if raw_search.isdigit():
+            num_val = int(raw_search)
+            if num_val <= 2147483647:
+                conditions.extend([
+                    Customer.id == num_val,
+                    Customer.horus_cod_cli == num_val,
+                    Customer.horus_cod_fornecedor == num_val,
+                ])
+        query = query.filter(or_(*conditions))
 
     # Order by alphabetical name
     query = query.order_by(Customer.name.asc())

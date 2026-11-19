@@ -9,6 +9,7 @@ class Backorder(Base):
     id = Column(Integer, primary_key=True, index=True)
     company_id = Column(Integer, ForeignKey("cmp_company.id", ondelete="CASCADE"), nullable=False, index=True)
     customer_id = Column(Integer, ForeignKey("crm_customer.id", ondelete="SET NULL"), nullable=True, index=True)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="SET NULL"), nullable=True, index=True)
 
     isbn = Column(String(30), nullable=False, index=True)
     title = Column(String(255), nullable=False)
@@ -36,5 +37,6 @@ class Backorder(Base):
     # Relacionamentos com foreign_keys explícitas
     company = relationship("Company", foreign_keys=[company_id])
     customer = relationship("Customer", foreign_keys=[customer_id])
+    product = relationship("Product", foreign_keys=[product_id])
     supplier = relationship("BookinfoSupplier", foreign_keys=[suggested_supplier_id])
     creator = relationship("User", foreign_keys=[created_by])

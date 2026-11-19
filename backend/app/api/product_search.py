@@ -15,17 +15,21 @@ Regras:
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 import logging
+import re
+import time
 
 from app.db.session import get_db, SessionLocal
 from app.core.dependencies import get_current_user
 from app.models.user import User
 from app.models.company import Company
+from app.models.product import Product
 from app.models.seller_branch import SellerBranch
 from app.models.product_address import ProductAddress
 from app.models.company_settings import CompanySettings
 from app.models.product_search_log import ProductSearchLog
+from app.schemas.backorder import QuickProductCreate
 from app.integrators.horus_product_search import HorusProductSearch
 
 _logger = logging.getLogger("cronuz.product_search")
@@ -82,8 +86,190 @@ def _record_search_log(
         _logger.warning("Falha ao gravar log de busca de produto: %s", e)
 
 
+def ensure_cronuz_product_record(
+    db: Session,
+    company_id: int,
+    isbn: str,
+    title: str,
+    publisher: Optional[str] = None,
+    author: Optional[str] = None,
+    unit_price: float = 0.0,
+    cover_url: Optional[str] = None,
+    synopsis: Optional[str] = None,
+    horus_cod_item: Optional[int] = None,
+    product_id: Optional[int] = None,
+) -> Tuple[Product, bool, Optional[int]]:
+    """
+    Garante que o item exista em `prd_product` (pré-cadastro no Cronuz se ainda não existir no Hórus,
+    ou espelhado/vinculado se já existir no Hórus) sem duplicidades.
+    Retorna: (product, has_erp_registration, effective_horus_cod_item).
+    """
+    raw_isbn = (isbn or "").strip()
+    clean_isbn = re.sub(r"[^0-9Xx]", "", raw_isbn).upper()
+    cod_int = int(horus_cod_item) if horus_cod_item and int(horus_cod_item) > 0 else None
+
+    existing: Optional[Product] = None
+    if product_id:
+        existing = (
+            db.query(Product)
+            .filter(Product.id == product_id, Product.company_id == company_id)
+            .first()
+        )
+
+    if not existing:
+        match_filters = []
+        if cod_int:
+            match_filters.append(Product.horus_cod_item == cod_int)
+            match_filters.append(Product.sku == str(cod_int))
+        if clean_isbn:
+            match_filters.extend([
+                Product.ean_gtin == clean_isbn,
+                Product.barcode == clean_isbn,
+                Product.sku == clean_isbn,
+            ])
+        if raw_isbn and raw_isbn != clean_isbn:
+            match_filters.extend([
+                Product.ean_gtin == raw_isbn,
+                Product.sku == raw_isbn,
+            ])
+        if match_filters:
+            existing = (
+                db.query(Product)
+                .filter(Product.company_id == company_id, or_(*match_filters))
+                .first()
+            )
+
+    if existing:
+        effective_cod = existing.horus_cod_item or cod_int
+        if cod_int and not existing.horus_cod_item:
+            existing.horus_cod_item = cod_int
+        if cover_url and not existing.cover_url:
+            existing.cover_url = cover_url[:500]
+        if publisher and not existing.brand:
+            existing.brand = publisher.strip()[:100]
+        if author and not existing.model:
+            existing.model = author.strip()[:100]
+        if unit_price and float(unit_price) > 0 and float(existing.base_price or 0) == 0:
+            existing.base_price = float(unit_price)
+        db.flush()
+        return existing, bool(effective_cod), effective_cod
+
+    effective_isbn = (clean_isbn or raw_isbn)[:50] or None
+    if cod_int:
+        sku_val = str(cod_int)
+        status_label = "SINCRONIZADO HÓRUS"
+    else:
+        sku_val = (clean_isbn or raw_isbn or f"PRE-{int(time.time())}")[:100]
+        status_label = "PRÉ-CADASTRO (SEM HÓRUS)"
+
+    new_prod = Product(
+        company_id=company_id,
+        sku=sku_val,
+        name=(title or "Obra sob Encomenda").strip()[:255],
+        short_description=synopsis.strip()[:400] if synopsis else None,
+        long_description=synopsis.strip() if synopsis else None,
+        base_price=max(0.0, float(unit_price or 0.0)),
+        brand=publisher.strip()[:100] if publisher else None,
+        model=author.strip()[:100] if author else None,
+        ean_gtin=effective_isbn,
+        barcode=effective_isbn,
+        status="ACTIVE",
+        stock_quantity=0,
+        allow_purchase=False,
+        stock_status_label=status_label,
+        cover_url=cover_url.strip()[:500] if cover_url else None,
+        horus_cod_item=cod_int,
+    )
+    db.add(new_prod)
+    db.flush()
+    return new_prod, bool(cod_int), cod_int
+
+
+def _search_local_cronuz_products(
+    db: Session,
+    company_id: int,
+    term: str,
+    search_option: str,
+    limit: int,
+    cover_base_url: Optional[str],
+    cover_secondary_base_url: Optional[str],
+    exclude_horus_codes: set,
+    exclude_isbns: set,
+) -> list:
+    raw_term = term.strip()
+    if not raw_term:
+        return []
+    clean_isbn = re.sub(r"[^0-9Xx]", "", raw_term).upper()
+    like_term = f"%{raw_term}%"
+
+    q = db.query(Product).filter(Product.company_id == company_id, Product.status != "INACTIVE")
+
+    if search_option == "BARRAS_ISBN":
+        conds = [
+            Product.ean_gtin.ilike(like_term),
+            Product.barcode.ilike(like_term),
+            Product.sku.ilike(like_term),
+        ]
+        if clean_isbn and clean_isbn != raw_term:
+            conds.extend([
+                Product.ean_gtin == clean_isbn,
+                Product.barcode == clean_isbn,
+                Product.sku == clean_isbn,
+            ])
+        q = q.filter(or_(*conds))
+    elif search_option == "COD_ITEM":
+        conds = [Product.sku == raw_term]
+        if raw_term.isdigit() and int(raw_term) <= 2147483647:
+            num_id = int(raw_term)
+            conds.extend([Product.id == num_id, Product.horus_cod_item == num_id])
+        q = q.filter(or_(*conds))
+    else:  # NOME
+        q = q.filter(
+            or_(
+                Product.name.ilike(like_term),
+                Product.brand.ilike(like_term),
+                Product.model.ilike(like_term),
+                Product.ean_gtin.ilike(like_term),
+                Product.sku.ilike(like_term),
+            )
+        )
+
+    local_rows = q.limit(limit).all()
+    results = []
+    for p in local_rows:
+        if p.horus_cod_item and int(p.horus_cod_item) in exclude_horus_codes:
+            continue
+        p_isbn = (p.ean_gtin or p.barcode or p.sku or "").strip()
+        p_clean = re.sub(r"[^0-9Xx]", "", p_isbn).upper()
+        if p_clean and p_clean in exclude_isbns:
+            continue
+
+        primary_cover = p.cover_url or _build_cover_url(cover_base_url, p_isbn)
+        secondary_cover = _build_cover_url(cover_secondary_base_url, p_isbn)
+        has_horus = bool(p.horus_cod_item)
+
+        results.append({
+            "COD_ITEM": p.horus_cod_item or p.id,
+            "product_id": p.id,
+            "COD_BARRA_ITEM": p_isbn,
+            "COD_ISBN_ITEM": p_isbn,
+            "NOM_ITEM": p.name,
+            "NOM_EDITORA": p.brand,
+            "DES_AUTOR": p.model,
+            "VLR_CAPA": float(p.base_price or 0.0),
+            "SALDO_DISPONIVEL": int(p.stock_quantity or 0),
+            "DESC_SINOPSE": p.long_description or p.short_description,
+            "COVER_URL": primary_cover or secondary_cover,
+            "COVER_SECONDARY_URL": secondary_cover,
+            "has_erp_registration": has_horus,
+            "horus_cod_item": p.horus_cod_item,
+            "badge_warning": None if has_horus else "Pré-cadastro no Cronuz — Sem cadastro no ERP Hórus",
+        })
+    return results
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-# 1. Busca de Produto
+# 1. Busca Inteligente de Produto (ERP Hórus + Catálogo Pré-Cadastro Cronuz)
 # ──────────────────────────────────────────────────────────────────────────────
 @router.get("/product")
 async def search_product(
@@ -102,141 +288,186 @@ async def search_product(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Busca produto(s) no Horus via endpoint `Busca_Acervo` (padrão, sem B2B).
-
-    Retorna lista de produtos com dados gerais (nome, ISBN, preço de capa,
-    saldo geral, situação, sinopse etc.) + URL da capa montada via
-    cover_image_base_url configurado no seller.
-    
-    Grava log analítico da consulta em background para relatórios de produtos mais buscados.
-    """
     if search_option not in _VALID_SEARCH_OPTIONS:
         raise HTTPException(
             status_code=400,
             detail=f"search_option inválido. Use: {', '.join(_VALID_SEARCH_OPTIONS)}",
         )
 
-    if not current_user.company_id:
-        raise HTTPException(status_code=400, detail="Usuário sem empresa vinculada.")
+    company_id = current_user.company_id or 1
 
-    # Lê URL base de capas configurada pelo seller (primária e secundária)
     settings = db.query(CompanySettings).filter(
-        CompanySettings.company_id == current_user.company_id
+        CompanySettings.company_id == company_id
     ).first()
     cover_base_url: Optional[str] = settings.cover_image_base_url if settings else None
     cover_secondary_base_url: Optional[str] = settings.cover_image_secondary_base_url if settings else None
 
-    try:
-        client = HorusProductSearch(db, current_user.company_id)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    raw: Any = None
+    horus_warning: Optional[str] = None
 
     try:
-        raw = await client.busca_acervo(
-            term=term,
-            search_option=search_option,
-            offset=offset,
-            limit=limit,
-        )
+        client = HorusProductSearch(db, company_id)
+        try:
+            raw = await client.busca_acervo(
+                term=term,
+                search_option=search_option,
+                offset=offset,
+                limit=limit,
+            )
+        finally:
+            await client.close()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Erro ao consultar Horus: {str(e)}")
-    finally:
-        await client.close()
+        horus_warning = str(e)
+        _logger.info("[ProductSearch] Consulta Hórus indisponível/não configurada (%s) — usando catálogo Cronuz.", e)
 
-    # Normalização: injeta a URL da capa em cada item
+    items = []
+    seen_horus_codes = set()
+    seen_isbns = set()
+
+    raw_list = []
+    if isinstance(raw, list):
+        if len(raw) > 0 and isinstance(raw[0], dict) and (raw[0].get("Falha") or raw[0].get("FALHA") == "S"):
+            raw_list = []
+        else:
+            raw_list = [r for r in raw if isinstance(r, dict)]
+    elif isinstance(raw, dict):
+        if not (raw.get("Falha") or raw.get("FALHA") == "S"):
+            raw_list = [raw]
+
+    # Cruza em lote com prd_product para obter product_id caso já espelhado no Cronuz
+    horus_codes_batch = []
+    for r in raw_list:
+        c_val = r.get("COD_ITEM")
+        if str(c_val or "").isdigit():
+            horus_codes_batch.append(int(c_val))
+
+    local_by_horus = {}
+    if horus_codes_batch:
+        for lp in db.query(Product.id, Product.horus_cod_item, Product.cover_url).filter(
+            Product.company_id == company_id,
+            Product.horus_cod_item.in_(horus_codes_batch),
+        ).all():
+            if lp.horus_cod_item:
+                local_by_horus[int(lp.horus_cod_item)] = (lp.id, lp.cover_url)
+
+    for item in raw_list:
+        cod_barra = item.get("COD_BARRA_ITEM") or item.get("BARRAS_ISBN")
+        c_raw = item.get("COD_ITEM")
+        c_int = int(c_raw) if str(c_raw or "").isdigit() else None
+        if c_int:
+            seen_horus_codes.add(c_int)
+        if cod_barra:
+            c_isbn = re.sub(r"[^0-9Xx]", "", str(cod_barra)).upper()
+            if c_isbn:
+                seen_isbns.add(c_isbn)
+
+        local_info = local_by_horus.get(c_int) if c_int else None
+        primary_cover = (local_info[1] if local_info and local_info[1] else None) or _build_cover_url(cover_base_url, cod_barra)
+        secondary_cover = _build_cover_url(cover_secondary_base_url, cod_barra)
+        item["COVER_URL"] = primary_cover or secondary_cover
+        item["COVER_SECONDARY_URL"] = secondary_cover
+        item["has_erp_registration"] = True
+        item["horus_cod_item"] = c_int
+        item["product_id"] = local_info[0] if local_info else None
+        items.append(item)
+
+    # Complementa com produtos pré-cadastrados no Cronuz (incluindo os que ainda não estão no Hórus)
+    local_extra = _search_local_cronuz_products(
+        db=db,
+        company_id=company_id,
+        term=term,
+        search_option=search_option,
+        limit=limit,
+        cover_base_url=cover_base_url,
+        cover_secondary_base_url=cover_secondary_base_url,
+        exclude_horus_codes=seen_horus_codes,
+        exclude_isbns=seen_isbns,
+    )
+    items.extend(local_extra)
+
+    total_found = len(items)
     matched_cod_item: Optional[int] = None
     matched_isbn: Optional[str] = None
     matched_name: Optional[str] = None
-    total_found = 0
 
-    if isinstance(raw, list):
-        if len(raw) > 0 and isinstance(raw[0], dict):
-            first = raw[0]
-            if first.get("Falha") or first.get("FALHA") == "S":
-                raise HTTPException(
-                    status_code=400,
-                    detail=first.get("Mensagem", "Nenhum produto localizado no Horus."),
-                )
-        items = []
-        for item in raw:
-            if isinstance(item, dict):
-                cod_barra = item.get("COD_BARRA_ITEM") or item.get("BARRAS_ISBN")
-                primary_cover = _build_cover_url(cover_base_url, cod_barra)
-                secondary_cover = _build_cover_url(cover_secondary_base_url, cod_barra)
-                item["COVER_URL"] = primary_cover or secondary_cover
-                item["COVER_SECONDARY_URL"] = secondary_cover
-            items.append(item)
+    if total_found > 0:
+        first_item = items[0]
+        matched_cod_item = first_item.get("horus_cod_item") or first_item.get("COD_ITEM")
+        matched_isbn = first_item.get("COD_BARRA_ITEM") or first_item.get("BARRAS_ISBN")
+        matched_name = first_item.get("NOM_ITEM")
 
-        total_found = len(items)
-        if total_found > 0:
-            first_item = items[0]
-            matched_cod_item = first_item.get("COD_ITEM")
-            matched_isbn = first_item.get("COD_BARRA_ITEM") or first_item.get("BARRAS_ISBN")
-            matched_name = first_item.get("NOM_ITEM")
-
-        # Dispara gravação de log analítico em background
-        background_tasks.add_task(
-            _record_search_log,
-            company_id=current_user.company_id,
-            user_id=current_user.id,
-            term=term,
-            search_option=search_option,
-            source=source,
-            matched_cod_item=matched_cod_item,
-            matched_isbn=matched_isbn,
-            matched_name=matched_name,
-            total_results=total_found,
-        )
-
-        return {"items": items, "total": total_found}
-
-    if isinstance(raw, dict):
-        if raw.get("Falha"):
-            raise HTTPException(
-                status_code=400,
-                detail=raw.get("Mensagem", "Nenhum produto localizado no Horus."),
-            )
-        cod_barra = raw.get("COD_BARRA_ITEM") or raw.get("BARRAS_ISBN")
-        primary_cover = _build_cover_url(cover_base_url, cod_barra)
-        secondary_cover = _build_cover_url(cover_secondary_base_url, cod_barra)
-        raw["COVER_URL"] = primary_cover or secondary_cover
-        raw["COVER_SECONDARY_URL"] = secondary_cover
-
-        matched_cod_item = raw.get("COD_ITEM")
-        matched_isbn = cod_barra
-        matched_name = raw.get("NOM_ITEM")
-
-        background_tasks.add_task(
-            _record_search_log,
-            company_id=current_user.company_id,
-            user_id=current_user.id,
-            term=term,
-            search_option=search_option,
-            source=source,
-            matched_cod_item=matched_cod_item,
-            matched_isbn=matched_isbn,
-            matched_name=matched_name,
-            total_results=1,
-        )
-
-        return {"items": [raw], "total": 1}
-
-    # Nenhum resultado
     background_tasks.add_task(
         _record_search_log,
-        company_id=current_user.company_id,
+        company_id=company_id,
         user_id=current_user.id,
         term=term,
         search_option=search_option,
         source=source,
-        matched_cod_item=None,
-        matched_isbn=None,
-        matched_name=None,
-        total_results=0,
+        matched_cod_item=matched_cod_item if str(matched_cod_item or "").isdigit() else None,
+        matched_isbn=matched_isbn,
+        matched_name=matched_name,
+        total_results=total_found,
     )
 
-    return {"items": [], "total": 0}
+    resp: dict = {"items": items, "total": total_found}
+    if horus_warning and total_found == 0:
+        resp["horus_warning"] = horus_warning
+    return resp
+
+
+@router.post("/quick-create-product")
+def quick_create_product(
+    payload: QuickProductCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Realiza o Pré-Cadastro imediato de uma obra no catálogo do Cronuz (`prd_product`)
+    sinalizando explicitamente quando ainda NÃO possui cadastro no ERP Hórus (`horus_cod_item = None`),
+    permitindo amarrar encomendas e solicitar compras futuras sem perder o atendimento.
+    """
+    company_id = current_user.company_id or 1
+    if not payload.isbn.strip() or not payload.title.strip():
+        raise HTTPException(status_code=400, detail="ISBN e Título são obrigatórios para o pré-cadastro.")
+
+    price_val = float(payload.market_cover_price or payload.price_estimated or 0.0)
+    prod, has_horus, effective_cod = ensure_cronuz_product_record(
+        db=db,
+        company_id=company_id,
+        isbn=payload.isbn,
+        title=payload.title,
+        publisher=payload.publisher,
+        author=payload.author,
+        unit_price=price_val,
+        cover_url=payload.cover_url,
+        synopsis=payload.synopsis,
+        horus_cod_item=None,
+    )
+    db.commit()
+    db.refresh(prod)
+
+    p_isbn = prod.ean_gtin or prod.barcode or prod.sku
+    return {
+        "message": (
+            f"Obra vinculada ao ERP Hórus #{effective_cod}!"
+            if has_horus
+            else f"Pré-cadastro realizado no Cronuz (#{prod.id}) — marcado como Sem Cadastro no Hórus!"
+        ),
+        "COD_ITEM": effective_cod or prod.id,
+        "product_id": prod.id,
+        "COD_BARRA_ITEM": p_isbn,
+        "COD_ISBN_ITEM": p_isbn,
+        "NOM_ITEM": prod.name,
+        "NOM_EDITORA": prod.brand,
+        "DES_AUTOR": prod.model,
+        "VLR_CAPA": float(prod.base_price or 0.0),
+        "SALDO_DISPONIVEL": int(prod.stock_quantity or 0),
+        "DESC_SINOPSE": prod.long_description or prod.short_description,
+        "COVER_URL": prod.cover_url,
+        "has_erp_registration": has_horus,
+        "horus_cod_item": effective_cod,
+        "badge_warning": None if has_horus else "Pré-cadastro no Cronuz — Sem cadastro no ERP Hórus",
+    }
 
 
 # ──────────────────────────────────────────────────────────────────────────────

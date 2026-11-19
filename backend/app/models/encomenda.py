@@ -51,6 +51,7 @@ class CustomerEncomendaItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     encomenda_id = Column(Integer, ForeignKey("ord_customer_encomenda.id", ondelete="CASCADE"), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="SET NULL"), nullable=True, index=True)
     isbn = Column(String(30), nullable=False, index=True)
     title = Column(String(255), nullable=False)
     publisher = Column(String(150), nullable=True)
@@ -59,6 +60,7 @@ class CustomerEncomendaItem(Base):
     quantity = Column(Integer, nullable=False, default=1)
     unit_price = Column(Numeric(10, 2), nullable=False, default=0.00)
     total_price = Column(Numeric(10, 2), nullable=False, default=0.00)
+    has_erp_registration = Column(Boolean, nullable=False, default=False)
     horus_cod_item = Column(Integer, nullable=True)
 
     # Suprimento / Fornecedor
@@ -70,4 +72,5 @@ class CustomerEncomendaItem(Base):
 
     # Relacionamentos com foreign_keys explícitas
     encomenda = relationship("CustomerEncomenda", back_populates="items", foreign_keys=[encomenda_id])
+    product = relationship("Product", foreign_keys=[product_id])
     supplier = relationship("BookinfoSupplier", foreign_keys=[suggested_supplier_id])

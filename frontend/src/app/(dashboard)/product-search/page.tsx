@@ -72,6 +72,8 @@ type HorusProduct = {
   COVER_URL?: string | null;
   COVER_SECONDARY_URL?: string | null;
   source?: 'HORUS' | 'CRONUZ';
+  product_id?: number | null;
+  horus_cod_item?: number | null;
   has_erp_registration?: boolean;
   badge_warning?: string | null;
   COD_ITEM_CRONUZ?: number;
@@ -311,34 +313,36 @@ export default function ProductSearchPage() {
     const token = getToken();
     const isbn = p.COD_BARRA_ITEM || p.COD_ISBN_ITEM || '';
 
-    // 1. HORUS STOCK: Dispara imediatamente sem bloquear a UI
-    setStockLoading(true);
-    fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}${isbn ? `&isbn=${encodeURIComponent(isbn)}` : ''}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (res) => {
-        if (res.ok) {
-          const data = await res.json();
-          setStockData(data.branches || []);
-          setStockStatus(data.status || 'ok');
-          setStockErrorMessage(data.error_message || null);
-          if (data.status === 'offline') {
-            toast.error('O servidor do Horus não respondeu para as filiais.');
+    // 1. HORUS STOCK: Dispara somente se o item possuir cadastro no ERP Horus
+    if (p.has_erp_registration !== false) {
+      setStockLoading(true);
+      fetch(`${apiUrl}/product-search/stock?cod_item=${p.COD_ITEM}${isbn ? `&isbn=${encodeURIComponent(isbn)}` : ''}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            setStockData(data.branches || []);
+            setStockStatus(data.status || 'ok');
+            setStockErrorMessage(data.error_message || null);
+            if (data.status === 'offline') {
+              toast.error('O servidor do Horus não respondeu para as filiais.');
+            }
+          } else {
+            setStockStatus('offline');
+            setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
+            toast.error('Falha de conexão ao consultar estoque no Horus.');
           }
-        } else {
+        })
+        .catch(() => {
           setStockStatus('offline');
           setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
           toast.error('Falha de conexão ao consultar estoque no Horus.');
-        }
-      })
-      .catch(() => {
-        setStockStatus('offline');
-        setStockErrorMessage('Não foi possível comunicar com o servidor do ERP Horus.');
-        toast.error('Falha de conexão ao consultar estoque no Horus.');
-      })
-      .finally(() => {
-        setStockLoading(false);
-      });
+        })
+        .finally(() => {
+          setStockLoading(false);
+        });
+    }
 
     // 2. FORNECEDORES: Se autoFetchDistributors estiver ligado, busca em segundo plano
     if (autoFetchDistributors && isbn) {
@@ -587,6 +591,8 @@ export default function ProductSearchPage() {
     const existingIndex = encomendaCart.findIndex(it => it.isbn === isbn);
 
     let updated: EncomendaCartItem[];
+    const hasErp = p.has_erp_registration !== undefined ? Boolean(p.has_erp_registration) : !Boolean(p.badge_warning);
+    const horusCod = hasErp && (p.horus_cod_item || p.COD_ITEM) ? Number(p.horus_cod_item || p.COD_ITEM) : undefined;
     if (existingIndex >= 0) {
       updated = [...encomendaCart];
       updated[existingIndex].quantity += customQty;
@@ -599,7 +605,9 @@ export default function ProductSearchPage() {
         cover_url: p.COVER_URL || undefined,
         quantity: customQty,
         unit_price: unitPrice,
-        horus_cod_item: p.COD_ITEM ? Number(p.COD_ITEM) : undefined,
+        product_id: p.product_id || undefined,
+        has_erp_registration: hasErp,
+        horus_cod_item: horusCod,
       };
       updated = [...encomendaCart, newItem];
     }
@@ -627,10 +635,11 @@ export default function ProductSearchPage() {
         isbn,
         title: book.title,
         publisher: book.publisher || book.imprint || undefined,
-        author: book.author || undefined,
+        author: book.authors || book.author || undefined,
         cover_url: book.cover_url || undefined,
         quantity: 1,
         unit_price: unitPrice,
+        has_erp_registration: false,
       };
       updated = [...encomendaCart, newItem];
     }
@@ -676,17 +685,17 @@ export default function ProductSearchPage() {
     setCustomerSearching(true);
     try {
       const token = getToken();
-      const res = await fetch(`${apiUrl}/customers/search?q=${rawDoc}`, {
+      const res = await fetch(`${apiUrl}/customers?search=${encodeURIComponent(rawDoc)}&limit=5`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         const data = await res.json();
         const found = Array.isArray(data) ? data[0] : (data.items ? data.items[0] : null);
         if (found) {
-          setOrderCustomerName(found.name || found.trade_name || '');
-          setOrderCustomerPhone(found.phone || found.mobile_phone || '');
+          setOrderCustomerName(found.name || found.corporate_name || '');
+          setOrderCustomerPhone(found.phone || '');
           setOrderCustomerEmail(found.email || '');
-          toast.info(`Cliente existente localizado: ${found.name || found.trade_name}`);
+          toast.info(`Cliente existente localizado: ${found.name || found.corporate_name}`);
         }
       }
     } catch {}
@@ -1091,7 +1100,11 @@ export default function ProductSearchPage() {
                             )}
                           </div>
                           <span className="text-xs font-mono text-slate-400">
-                            Cód. Horus: <strong className="text-slate-700 dark:text-slate-200">#{product.COD_ITEM}</strong>
+                            {product.has_erp_registration === false ? (
+                              <>Pré-Cadastro Cronuz: <strong className="text-amber-600 dark:text-amber-400">#{product.product_id || product.COD_ITEM}</strong></>
+                            ) : (
+                              <>Cód. Horus: <strong className="text-slate-700 dark:text-slate-200">#{product.COD_ITEM}</strong></>
+                            )}
                           </span>
                         </div>
 
@@ -1180,24 +1193,6 @@ export default function ProductSearchPage() {
                             </p>
                           </div>
                         )}
-
-                        {/* Botão de Ação: Encomenda do Cliente (Independente do Saldo) */}
-                        {moduleEncomendas && (
-                          <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
-                            <button
-                              type="button"
-                              onClick={() => handleAddToCart(product)}
-                              className="w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-700 hover:to-teal-800 text-white text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all cursor-pointer"
-                            >
-                              <Package className="w-4 h-4" />
-                              {encomendaCart.some(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM))) ? (
-                                <>Na Encomenda ({encomendaCart.find(it => it.isbn === (product.COD_BARRA_ITEM || product.COD_ISBN_ITEM || String(product.COD_ITEM)))?.quantity} un) • + Adicionar Outro</>
-                              ) : (
-                                <>📦 Adicionar à Encomenda do Cliente</>
-                              )}
-                            </button>
-                          </div>
-                        )}
                       </div>
                     </div>
                   ) : (
@@ -1228,17 +1223,6 @@ export default function ProductSearchPage() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {product && moduleEncomendas && (
-                          <button
-                            type="button"
-                            onClick={() => handleAddToCart(product)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors cursor-pointer"
-                            title="Adicionar à encomenda do cliente"
-                          >
-                            <Package className="w-3.5 h-3.5" />
-                            <span>+ Encomendar</span>
-                          </button>
-                        )}
                         {product && stockData.length > 0 && (
                           <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">
                             {stockData.length} filial(is)

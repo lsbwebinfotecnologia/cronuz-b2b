@@ -11,12 +11,15 @@ class CustomerEncomendaItemCreate(BaseModel):
     cover_url: Optional[str] = None
     quantity: int = Field(1, ge=1)
     unit_price: Decimal = Field(Decimal("0.00"), ge=0)
+    product_id: Optional[int] = None
+    has_erp_registration: Optional[bool] = None
     horus_cod_item: Optional[int] = None
     suggested_supplier_id: Optional[int] = None
 
 class CustomerEncomendaItemResponse(BaseModel):
     id: int
     encomenda_id: int
+    product_id: Optional[int] = None
     isbn: str
     title: str
     publisher: Optional[str] = None
@@ -25,6 +28,7 @@ class CustomerEncomendaItemResponse(BaseModel):
     quantity: int
     unit_price: Decimal
     total_price: Decimal
+    has_erp_registration: bool = False
     horus_cod_item: Optional[int] = None
     suggested_supplier_id: Optional[int] = None
     status: str
@@ -58,6 +62,9 @@ class CustomerEncomendaCreate(BaseModel):
 class CustomerEncomendaUpdateStatus(BaseModel):
     status: str
     notes: Optional[str] = None
+
+class CustomerEncomendaItemUpdateStatus(BaseModel):
+    status: str
 
 class CustomerEncomendaResponse(BaseModel):
     id: int
@@ -94,9 +101,12 @@ class CustomerEncomendaResponse(BaseModel):
         from_attributes = True
 
 class CustomerEncomendaMetrics(BaseModel):
+    total: int = 0
     total_open: int
     total_ordered: int
     total_received: int
+    total_notified: int = 0
     total_delivered: int
+    total_cancelled: int = 0
     total_items: int
     total_amount: Decimal

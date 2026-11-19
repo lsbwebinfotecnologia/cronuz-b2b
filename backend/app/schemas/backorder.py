@@ -20,6 +20,7 @@ class BackorderCreate(BaseModel):
     quantity: int = Field(1, ge=1)
     cover_url: Optional[str] = None
     price_estimated: Optional[float] = 0.0
+    product_id: Optional[int] = None
     has_erp_registration: bool = False
     horus_cod_item: Optional[int] = None
     origin: str = "BUSCA_PRECO"
@@ -50,6 +51,7 @@ class BackorderResponse(BaseModel):
     id: int
     company_id: int
     customer_id: Optional[int] = None
+    product_id: Optional[int] = None
     customer: Optional[BackorderCustomerBrief] = None
     isbn: str
     title: str

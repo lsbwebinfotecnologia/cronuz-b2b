@@ -1481,7 +1481,7 @@ _REPLENISHMENT_CACHE_LOCK = _threading.Lock()
 _REPLENISHMENT_CACHE_TTL = 45.0
 
 
-def _build_sargable_cfop_in_sql(cfops: tuple | list) -> str:
+def _build_sargable_cfop_in_sql(cfops: Any) -> str:
     """
     Gera lista SQL IN (...) 100% SARGable (compatível com índices do SQL Server sem precisar de REPLACE/LTRIM linha a linha).
     Inclui variações sem pontuação ('5917') e com ponto/vírgula ('5.917', '5,917').
