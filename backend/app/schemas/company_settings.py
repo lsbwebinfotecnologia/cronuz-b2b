@@ -159,6 +159,7 @@ class CompanySettingsBase(BaseModel):
     meli_preset_config: Optional[Dict[str, Any]] = None
 
     stock_alert_threshold: Optional[int] = 0
+    horus_sql_feature_analise_itens: Optional[bool] = False
 
 
 class CompanySettingsUpdate(CompanySettingsBase):

@@ -79,6 +79,7 @@ export default function CompanyModulesPage() {
     conciliador_padrao?: boolean;
     pedidos: boolean;
     dbm?: boolean;
+    analise_itens?: boolean;
   }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
@@ -1265,10 +1266,10 @@ export default function CompanyModulesPage() {
                                 <div className="p-4 flex items-center justify-between gap-3">
                                   <div>
                                     <p className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                                      Horus Direct DBM (Painel Operacional &amp; CRM)
+                                      Horus Direct DBM (Painel Operacional &amp; CRM — Exclusivo EO Editora Olhares)
                                     </p>
                                     <p className="text-[11px] text-slate-500">
-                                      Módulos de comercial, pesquisa de empresas, produtos e tiragens DBM.
+                                      Módulo dedicado à operação exclusiva da EO Editora (Olhares): tiragens, royalties e propostas DBM.
                                     </p>
                                   </div>
                                   <Switch
@@ -1276,6 +1277,28 @@ export default function CompanyModulesPage() {
                                     onClick={() => handleToggleHorusSQLFeature('dbm')}
                                     disabled={togglingHorusFeature !== null}
                                     colorClass="bg-indigo-600"
+                                  />
+                                </div>
+
+                                <div className="p-4 flex items-center justify-between gap-3 bg-emerald-50/40 dark:bg-emerald-950/20">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-emerald-800 dark:text-emerald-300">
+                                        Horus Direct — Análise de Itens (Multi-Filial, Custos, Consignado &amp; Reposição)
+                                      </p>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-emerald-600 text-white">
+                                        MULTI-FILIAL
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-500">
+                                      Análise de estoque e reposição por empresa/filial/local (/logistics/branches), sync em segundo plano, custo médio por filial, consignado enviado e recebido, vendas por período e última entrada de compra/consignação (sem ajustes).
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.analise_itens ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('analise_itens')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-emerald-600"
                                   />
                                 </div>
                               </div>

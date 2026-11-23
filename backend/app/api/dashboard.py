@@ -105,6 +105,7 @@ def get_dashboard_metrics(
     horus_sql_feature_conciliador_padrao = getattr(settings, "horus_sql_feature_conciliador_padrao", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
     horus_sql_feature_dbm = getattr(settings, "horus_sql_feature_dbm", False) if settings else False
+    horus_sql_feature_analise_itens = getattr(settings, "horus_sql_feature_analise_itens", False) if settings else False
     company_logo = getattr(company, "logo", None) if company else None
 
     reconciliation_profiles_enabled = []
@@ -432,6 +433,7 @@ def get_dashboard_metrics(
         "horus_sql_feature_conciliador_padrao": horus_sql_feature_conciliador_padrao,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
         "horus_sql_feature_dbm": horus_sql_feature_dbm,
+        "horus_sql_feature_analise_itens": horus_sql_feature_analise_itens,
         "reconciliation_profiles_enabled": reconciliation_profiles_enabled,
         "company_logo": company_logo,
     }

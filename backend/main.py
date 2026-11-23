@@ -107,6 +107,7 @@ from app.api import school_storefront as school_storefront_api
 from app.models import school as school_models
 from app.api import master_sessions
 from app.api import dbm as dbm_api
+from app.api import horus_analise_itens as horus_analise_itens_api
 from app.api import cafeteria as cafeteria_api
 from app.api import bookinfo_metadata
 from app.api import backorders as backorders_api
@@ -223,6 +224,7 @@ try:
         _conn.execute(_sql_text("ALTER TABLE dbm_proposal ADD COLUMN IF NOT EXISTS desk_snapshot_json JSON"))
         _conn.execute(_sql_text("ALTER TABLE usr_user ADD COLUMN IF NOT EXISTS sidebar_collapsed BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS stock_alert_threshold INTEGER NOT NULL DEFAULT 0"))
+        _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_analise_itens BOOLEAN NOT NULL DEFAULT FALSE"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 
@@ -418,6 +420,7 @@ if _SERVER_ROLE != "horus_api_only":
     app.include_router(school_storefront_api.router)
     app.include_router(master_sessions.router)
     app.include_router(dbm_api.router)
+    app.include_router(horus_analise_itens_api.router)
     app.include_router(cafeteria_api.router)
     app.include_router(cafeteria_api.public_router)
     app.include_router(bookinfo_metadata.router)

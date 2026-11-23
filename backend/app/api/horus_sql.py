@@ -419,6 +419,7 @@ class HorusSQLFeaturesUpdate(BaseModel):
     horus_sql_feature_conciliador_padrao: Optional[bool] = None
     horus_sql_feature_pedidos: Optional[bool] = None
     horus_sql_feature_dbm: Optional[bool] = None
+    horus_sql_feature_analise_itens: Optional[bool] = None
 
 
 @router.get("/companies/{company_id}/horus-sql/features")
@@ -449,6 +450,7 @@ def get_horus_sql_features(
             "conciliador_padrao": getattr(settings, "horus_sql_feature_conciliador_padrao", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
+            "analise_itens": getattr(settings, "horus_sql_feature_analise_itens", False),
         }
     }
 
@@ -493,6 +495,10 @@ def update_horus_sql_features(
         settings.horus_sql_feature_dbm = payload.horus_sql_feature_dbm
         changed = True
 
+    if payload.horus_sql_feature_analise_itens is not None:
+        settings.horus_sql_feature_analise_itens = payload.horus_sql_feature_analise_itens
+        changed = True
+
     if changed:
         # Se alguma feature do Horus SQL foi ativada, garante que usuários Seller com lista restrita enxerguem o módulo
         perms_to_add = []
@@ -500,6 +506,7 @@ def update_horus_sql_features(
             payload.horus_sql_feature_pedidos is True
             or payload.horus_sql_feature_vindi_baixa is True
             or payload.horus_sql_feature_conciliador_padrao is True
+            or payload.horus_sql_feature_analise_itens is True
         ):
             perms_to_add.append("horus_sql")
         if payload.horus_sql_feature_dbm is True:
@@ -531,6 +538,7 @@ def update_horus_sql_features(
             "conciliador_padrao": getattr(settings, "horus_sql_feature_conciliador_padrao", False),
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
+            "analise_itens": getattr(settings, "horus_sql_feature_analise_itens", False),
         }
     }
 
