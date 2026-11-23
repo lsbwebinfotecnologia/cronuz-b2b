@@ -80,6 +80,7 @@ export default function CompanyModulesPage() {
     pedidos: boolean;
     dbm?: boolean;
     analise_itens?: boolean;
+    compras?: boolean;
   }
   const [horusSQLData, setHorusSQLData] = useState<{
     sql_configured: boolean;
@@ -1299,6 +1300,28 @@ export default function CompanyModulesPage() {
                                     onClick={() => handleToggleHorusSQLFeature('analise_itens')}
                                     disabled={togglingHorusFeature !== null}
                                     colorClass="bg-emerald-600"
+                                  />
+                                </div>
+
+                                <div className="p-4 flex items-center justify-between gap-3 bg-indigo-50/40 dark:bg-indigo-950/20 border-t border-slate-100 dark:border-slate-800">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-xs font-bold text-indigo-900 dark:text-indigo-300">
+                                        Horus Direct — Compras &amp; Reposição Multi-Filial (PEDIDOS_COMPRA)
+                                      </p>
+                                      <span className="px-1.5 py-0.5 text-[9px] font-black uppercase rounded bg-indigo-600 text-white">
+                                        COMPRAS AP/AE
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-500">
+                                      Geração de pedidos de compra por filial (AP → AE), dossiê 360° do fornecedor (entradas, consignação, acertos e devoluções), descontos por editora/selo, planilha ISBN+Qtd e conciliação de editora no Horus.
+                                    </p>
+                                  </div>
+                                  <Switch
+                                    active={horusSQLData?.features.compras ?? false}
+                                    onClick={() => handleToggleHorusSQLFeature('compras')}
+                                    disabled={togglingHorusFeature !== null}
+                                    colorClass="bg-indigo-600"
                                   />
                                 </div>
                               </div>

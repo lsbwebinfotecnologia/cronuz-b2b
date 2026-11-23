@@ -160,6 +160,7 @@ class CompanySettingsBase(BaseModel):
 
     stock_alert_threshold: Optional[int] = 0
     horus_sql_feature_analise_itens: Optional[bool] = False
+    horus_sql_feature_compras: Optional[bool] = False
 
 
 class CompanySettingsUpdate(CompanySettingsBase):

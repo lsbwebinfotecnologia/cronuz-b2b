@@ -420,6 +420,7 @@ class HorusSQLFeaturesUpdate(BaseModel):
     horus_sql_feature_pedidos: Optional[bool] = None
     horus_sql_feature_dbm: Optional[bool] = None
     horus_sql_feature_analise_itens: Optional[bool] = None
+    horus_sql_feature_compras: Optional[bool] = None
 
 
 @router.get("/companies/{company_id}/horus-sql/features")
@@ -451,6 +452,7 @@ def get_horus_sql_features(
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
             "analise_itens": getattr(settings, "horus_sql_feature_analise_itens", False),
+            "compras": getattr(settings, "horus_sql_feature_compras", False),
         }
     }
 
@@ -499,6 +501,10 @@ def update_horus_sql_features(
         settings.horus_sql_feature_analise_itens = payload.horus_sql_feature_analise_itens
         changed = True
 
+    if payload.horus_sql_feature_compras is not None:
+        settings.horus_sql_feature_compras = payload.horus_sql_feature_compras
+        changed = True
+
     if changed:
         # Se alguma feature do Horus SQL foi ativada, garante que usuários Seller com lista restrita enxerguem o módulo
         perms_to_add = []
@@ -507,6 +513,7 @@ def update_horus_sql_features(
             or payload.horus_sql_feature_vindi_baixa is True
             or payload.horus_sql_feature_conciliador_padrao is True
             or payload.horus_sql_feature_analise_itens is True
+            or payload.horus_sql_feature_compras is True
         ):
             perms_to_add.append("horus_sql")
         if payload.horus_sql_feature_dbm is True:
@@ -539,6 +546,7 @@ def update_horus_sql_features(
             "pedidos": getattr(settings, "horus_sql_feature_pedidos", False),
             "dbm": getattr(settings, "horus_sql_feature_dbm", False),
             "analise_itens": getattr(settings, "horus_sql_feature_analise_itens", False),
+            "compras": getattr(settings, "horus_sql_feature_compras", False),
         }
     }
 
@@ -625,14 +633,14 @@ def get_items_estoque_geral(
         sql = f"""
             SELECT TOP ({limit})
                 I.COD_ITEM AS cod_item,
-                ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')) AS isbn,
-                I.NOM_ITEM AS nome_item,
-                ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS editora,
+                CAST(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')) AS NVARCHAR(100)) AS isbn,
+                CAST(ISNULL(I.NOM_ITEM, '') AS NVARCHAR(400)) AS nome_item,
+                CAST(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS NVARCHAR(250)) AS editora,
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
                 ISNULL(C.saldo_consignado, 0) AS saldo_consignado,
-                ISNULL(G.NOM_GENERO, '') AS assunto,
-                ISNULL(I.DESC_SINOPSE, '') AS sinopse,
+                CAST(ISNULL(G.NOM_GENERO, '') AS NVARCHAR(250)) AS assunto,
+                CAST(ISNULL(I.DESC_SINOPSE, '') AS NVARCHAR(MAX)) AS sinopse,
                 ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
                 {launch_col_expr} AS data_lancamento
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
@@ -662,14 +670,14 @@ def get_items_estoque_geral(
         sql = f"""
             SELECT 
                 I.COD_ITEM AS cod_item,
-                ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')) AS isbn,
-                I.NOM_ITEM AS nome_item,
-                ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS editora,
+                CAST(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')) AS NVARCHAR(100)) AS isbn,
+                CAST(ISNULL(I.NOM_ITEM, '') AS NVARCHAR(400)) AS nome_item,
+                CAST(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')) AS NVARCHAR(250)) AS editora,
                 ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                 ISNULL(S.saldo_disponivel, 0) AS estoque,
                 ISNULL(C.saldo_consignado, 0) AS saldo_consignado,
-                ISNULL(G.NOM_GENERO, '') AS assunto,
-                ISNULL(I.DESC_SINOPSE, '') AS sinopse,
+                CAST(ISNULL(G.NOM_GENERO, '') AS NVARCHAR(250)) AS assunto,
+                CAST(ISNULL(I.DESC_SINOPSE, '') AS NVARCHAR(MAX)) AS sinopse,
                 ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
                 {launch_col_expr} AS data_lancamento
             FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)

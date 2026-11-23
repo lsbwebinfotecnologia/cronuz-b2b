@@ -218,6 +218,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [horusSqlPedidos, setHorusSqlPedidos] = useState(true);
   const [horusSqlDbm, setHorusSqlDbm] = useState(false);
   const [horusSqlAnaliseItens, setHorusSqlAnaliseItens] = useState(false);
+  const [horusSqlCompras, setHorusSqlCompras] = useState(false);
   const [paymentProvidersEnabled, setPaymentProvidersEnabled] = useState<string[]>([]);
   const [moduloAutoresAtivo, setModuloAutoresAtivo] = useState(false);
   const [hasInventoryModule, setHasInventoryModule] = useState(false);
@@ -381,6 +382,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setHorusSqlPedidos(data.horus_sql_feature_pedidos || false);
                setHorusSqlDbm(data.horus_sql_feature_dbm || false);
                setHorusSqlAnaliseItens(data.horus_sql_feature_analise_itens || false);
+               setHorusSqlCompras(data.horus_sql_feature_compras || false);
                setPaymentProvidersEnabled(Array.isArray(data.payment_providers_enabled) ? data.payment_providers_enabled : []);
                setModuloAutoresAtivo(data.modulo_autores_ativo || false);
                setHasInventoryModule(data.has_inventory_module || false);
@@ -608,10 +610,13 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     if (horusSqlAnaliseItens && canHorusSql) {
       subItems.push({ name: 'Análise Itens', href: '/horus-direct/analise-itens', icon: BarChart3 });
     }
+    if (horusSqlCompras && canHorusSql) {
+      subItems.push({ name: 'Compras (Horus)', href: '/horus-direct/compras', icon: Boxes });
+    }
     if (horusSqlDbm && canDbm) {
       subItems.push({ name: 'DBM (Painel & CRM)', href: '/dbm', icon: LayoutGrid });
     }
-    if (subItems.length === 0 && canHorusSql && !horusSqlPedidos && !horusSqlVindiBaixa && !horusSqlConciliadorPadrao && !horusSqlDbm && !horusSqlAnaliseItens) {
+    if (subItems.length === 0 && canHorusSql && !horusSqlPedidos && !horusSqlVindiBaixa && !horusSqlConciliadorPadrao && !horusSqlDbm && !horusSqlAnaliseItens && !horusSqlCompras) {
       subItems.push({ name: 'Pedidos (Horus)', href: '/horus-direct/pedidos', icon: ShoppingBag });
     }
     if (subItems.length > 0) {

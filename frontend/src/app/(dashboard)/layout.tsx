@@ -12,7 +12,7 @@ export default function DashboardLayout({
 }) {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const pathname = usePathname();
-  const isFullWidthRoute = pathname?.startsWith('/proposals/desk') || pathname?.startsWith('/orders/intake') || pathname?.startsWith('/horus-direct/analise-itens') || pathname?.startsWith('/dbm/products');
+  const isFullWidthRoute = pathname?.startsWith('/proposals/desk') || pathname?.startsWith('/orders/intake') || pathname?.startsWith('/horus-direct/analise-itens') || pathname?.startsWith('/horus-direct/compras') || pathname?.startsWith('/dbm/products');
   const isWideSplitRoute = pathname?.startsWith('/companies/') || pathname?.startsWith('/settings') || pathname?.startsWith('/mercadolivre');
 
   return (

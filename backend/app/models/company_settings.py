@@ -144,6 +144,7 @@ class CompanySettings(Base):
     horus_sql_feature_logistics   = Column(Boolean, nullable=False, default=False)  # Integração com WMS de logística
     horus_sql_feature_dbm         = Column(Boolean, nullable=False, default=False)  # Módulo DBM (Painel Operacional & CRM — Exclusivo EO Editora Olhares)
     horus_sql_feature_analise_itens = Column(Boolean, nullable=False, default=False, server_default="false")  # Módulo Análise de Itens Multi-Filial (Estoque, Custos, Consignado Enviado/Recebido & Reposição)
+    horus_sql_feature_compras = Column(Boolean, nullable=False, default=False, server_default="false")  # Módulo Compras Multi-Filial (PEDIDOS_COMPRA AP/AE, Fornecedores/Editoras/Descontos & Conciliação de Selo)
 
     # ── Horus SQL — Parâmetros Bancários para Borderô Financeiro ─────────────
     horus_banco_forma_pagto = Column(String(50), nullable=True)  # Código forma de pagamento (ex: 01, DIN, CAR)

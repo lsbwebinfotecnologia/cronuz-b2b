@@ -1,0 +1,2949 @@
+"""
+backend/app/api/horus_purchases.py
+----------------------------------
+Módulo Horus Direct -> Compras & Reposição Multi-Filial (/horus-direct/compras).
+Totalmente isolado do DBM exclusivo da EO Editora (Olhares).
+
+Funcionalidades e Regras de Negócio:
+1. Seleção de Filial (/logistics/branches) + Parametrização operacional e template de e-mail por filial.
+2. Busca de Fornecedor na filial selecionada (FORNECEDORES_GERAL) + Dossiê 360° do Fornecedor:
+   - Últimas Entradas de Compra (NF_ENTRADA CFOPs 1101/1102/2101/2102/3102/1401/2401/1403/2403)
+   - Consignação Recebida & Saldo Consignado na Filial (CFOPs 1917/2917 + SALDO_CONSIGNADO_RECEBIDO)
+   - Acertos de Consignação (CFOPs 1113/2113/1114/2114)
+   - Devoluções ao Fornecedor (NF_MESTRE STA_CLI='F' CFOPs 5201/5202/6201/6202/5918/6918/5919/6919)
+   - Últimos Pedidos de Compra no Horus (PEDIDOS_COMPRA)
+3. Governança obrigatória no Cronuz (pur_horus_supplier_discount):
+   - Tabela com CNPJ Fornecedor, Filial, Cód. Grupo/Fornecedor, Cód./Nome Editora (Selo) e Desconto (%).
+   - Bloqueia geração de pedido se o fornecedor não tiver selos/editoras e descontos configurados na filial.
+   - Permite vincular múltiplos selos/editoras de uma só vez ou importar base inicial de EDITORAS_FORNEC.
+4. Conciliação Inteligente de Editora/Selo (Cronuz B2B <-> Horus SQL Server):
+   - Permite atualizar a Editora (COD_EDITORA) de 1 ou múltiplos itens simultaneamente em ITENS_ESTOQUE_GERAL
+     no Horus SQL e em prd_product no Cronuz B2B (usando apenas editoras oficiais já existentes em EDITORA no Horus,
+     NUNCA cadastrando editoras/produtos novos no Horus pelo Cronuz).
+5. Pesquisa de Itens por Filial + Importação de Planilha (.xlsx/.csv <= 10 MB ou colagem ISBN + Quantidade):
+   - Traz Estoque Disponível, Físico, Consignado Recebido/Enviado, Estoque Mínimo, Vendas, Última Entrada e Desconto.
+   - Alerta itens cuja editora não esteja configurada para o fornecedor naquela filial.
+6. Geração Segura em PEDIDOS_COMPRA + ITENS_PEDIDO_COMPRA no Horus SQL:
+   - Nasce como 'AP' (Aprovado, STA_APROVACAO='S') no Horus e 'APPROVED' no Cronuz.
+   - Exportação Excel (ISBN, Título, Editora, Quantidade, Preço Capa, Desconto %, Preço Líquido) com opção de
+     transicionar para 'AE' (Aguardando Entrega) no Horus e 'AWAITING_DELIVERY' no Cronuz, mantendo log completo
+     de usuário e data/hora de todas as ações.
+"""
+
+import csv
+import io
+import logging
+import re
+from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, List, Optional, Tuple
+
+import openpyxl
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from app.core.dependencies import get_current_user
+from app.core.horus_sql_crypto import decrypt_sql_credential
+from app.core.utils import parse_host_port
+from app.db.session import get_db
+from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
+from app.api.horus_analise_itens import (
+    _build_sargable_cfop_in,
+    _load_configured_branches,
+    _resolve_seller_id,
+)
+from app.models.catalog_support import Brand
+from app.models.company_settings import CompanySettings
+from app.models.horus_purchase import (
+    HorusPublisherReconciliationLog,
+    HorusPurchaseBranchConfig,
+    HorusPurchaseOrder,
+    HorusPurchaseOrderItem,
+    HorusPurchaseOrderLog,
+    HorusSupplierPublisherDiscount,
+)
+from app.models.product import Product
+from app.models.seller_branch import ProductBranchMinStock
+from app.models.user import User
+
+router = APIRouter(prefix="/horus-purchases", tags=["horus-purchases"])
+log = logging.getLogger(__name__)
+
+MAX_PURCHASE_SHEET_BYTES = 10 * 1024 * 1024  # 10 MB (Regra Mandatória AGENTS.md Seção 1)
+
+# ── Conjuntos SARGables de CFOPs para Dossiê 360° do Fornecedor ───────────────
+SARGABLE_CFOP_COMPRA = _build_sargable_cfop_in((
+    "1101", "1102", "2101", "2102", "3101", "3102",
+    "1401", "1403", "2401", "2403", "1120", "2120",
+))
+SARGABLE_CFOP_CONSIG_REC = _build_sargable_cfop_in(("1917", "2917"))
+SARGABLE_CFOP_ACERTO_CONSIG = _build_sargable_cfop_in(("1113", "2113", "1114", "2114"))
+SARGABLE_CFOP_DEVOL_FORNEC = _build_sargable_cfop_in((
+    "5201", "5202", "6201", "6202", "5411", "6411",
+    "5918", "6918", "5919", "6919",
+))
+
+HORUS_TO_CRONUZ_STATUS = {
+    "AB": "OPEN",
+    "AP": "APPROVED",
+    "IP": "APPROVED",
+    "AE": "AWAITING_DELIVERY",
+    "AC": "IN_CONFERENCE",
+    "PT": "IN_CONFERENCE",
+    "EE": "COMPLETED",
+    "FE": "COMPLETED",
+    "CA": "CANCELLED",
+}
+
+HORUS_STATUS_LABELS = {
+    "AB": "Em Aberto (AB)",
+    "AP": "Aprovado (AP)",
+    "AE": "Aguardando Entrega (AE)",
+    "AC": "Aguardando Conferência (AC)",
+    "EE": "Encerrado / Recebido (EE)",
+    "CA": "Cancelado (CA)",
+}
+
+
+# ── Helpers de Usuário, Formatação UPPERCASE e Conexão Transacional Horus ─────
+
+def _user_meta(current_user: Any) -> Tuple[Optional[int], str, str]:
+    """Retorna (user_id, display_name, horus_nom_usuario_upper_20chars)."""
+    uid = None
+    name = "SISTEMA"
+    email = ""
+    if isinstance(current_user, dict):
+        uid = current_user.get("id")
+        name = str(current_user.get("name") or current_user.get("email") or "USUARIO").strip()
+        email = str(current_user.get("email") or "").strip()
+    else:
+        uid = getattr(current_user, "id", None)
+        name = str(getattr(current_user, "name", None) or getattr(current_user, "email", None) or "USUARIO").strip()
+        email = str(getattr(current_user, "email", None) or "").strip()
+
+    raw_login = email.split("@")[0] if "@" in email else name
+    clean_horus_user = re.sub(r"[^A-Z0-9_.\- ]", "", raw_login.upper()).strip() or "CRONUZ"
+    return (int(uid) if uid else None, name[:150], clean_horus_user[:20])
+
+
+def _clean_digits(val: Optional[str]) -> str:
+    return re.sub(r"\D", "", str(val or ""))
+
+
+def _clean_isbn(val: Optional[str]) -> str:
+    return "".join(ch for ch in str(val or "").strip() if ch.isdigit() or ch.upper() == "X")
+
+
+def _to_upper_horus(val: Optional[str], max_len: Optional[int] = None) -> str:
+    """Regra 11 AGENTS.md: Todo dado textual enviado ao Horus em CAIXA ALTA."""
+    s = str(val or "").strip().upper()
+    return s[:max_len] if max_len else s
+
+
+def _get_branch_or_404(db: Session, seller_id: int, branch_id: int) -> Dict[str, Any]:
+    branches = _load_configured_branches(db, seller_id)
+    for b in branches:
+        if int(b["id"]) == int(branch_id):
+            return b
+    raise HTTPException(status_code=404, detail="Filial selecionada não encontrada ou inativa.")
+
+
+def _open_horus_tx_connection(db: Session, seller_id: int):
+    """
+    Abre conexão transacional dedicada (autocommit=False) com o SQL Server do Horus
+    para operações seguras de escrita (INSERT PEDIDOS_COMPRA / UPDATE COD_EDITORA).
+    """
+    import pytds
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    if not settings or not settings.horus_sql_enabled:
+        raise HTTPException(status_code=400, detail="Horus SQL Direct não está habilitado para esta empresa.")
+    if not all([settings.horus_sql_host, settings.horus_sql_database, settings.horus_sql_username, settings.horus_sql_password]):
+        raise HTTPException(status_code=400, detail="Credenciais do Horus SQL Direct incompletas.")
+
+    host, port = parse_host_port(settings.horus_sql_host.strip(), (settings.horus_sql_port or "1433").strip())
+    database = settings.horus_sql_database.strip()
+    username = settings.horus_sql_username.strip()
+    password = decrypt_sql_credential(settings.horus_sql_password)
+    if not password:
+        raise HTTPException(status_code=400, detail="Falha ao descriptografar credencial do Horus SQL.")
+
+    try:
+        try:
+            conn = pytds.connect(
+                server=host,
+                port=port,
+                user=username,
+                password=password,
+                database=database,
+                login_timeout=15,
+                timeout=90,
+                autocommit=False,
+                as_dict=True,
+            )
+        except Exception as login_err:
+            if username.lower() != "sa" and ("Falha de logon" in str(login_err) or "Login failed" in str(login_err)):
+                conn = pytds.connect(
+                    server=host,
+                    port=port,
+                    user="sa",
+                    password=password,
+                    database=database,
+                    login_timeout=15,
+                    timeout=90,
+                    autocommit=False,
+                    as_dict=True,
+                )
+            else:
+                raise
+        return conn
+    finally:
+        password = ""
+
+
+def _fmt_dt(val: Any) -> Optional[str]:
+    if val is None:
+        return None
+    if hasattr(val, "isoformat"):
+        return val.isoformat()
+    return str(val)
+
+
+# ── Schemas Pydantic ──────────────────────────────────────────────────────────
+
+class BranchPurchaseConfigPayload(BaseModel):
+    company_id: Optional[int] = None
+    cod_local_default: Optional[int] = None
+    cod_departamento_default: Optional[int] = None
+    cod_centro_custo_default: Optional[int] = None
+    compra_consig_default: str = "N"
+    email_enabled: bool = False
+    sender_name: Optional[str] = None
+    sender_email: Optional[str] = None
+    reply_to_email: Optional[str] = None
+    cc_emails: Optional[str] = None
+    email_subject_template: Optional[str] = None
+    email_body_template: Optional[str] = None
+
+
+class SupplierPublisherEntry(BaseModel):
+    cod_editora: int
+    desconto_percentual: float = Field(..., ge=0, le=100)
+
+
+class UpsertSupplierDiscountsPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    cod_grp_fornecedor: int
+    cod_fornecedor: int
+    cnpj_fornecedor: Optional[str] = None
+    nome_fornecedor: Optional[str] = None
+    email_fornecedor: Optional[str] = None
+    entries: List[SupplierPublisherEntry]
+
+
+class ImportHorusSupplierDiscountsPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    cod_grp_fornecedor: int
+    cod_fornecedor: int
+    cnpj_fornecedor: Optional[str] = None
+    nome_fornecedor: Optional[str] = None
+    default_discount_if_zero: float = Field(0.0, ge=0, le=100)
+
+
+class ReconcilePublisherPayload(BaseModel):
+    company_id: Optional[int] = None
+    cod_items: List[int] = []
+    product_ids: List[int] = []
+    new_cod_editora: int
+    origin_module: str = "COMPRAS"
+
+
+class ItemLookupPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    cod_grp_fornecedor: int
+    cod_fornecedor: int
+    query: str
+    default_qty: int = 1
+    limit: int = 30
+
+
+class RefreshCartItemsPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    cod_grp_fornecedor: int
+    cod_fornecedor: int
+    items: List[Dict[str, Any]]  # [{"cod_item": 123, "quantity": 5}]
+
+
+class CreatePurchaseOrderItemInput(BaseModel):
+    cod_item: int
+    quantity: int = Field(..., gt=0)
+
+
+class CreatePurchaseOrderPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    cod_grp_fornecedor: int
+    cod_fornecedor: int
+    compra_consig: str = "N"
+    cod_local: Optional[int] = None
+    cod_departamento: Optional[int] = None
+    cod_centro_custo: Optional[int] = None
+    observations: Optional[str] = None
+    items: List[CreatePurchaseOrderItemInput]
+
+
+class ChangePurchaseOrderStatusPayload(BaseModel):
+    company_id: Optional[int] = None
+    new_horus_status: str  # 'AE' ou 'CA'
+    notes: Optional[str] = None
+
+
+# ── 1. Filiais e Parametrização Individual por Filial (Opções + E-mail) ──────
+
+@router.get("/branches")
+def list_purchase_branches(
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branches = _load_configured_branches(db, seller_id)
+
+    configs = (
+        db.query(HorusPurchaseBranchConfig)
+        .filter(HorusPurchaseBranchConfig.company_id == seller_id)
+        .all()
+    )
+    cfg_by_bid = {int(c.branch_id): c for c in configs}
+
+    sup_counts = (
+        db.query(
+            HorusSupplierPublisherDiscount.branch_id,
+            func.count(func.distinct(HorusSupplierPublisherDiscount.cod_fornecedor)).label("suppliers_cnt"),
+            func.count(HorusSupplierPublisherDiscount.id).label("publishers_cnt"),
+        )
+        .filter(
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+            HorusSupplierPublisherDiscount.active == True,
+        )
+        .group_by(HorusSupplierPublisherDiscount.branch_id)
+        .all()
+    )
+    cnt_map = {int(r.branch_id): {"suppliers": int(r.suppliers_cnt), "publishers": int(r.publishers_cnt)} for r in sup_counts}
+
+    enriched = []
+    for b in branches:
+        bid = int(b["id"])
+        cfg = cfg_by_bid.get(bid)
+        cm = cnt_map.get(bid, {"suppliers": 0, "publishers": 0})
+        enriched.append({
+            **b,
+            "configured_suppliers_count": cm["suppliers"],
+            "configured_publishers_count": cm["publishers"],
+            "config": {
+                "cod_local_default": cfg.cod_local_default if cfg and cfg.cod_local_default is not None else b.get("cod_local"),
+                "cod_departamento_default": cfg.cod_departamento_default if cfg else None,
+                "cod_centro_custo_default": cfg.cod_centro_custo_default if cfg else None,
+                "compra_consig_default": cfg.compra_consig_default if cfg else "N",
+                "email_enabled": bool(cfg.email_enabled) if cfg else False,
+                "sender_name": cfg.sender_name if cfg else b["nome"],
+                "sender_email": cfg.sender_email if cfg else "",
+                "reply_to_email": cfg.reply_to_email if cfg else "",
+                "cc_emails": cfg.cc_emails if cfg else "",
+                "email_subject_template": (
+                    cfg.email_subject_template
+                    if cfg and cfg.email_subject_template
+                    else "Pedido de Compra #{cod_pedido} - {filial_nome}"
+                ),
+                "email_body_template": (
+                    cfg.email_body_template
+                    if cfg and cfg.email_body_template
+                    else (
+                        "Olá, equipe {fornecedor_nome}!\n\n"
+                        "Segue anexo o Pedido de Compra nº #{cod_pedido} referente à unidade {filial_nome} (CNPJ {filial_cnpj}).\n"
+                        "Quantidade total: {qtd_exemplares} exemplares ({qtd_skus} títulos) • Valor líquido: {valor_liquido}.\n\n"
+                        "Atenciosamente,\nSetor de Compras - {filial_nome}"
+                    )
+                ),
+            },
+        })
+
+    return {"branches": enriched}
+
+
+@router.get("/branches/{branch_id}/config")
+def get_branch_purchase_config(
+    branch_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branch = _get_branch_or_404(db, seller_id, branch_id)
+    cfg = (
+        db.query(HorusPurchaseBranchConfig)
+        .filter(
+            HorusPurchaseBranchConfig.company_id == seller_id,
+            HorusPurchaseBranchConfig.branch_id == branch_id,
+        )
+        .first()
+    )
+
+    horus_departments: List[Dict[str, Any]] = []
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+        d_rows = sql_client.query(
+            """
+            SELECT COD_DEPARTAMENTO AS cod_departamento, RTRIM(LTRIM(ISNULL(NOM_DEPARTAMENTO, ''))) AS nom_departamento
+            FROM DEPARTAMENTOS_GERAL WITH (NOLOCK)
+            WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND ISNULL(STA_ATIVO, 'S') <> 'N'
+            ORDER BY NOM_DEPARTAMENTO ASC
+            """,
+            (int(branch["cod_empresa"]), int(branch["cod_filial"])),
+            max_rows=100,
+        )
+        horus_departments = [
+            {"cod_departamento": int(r["cod_departamento"]), "nom_departamento": str(r["nom_departamento"])}
+            for r in (d_rows or [])
+        ]
+    except Exception as e:
+        log.debug(f"[HorusPurchases] Falha ao listar DEPARTAMENTOS_GERAL: {e}")
+
+    return {
+        "branch": branch,
+        "horus_departments": horus_departments,
+        "config": {
+            "cod_local_default": cfg.cod_local_default if cfg and cfg.cod_local_default is not None else branch.get("cod_local"),
+            "cod_departamento_default": cfg.cod_departamento_default if cfg else None,
+            "cod_centro_custo_default": cfg.cod_centro_custo_default if cfg else None,
+            "compra_consig_default": cfg.compra_consig_default if cfg else "N",
+            "email_enabled": bool(cfg.email_enabled) if cfg else False,
+            "sender_name": cfg.sender_name if cfg else branch["nome"],
+            "sender_email": cfg.sender_email if cfg else "",
+            "reply_to_email": cfg.reply_to_email if cfg else "",
+            "cc_emails": cfg.cc_emails if cfg else "",
+            "email_subject_template": cfg.email_subject_template if cfg else "Pedido de Compra #{cod_pedido} - {filial_nome}",
+            "email_body_template": cfg.email_body_template if cfg else "",
+        },
+    }
+
+
+@router.put("/branches/{branch_id}/config")
+def save_branch_purchase_config(
+    branch_id: int,
+    payload: BranchPurchaseConfigPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, branch_id)
+    uid, _, _ = _user_meta(current_user)
+
+    cfg = (
+        db.query(HorusPurchaseBranchConfig)
+        .filter(
+            HorusPurchaseBranchConfig.company_id == seller_id,
+            HorusPurchaseBranchConfig.branch_id == branch_id,
+        )
+        .first()
+    )
+    if not cfg:
+        cfg = HorusPurchaseBranchConfig(
+            company_id=seller_id,
+            branch_id=branch_id,
+            cod_empresa=int(branch["cod_empresa"]),
+            cod_filial=int(branch["cod_filial"]),
+        )
+        db.add(cfg)
+
+    cfg.cod_empresa = int(branch["cod_empresa"])
+    cfg.cod_filial = int(branch["cod_filial"])
+    cfg.cod_local_default = payload.cod_local_default
+    cfg.cod_departamento_default = payload.cod_departamento_default
+    cfg.cod_centro_custo_default = payload.cod_centro_custo_default
+    cfg.compra_consig_default = "S" if str(payload.compra_consig_default or "N").upper() == "S" else "N"
+    cfg.email_enabled = bool(payload.email_enabled)
+    cfg.sender_name = (payload.sender_name or "").strip() or None
+    cfg.sender_email = (payload.sender_email or "").strip() or None
+    cfg.reply_to_email = (payload.reply_to_email or "").strip() or None
+    cfg.cc_emails = (payload.cc_emails or "").strip() or None
+    cfg.email_subject_template = (payload.email_subject_template or "").strip() or None
+    cfg.email_body_template = (payload.email_body_template or "").strip() or None
+    cfg.updated_by_user_id = uid
+
+    db.commit()
+    return {"success": True, "message": f"Parametrização da filial '{branch['nome']}' salva com sucesso."}
+
+
+# ── 2. Busca de Fornecedores na Filial & Dossiê 360° (Entradas/Consig/Acertos/Devoluções) ─
+
+@router.get("/suppliers/search")
+def search_branch_suppliers(
+    branch_id: int = Query(...),
+    q: Optional[str] = Query(None),
+    only_configured: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branch = _get_branch_or_404(db, seller_id, branch_id)
+    emp = int(branch["cod_empresa"])
+    fil = int(branch["cod_filial"])
+
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Pré-carrega configurações salvas no Cronuz para esta filial
+    disc_rows = (
+        db.query(HorusSupplierPublisherDiscount)
+        .filter(
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+            HorusSupplierPublisherDiscount.branch_id == branch_id,
+            HorusSupplierPublisherDiscount.active == True,
+        )
+        .all()
+    )
+    disc_by_sup: Dict[Tuple[int, int], List[HorusSupplierPublisherDiscount]] = {}
+    for dr in disc_rows:
+        disc_by_sup.setdefault((int(dr.cod_grp_fornecedor), int(dr.cod_fornecedor)), []).append(dr)
+
+    if only_configured and not disc_by_sup:
+        return {"suppliers": [], "branch": branch}
+
+    where_parts = [
+        "FG.COD_EMPRESA = %s",
+        "FG.COD_FILIAL = %s",
+        "ISNULL(FG.STA_ATIVO, 'S') <> 'N'",
+    ]
+    params: List[Any] = [emp, fil]
+
+    term = (q or "").strip()
+    if term:
+        digits = _clean_digits(term)
+        if digits and len(digits) >= 6:
+            where_parts.append(
+                "(FG.NOM_FORNECEDOR LIKE %s OR FG.NOM_FANTASIA LIKE %s OR FG.CNPF_CNPJ LIKE %s OR CAST(FG.COD_FORNECEDOR AS VARCHAR) = %s)"
+            )
+            params.extend([f"%{term}%", f"%{term}%", f"%{digits}%", digits])
+        elif term.isdigit():
+            where_parts.append(
+                "(CAST(FG.COD_FORNECEDOR AS VARCHAR) = %s OR FG.NOM_FORNECEDOR LIKE %s OR FG.NOM_FANTASIA LIKE %s OR FG.CNPF_CNPJ LIKE %s)"
+            )
+            params.extend([term, f"%{term}%", f"%{term}%", f"%{term}%"])
+        else:
+            where_parts.append("(FG.NOM_FORNECEDOR LIKE %s OR FG.NOM_FANTASIA LIKE %s)")
+            params.extend([f"%{term}%", f"%{term}%"])
+
+    if only_configured and disc_by_sup:
+        pair_or = " OR ".join(
+            f"(FG.COD_GRP_FORNECEDOR = {grp} AND FG.COD_FORNECEDOR = {forn})"
+            for (grp, forn) in disc_by_sup.keys()
+        )
+        where_parts.append(f"({pair_or})")
+
+    sql = f"""
+        SELECT TOP ({int(limit)})
+            FG.COD_EMPRESA AS cod_empresa,
+            FG.COD_FILIAL AS cod_filial,
+            FG.COD_GRP_FORNECEDOR AS cod_grp_fornecedor,
+            FG.COD_FORNECEDOR AS cod_fornecedor,
+            RTRIM(LTRIM(ISNULL(FG.NOM_FORNECEDOR, ''))) AS nom_fornecedor,
+            RTRIM(LTRIM(ISNULL(FG.NOM_FANTASIA, ''))) AS nom_fantasia,
+            RTRIM(LTRIM(ISNULL(FG.CNPF_CNPJ, ISNULL(FG.CPF, '')))) AS cnpj,
+            RTRIM(LTRIM(ISNULL(FG.END_EMAIL_PED_COMPRAS, ISNULL(FG.END_EMAIL, '')))) AS email,
+            RTRIM(LTRIM(ISNULL(FG.PRAZO_PAGAMENTOS, ''))) AS prazo_pagamentos,
+            ISNULL(FG.PRAZO_ENTREGA, 0) AS prazo_entrega,
+            ISNULL(FG.FAT_MINIMO, 0) AS fat_minimo,
+            RTRIM(LTRIM(ISNULL(GF.NOM_GRP_FORNECEDOR, ''))) AS nom_grupo,
+            GF.COD_DEPARTAMENTO AS grp_cod_departamento
+        FROM FORNECEDORES_GERAL FG WITH (NOLOCK)
+        LEFT JOIN GRUPO_FORNECEDORES GF WITH (NOLOCK)
+            ON GF.COD_EMPRESA = FG.COD_EMPRESA
+            AND GF.COD_FILIAL = FG.COD_FILIAL
+            AND GF.COD_GRP_FORNECEDOR = FG.COD_GRP_FORNECEDOR
+        WHERE {' AND '.join(where_parts)}
+        ORDER BY FG.NOM_FORNECEDOR ASC
+    """
+    rows = sql_client.query(sql, tuple(params), max_rows=limit)
+
+    suppliers_out = []
+    for r in (rows or []):
+        grp = int(r["cod_grp_fornecedor"])
+        forn = int(r["cod_fornecedor"])
+        cfg_list = disc_by_sup.get((grp, forn), [])
+        suppliers_out.append({
+            "cod_empresa": int(r["cod_empresa"]),
+            "cod_filial": int(r["cod_filial"]),
+            "cod_grp_fornecedor": grp,
+            "cod_fornecedor": forn,
+            "nom_fornecedor": str(r.get("nom_fornecedor") or ""),
+            "nom_fantasia": str(r.get("nom_fantasia") or ""),
+            "cnpj": _clean_digits(r.get("cnpj")),
+            "email": str(r.get("email") or ""),
+            "prazo_pagamentos": str(r.get("prazo_pagamentos") or ""),
+            "prazo_entrega": int(r.get("prazo_entrega") or 0),
+            "fat_minimo": float(r.get("fat_minimo") or 0.0),
+            "nom_grupo": str(r.get("nom_grupo") or ""),
+            "grp_cod_departamento": int(r["grp_cod_departamento"]) if r.get("grp_cod_departamento") is not None else None,
+            "is_configured": len(cfg_list) > 0,
+            "configured_publishers_count": len(cfg_list),
+            "configured_publishers": [
+                {
+                    "id": c.id,
+                    "cod_editora": c.cod_editora,
+                    "nome_editora": c.nome_editora,
+                    "desconto_percentual": float(c.desconto_percentual or 0.0),
+                }
+                for c in cfg_list
+            ],
+        })
+
+    # Ordena configurados primeiro quando não há termo específico
+    if not term:
+        suppliers_out.sort(key=lambda s: (0 if s["is_configured"] else 1, s["nom_fornecedor"]))
+
+    return {"suppliers": suppliers_out, "branch": branch}
+
+
+@router.get("/suppliers/overview")
+def get_supplier_branch_overview(
+    branch_id: int = Query(...),
+    cod_grp_fornecedor: int = Query(...),
+    cod_fornecedor: int = Query(...),
+    days: int = Query(365, ge=30, le=1825),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Retorna o Dossiê 360° do Fornecedor na Filial selecionada:
+      - Dados cadastrais do fornecedor no Horus (FORNECEDORES_GERAL)
+      - Selos/Editoras e Descontos (%) configurados na nossa tabela Cronuz (pur_horus_supplier_discount)
+      - Sugestão de Selos/Editoras encontrados no Horus (EDITORAS_FORNEC + histórico de NF_ENTRADA)
+      - Últimas Entradas de Compra
+      - Recebimentos em Consignação + Saldo Consignado Recebido atual na filial
+      - Acertos de Consignação (CFOPs 1113/2113/1114/2114)
+      - Devoluções ao Fornecedor (Compra e Consignação)
+      - Últimos Pedidos de Compra no Horus (PEDIDOS_COMPRA)
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branch = _get_branch_or_404(db, seller_id, branch_id)
+    emp = int(branch["cod_empresa"])
+    fil = int(branch["cod_filial"])
+
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    sup_rows = sql_client.query(
+        """
+        SELECT TOP 1
+            FG.COD_EMPRESA AS cod_empresa,
+            FG.COD_FILIAL AS cod_filial,
+            FG.COD_GRP_FORNECEDOR AS cod_grp_fornecedor,
+            FG.COD_FORNECEDOR AS cod_fornecedor,
+            RTRIM(LTRIM(ISNULL(FG.NOM_FORNECEDOR, ''))) AS nom_fornecedor,
+            RTRIM(LTRIM(ISNULL(FG.NOM_FANTASIA, ''))) AS nom_fantasia,
+            RTRIM(LTRIM(ISNULL(FG.CNPF_CNPJ, ISNULL(FG.CPF, '')))) AS cnpj,
+            RTRIM(LTRIM(ISNULL(FG.END_EMAIL_PED_COMPRAS, ISNULL(FG.END_EMAIL, '')))) AS email,
+            RTRIM(LTRIM(ISNULL(FG.PRAZO_PAGAMENTOS, ''))) AS prazo_pagamentos,
+            ISNULL(FG.PRAZO_ENTREGA, 0) AS prazo_entrega,
+            ISNULL(FG.FAT_MINIMO, 0) AS fat_minimo,
+            RTRIM(LTRIM(ISNULL(GF.NOM_GRP_FORNECEDOR, ''))) AS nom_grupo,
+            GF.COD_DEPARTAMENTO AS grp_cod_departamento
+        FROM FORNECEDORES_GERAL FG WITH (NOLOCK)
+        LEFT JOIN GRUPO_FORNECEDORES GF WITH (NOLOCK)
+            ON GF.COD_EMPRESA = FG.COD_EMPRESA
+            AND GF.COD_FILIAL = FG.COD_FILIAL
+            AND GF.COD_GRP_FORNECEDOR = FG.COD_GRP_FORNECEDOR
+        WHERE FG.COD_EMPRESA = %s AND FG.COD_FILIAL = %s
+          AND FG.COD_GRP_FORNECEDOR = %s AND FG.COD_FORNECEDOR = %s
+        """,
+        (emp, fil, cod_grp_fornecedor, cod_fornecedor),
+        max_rows=1,
+    )
+    if not sup_rows:
+        raise HTTPException(status_code=404, detail="Fornecedor não encontrado nesta filial do Horus.")
+
+    sup_raw = sup_rows[0]
+    supplier_info = {
+        "cod_empresa": emp,
+        "cod_filial": fil,
+        "cod_grp_fornecedor": int(sup_raw["cod_grp_fornecedor"]),
+        "cod_fornecedor": int(sup_raw["cod_fornecedor"]),
+        "nom_fornecedor": str(sup_raw.get("nom_fornecedor") or ""),
+        "nom_fantasia": str(sup_raw.get("nom_fantasia") or ""),
+        "cnpj": _clean_digits(sup_raw.get("cnpj")),
+        "email": str(sup_raw.get("email") or ""),
+        "prazo_pagamentos": str(sup_raw.get("prazo_pagamentos") or ""),
+        "prazo_entrega": int(sup_raw.get("prazo_entrega") or 0),
+        "fat_minimo": float(sup_raw.get("fat_minimo") or 0.0),
+        "nom_grupo": str(sup_raw.get("nom_grupo") or ""),
+        "grp_cod_departamento": int(sup_raw["grp_cod_departamento"]) if sup_raw.get("grp_cod_departamento") is not None else None,
+    }
+
+    # 1. Selos/Editoras configurados no Cronuz
+    configured_discounts = (
+        db.query(HorusSupplierPublisherDiscount)
+        .filter(
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+            HorusSupplierPublisherDiscount.branch_id == branch_id,
+            HorusSupplierPublisherDiscount.cod_grp_fornecedor == cod_grp_fornecedor,
+            HorusSupplierPublisherDiscount.cod_fornecedor == cod_fornecedor,
+            HorusSupplierPublisherDiscount.active == True,
+        )
+        .order_by(HorusSupplierPublisherDiscount.nome_editora.asc())
+        .all()
+    )
+    configured_list = [
+        {
+            "id": d.id,
+            "cod_editora": d.cod_editora,
+            "nome_editora": d.nome_editora,
+            "desconto_percentual": float(d.desconto_percentual or 0.0),
+            "cnpj_fornecedor": d.cnpj_fornecedor or supplier_info["cnpj"],
+            "email_fornecedor": d.email_fornecedor or supplier_info["email"],
+            "updated_by_name": d.updated_by_name,
+            "updated_at": _fmt_dt(d.updated_at),
+        }
+        for d in configured_discounts
+    ]
+    configured_ed_ids = {int(d.cod_editora) for d in configured_discounts}
+
+    # 2. Sugestões de Editoras existentes no Horus (EDITORAS_FORNEC + histórico NF_ENTRADA)
+    horus_suggested_publishers: List[Dict[str, Any]] = []
+    seen_sug: set[int] = set()
+    try:
+        ef_rows = sql_client.query(
+            """
+            SELECT EF.COD_EDITORA AS cod_editora,
+                   RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS nome_editora,
+                   ISNULL(EF.VLR_DESCONTO, 0) AS vlr_desconto
+            FROM EDITORAS_FORNEC EF WITH (NOLOCK)
+            INNER JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = EF.COD_EDITORA
+            WHERE EF.COD_EMPRESA = %s AND EF.COD_FILIAL = %s
+              AND EF.COD_GRP_FORNECEDOR = %s AND EF.COD_FORNECEDOR = %s
+            ORDER BY ED.NOM_EDITORA ASC
+            """,
+            (emp, fil, cod_grp_fornecedor, cod_fornecedor),
+            max_rows=200,
+        )
+        for r in (ef_rows or []):
+            ce = int(r["cod_editora"])
+            seen_sug.add(ce)
+            horus_suggested_publishers.append({
+                "cod_editora": ce,
+                "nome_editora": str(r.get("nome_editora") or f"EDITORA #{ce}"),
+                "horus_discount": float(r.get("vlr_desconto") or 0.0),
+                "source": "EDITORAS_FORNEC",
+                "already_configured": ce in configured_ed_ids,
+            })
+    except Exception as e:
+        log.debug(f"[HorusPurchases] Aviso em EDITORAS_FORNEC: {e}")
+
+    try:
+        nf_ed_rows = sql_client.query(
+            """
+            SELECT TOP 30
+                IE.COD_EDITORA AS cod_editora,
+                RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS nome_editora,
+                COUNT(DISTINCT INF.COD_ITEM) AS qtd_skus
+            FROM NF_ENTRADA NE WITH (NOLOCK)
+            INNER JOIN ITENS_NOTAS_FISCAIS INF WITH (NOLOCK)
+                ON INF.COD_EMPRESA = NE.COD_EMPRESA
+                AND INF.COD_FILIAL = NE.COD_FILIAL
+                AND INF.COD_NF_ENTRADA = NE.COD_NF_ENTRADA
+            INNER JOIN ITENS_ESTOQUE_GERAL IE WITH (NOLOCK) ON IE.COD_ITEM = INF.COD_ITEM
+            INNER JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = IE.COD_EDITORA
+            WHERE NE.COD_EMPRESA = %s AND NE.COD_FILIAL = %s
+              AND NE.COD_FORNECEDOR = %s
+              AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
+              AND NE.DAT_EMISSAO_NF >= DATEADD(day, -730, GETDATE())
+            GROUP BY IE.COD_EDITORA, RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, ''))))
+            ORDER BY COUNT(DISTINCT INF.COD_ITEM) DESC
+            """,
+            (emp, fil, cod_fornecedor),
+            max_rows=30,
+        )
+        for r in (nf_ed_rows or []):
+            if r.get("cod_editora") is None:
+                continue
+            ce = int(r["cod_editora"])
+            if ce not in seen_sug:
+                seen_sug.add(ce)
+                horus_suggested_publishers.append({
+                    "cod_editora": ce,
+                    "nome_editora": str(r.get("nome_editora") or f"EDITORA #{ce}"),
+                    "horus_discount": 0.0,
+                    "qtd_skus_historico": int(r.get("qtd_skus") or 0),
+                    "source": "HISTORICO_NF_ENTRADA",
+                    "already_configured": ce in configured_ed_ids,
+                })
+    except Exception as e:
+        log.debug(f"[HorusPurchases] Aviso em histórico editoras NF_ENTRADA: {e}")
+
+    # Helper para buscar NFs em NF_ENTRADA por conjunto de CFOPs
+    def _fetch_nf_entradas(cfop_in_clause: str, top_n: int = 15) -> List[Dict[str, Any]]:
+        try:
+            q_sql = f"""
+                SELECT TOP ({top_n})
+                    NE.COD_NF_ENTRADA AS cod_nf_entrada,
+                    RTRIM(LTRIM(ISNULL(NE.NRO_NOTA_FISCAL, CAST(NE.COD_NF_ENTRADA AS VARCHAR)))) AS nro_nf,
+                    RTRIM(LTRIM(ISNULL(NE.COD_NATUREZA, ''))) AS cfop,
+                    ISNULL(NE.DAT_RECEPCAO_NF, NE.DAT_EMISSAO_NF) AS data_nf,
+                    NE.DAT_EMISSAO_NF AS data_emissao,
+                    ISNULL(NE.VLR_BRUTO_NF, 0) AS vlr_bruto,
+                    ISNULL(NE.VLR_LIQUIDO_NF, 0) AS vlr_liquido,
+                    ISNULL(NE.VLR_DESCONTO_NF, 0) AS vlr_desconto,
+                    NE.COD_PEDIDO AS cod_pedido,
+                    RTRIM(LTRIM(ISNULL(NE.SIT_NF, ''))) AS sit_nf,
+                    ISNULL(AGG.qtd_skus, 0) AS qtd_skus,
+                    ISNULL(AGG.qtd_exemplares, 0) AS qtd_exemplares
+                FROM NF_ENTRADA NE WITH (NOLOCK)
+                OUTER APPLY (
+                    SELECT COUNT(*) AS qtd_skus, SUM(ISNULL(INF.QTD_ITENS, 0)) AS qtd_exemplares
+                    FROM ITENS_NOTAS_FISCAIS INF WITH (NOLOCK)
+                    WHERE INF.COD_EMPRESA = NE.COD_EMPRESA
+                      AND INF.COD_FILIAL = NE.COD_FILIAL
+                      AND INF.COD_NF_ENTRADA = NE.COD_NF_ENTRADA
+                ) AGG
+                WHERE NE.COD_EMPRESA = %s
+                  AND NE.COD_FILIAL = %s
+                  AND NE.COD_FORNECEDOR = %s
+                  AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
+                  AND NE.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
+                  AND NE.COD_NATUREZA IN ({cfop_in_clause})
+                ORDER BY ISNULL(NE.DAT_RECEPCAO_NF, NE.DAT_EMISSAO_NF) DESC, NE.COD_NF_ENTRADA DESC
+            """
+            res_rows = sql_client.query(q_sql, (emp, fil, cod_fornecedor, int(days)), max_rows=top_n)
+            return [
+                {
+                    "cod_nf": int(x["cod_nf_entrada"]),
+                    "nro_nf": str(x.get("nro_nf") or ""),
+                    "cfop": str(x.get("cfop") or ""),
+                    "data_nf": _fmt_dt(x.get("data_nf")),
+                    "data_emissao": _fmt_dt(x.get("data_emissao")),
+                    "vlr_bruto": float(x.get("vlr_bruto") or 0.0),
+                    "vlr_liquido": float(x.get("vlr_liquido") or 0.0),
+                    "vlr_desconto": float(x.get("vlr_desconto") or 0.0),
+                    "cod_pedido": int(x["cod_pedido"]) if x.get("cod_pedido") else None,
+                    "sit_nf": str(x.get("sit_nf") or ""),
+                    "qtd_skus": int(x.get("qtd_skus") or 0),
+                    "qtd_exemplares": int(float(x.get("qtd_exemplares") or 0)),
+                }
+                for x in (res_rows or [])
+            ]
+        except Exception as ex:
+            log.warning(f"[HorusPurchases] Aviso ao buscar NF_ENTRADA do fornecedor: {ex}")
+            return []
+
+    ultimas_entradas_compra = _fetch_nf_entradas(SARGABLE_CFOP_COMPRA, 15)
+    ultimas_consignacoes = _fetch_nf_entradas(SARGABLE_CFOP_CONSIG_REC, 15)
+    ultimos_acertos = _fetch_nf_entradas(SARGABLE_CFOP_ACERTO_CONSIG, 15)
+
+    # Devoluções ao Fornecedor (NF_MESTRE onde STA_CLI = 'F' e COD_CLI = cod_fornecedor)
+    ultimas_devolucoes: List[Dict[str, Any]] = []
+    try:
+        dev_rows = sql_client.query(
+            f"""
+            SELECT TOP 15
+                NM.COD_NF AS cod_nf,
+                RTRIM(LTRIM(ISNULL(NM.NRO_NOTA_FISCAL, CAST(NM.COD_NF AS VARCHAR)))) AS nro_nf,
+                RTRIM(LTRIM(ISNULL(NM.COD_NATUREZA, ''))) AS cfop,
+                NM.DAT_EMISSAO_NF AS data_nf,
+                ISNULL(NM.VLR_BRUTO_NF, 0) AS vlr_bruto,
+                ISNULL(NM.VLR_LIQUIDO_NF, 0) AS vlr_liquido,
+                RTRIM(LTRIM(ISNULL(NM.SIT_NF, ''))) AS sit_nf,
+                ISNULL(AGG.qtd_skus, 0) AS qtd_skus,
+                ISNULL(AGG.qtd_exemplares, 0) AS qtd_exemplares
+            FROM NF_MESTRE NM WITH (NOLOCK)
+            OUTER APPLY (
+                SELECT COUNT(*) AS qtd_skus, SUM(ISNULL(NFI.QTD_ITENS, 0)) AS qtd_exemplares
+                FROM NF_ITENS NFI WITH (NOLOCK)
+                WHERE NFI.COD_EMPRESA = NM.COD_EMPRESA
+                  AND NFI.COD_FILIAL = NM.COD_FILIAL
+                  AND NFI.COD_NF = NM.COD_NF
+                  AND NFI.COD_CLI = NM.COD_CLI
+            ) AGG
+            WHERE NM.COD_EMPRESA = %s
+              AND NM.COD_FILIAL = %s
+              AND NM.STA_CLI = 'F'
+              AND NM.COD_CLI = %s
+              AND ISNULL(NM.SIT_NF, '') NOT IN ('C', 'CAN')
+              AND NM.DAT_EMISSAO_NF >= DATEADD(day, -%s, GETDATE())
+              AND NM.COD_NATUREZA IN ({SARGABLE_CFOP_DEVOL_FORNEC})
+            ORDER BY NM.DAT_EMISSAO_NF DESC, NM.COD_NF DESC
+            """,
+            (emp, fil, cod_fornecedor, int(days)),
+            max_rows=15,
+        )
+        for r in (dev_rows or []):
+            cfop_digits = _clean_digits(r.get("cfop"))
+            dev_tipo = "DEVOL. CONSIGNAÇÃO" if cfop_digits in ("5918", "6918", "5919", "6919") else "DEVOL. COMPRA"
+            ultimas_devolucoes.append({
+                "cod_nf": int(r["cod_nf"]),
+                "nro_nf": str(r.get("nro_nf") or ""),
+                "cfop": str(r.get("cfop") or ""),
+                "tipo": dev_tipo,
+                "data_nf": _fmt_dt(r.get("data_nf")),
+                "vlr_bruto": float(r.get("vlr_bruto") or 0.0),
+                "vlr_liquido": float(r.get("vlr_liquido") or 0.0),
+                "sit_nf": str(r.get("sit_nf") or ""),
+                "qtd_skus": int(r.get("qtd_skus") or 0),
+                "qtd_exemplares": int(float(r.get("qtd_exemplares") or 0)),
+            })
+    except Exception as e:
+        log.warning(f"[HorusPurchases] Aviso ao buscar devoluções do fornecedor: {e}")
+
+    # Saldo Consignado Recebido atual na filial para as editoras vinculadas (ou sugeridas) deste fornecedor
+    all_rel_eds = list(configured_ed_ids | seen_sug)
+    consigned_balance_summary = {"total_skus": 0, "total_units": 0}
+    if all_rel_eds:
+        try:
+            eds_in = ", ".join(str(x) for x in all_rel_eds[:200])
+            cb_rows = sql_client.query(
+                f"""
+                SELECT
+                    COUNT(DISTINCT TS.COD_ITEM) AS skus,
+                    SUM(ISNULL(TS.SALDO_CONSIGNADO_RECEBIDO, 0)) AS units
+                FROM TABELA_SALDO_ITENS_GERAL TS WITH (NOLOCK)
+                INNER JOIN ITENS_ESTOQUE_GERAL IE WITH (NOLOCK) ON IE.COD_ITEM = TS.COD_ITEM
+                WHERE TS.COD_EMPRESA = %s AND TS.COD_FILIAL = %s
+                  AND IE.COD_EDITORA IN ({eds_in})
+                  AND ISNULL(TS.SALDO_CONSIGNADO_RECEBIDO, 0) > 0
+                """,
+                (emp, fil),
+                max_rows=1,
+            )
+            if cb_rows:
+                consigned_balance_summary = {
+                    "total_skus": int(cb_rows[0].get("skus") or 0),
+                    "total_units": int(float(cb_rows[0].get("units") or 0)),
+                }
+        except Exception:
+            pass
+
+    # Últimos Pedidos de Compra no Horus (PEDIDOS_COMPRA) para este fornecedor na filial
+    horus_recent_orders: List[Dict[str, Any]] = []
+    try:
+        pc_rows = sql_client.query(
+            """
+            SELECT TOP 15
+                PC.COD_PEDIDO AS cod_pedido,
+                PC.DAT_PEDIDO AS dat_pedido,
+                RTRIM(LTRIM(ISNULL(PC.STATUS_PEDIDO_COMPRA, ''))) AS status_horus,
+                RTRIM(LTRIM(ISNULL(PC.COMPRA_CONSIG, 'N'))) AS compra_consig,
+                ISNULL(PC.QTD_ITENS, 0) AS qtd_itens,
+                ISNULL(PC.VLR_TOTAL_PEDIDO, 0) AS vlr_bruto,
+                ISNULL(PC.VLR_TOTAL_DESCONTO, 0) AS vlr_desconto,
+                ISNULL(PC.PER_TOTAL_DESCONTO, 0) AS per_desconto,
+                RTRIM(LTRIM(ISNULL(PC.NOM_USUARIO, ''))) AS nom_usuario
+            FROM PEDIDOS_COMPRA PC WITH (NOLOCK)
+            WHERE PC.COD_EMPRESA = %s AND PC.COD_FILIAL = %s
+              AND PC.COD_GRP_FORNECEDOR = %s AND PC.COD_FORNECEDOR = %s
+            ORDER BY PC.DAT_PEDIDO DESC, PC.COD_PEDIDO DESC
+            """,
+            (emp, fil, cod_grp_fornecedor, cod_fornecedor),
+            max_rows=15,
+        )
+        for r in (pc_rows or []):
+            vb = float(r.get("vlr_bruto") or 0.0)
+            vd = float(r.get("vlr_desconto") or 0.0)
+            st_h = str(r.get("status_horus") or "")
+            horus_recent_orders.append({
+                "cod_pedido": int(r["cod_pedido"]),
+                "dat_pedido": _fmt_dt(r.get("dat_pedido")),
+                "status_horus": st_h,
+                "status_label": HORUS_STATUS_LABELS.get(st_h, st_h),
+                "compra_consig": str(r.get("compra_consig") or "N"),
+                "qtd_itens": int(float(r.get("qtd_itens") or 0)),
+                "vlr_bruto": vb,
+                "vlr_desconto": vd,
+                "vlr_liquido": round(max(0.0, vb - vd), 2),
+                "per_desconto": round(float(r.get("per_desconto") or 0.0), 2),
+                "nom_usuario": str(r.get("nom_usuario") or ""),
+            })
+    except Exception as e:
+        log.warning(f"[HorusPurchases] Aviso ao buscar PEDIDOS_COMPRA recentes: {e}")
+
+    return {
+        "branch": branch,
+        "supplier": supplier_info,
+        "is_ready_for_purchase": len(configured_list) > 0,
+        "configured_discounts": configured_list,
+        "horus_suggested_publishers": horus_suggested_publishers,
+        "history": {
+            "entradas_compra": ultimas_entradas_compra,
+            "consignacoes_recebidas": ultimas_consignacoes,
+            "acertos_consignacao": ultimos_acertos,
+            "devolucoes": ultimas_devolucoes,
+            "pedidos_compra_horus": horus_recent_orders,
+            "consigned_balance_summary": consign_summary if (consign_summary := consigned_balance_summary) else {"total_skus": 0, "total_units": 0},
+        },
+    }
+
+
+# ── 3. Gestão da Tabela Cronuz: CNPJ Fornecedor + Filial + Cód. Fornecedor + Editora + Desconto (%) ─
+
+@router.post("/suppliers/discounts")
+def upsert_supplier_publisher_discounts(
+    payload: UpsertSupplierDiscountsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, payload.branch_id)
+    if not payload.entries:
+        raise HTTPException(status_code=400, detail="Informe ao menos uma editora/selo e seu percentual de desconto.")
+
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Valida que todas as editoras informadas existem na tabela EDITORA do Horus (sem criar cadastros no Horus)
+    req_ed_ids = list({int(e.cod_editora) for e in payload.entries})
+    eds_in = ", ".join(str(x) for x in req_ed_ids)
+    ed_rows = sql_client.query(
+        f"""
+        SELECT COD_EDITORA AS cod_editora,
+               RTRIM(LTRIM(ISNULL(NOM_FANTASIA, ISNULL(NOM_EDITORA, '')))) AS nome_editora
+        FROM EDITORA WITH (NOLOCK)
+        WHERE COD_EDITORA IN ({eds_in})
+        """,
+        max_rows=len(req_ed_ids) + 5,
+    )
+    valid_eds = {int(r["cod_editora"]): str(r.get("nome_editora") or f"EDITORA #{r['cod_editora']}") for r in (ed_rows or [])}
+    missing_eds = [eid for eid in req_ed_ids if eid not in valid_eds]
+    if missing_eds:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Editora(s) código {missing_eds} não encontrada(s) na tabela EDITORA do Horus.",
+        )
+
+    # Busca dados do fornecedor caso CNPJ/Nome não tenham vindo preenchidos
+    clean_cnpj = _clean_digits(payload.cnpj_fornecedor)
+    sup_name = (payload.nome_fornecedor or "").strip()
+    sup_email = (payload.email_fornecedor or "").strip()
+    if not clean_cnpj or not sup_name:
+        s_rows = sql_client.query(
+            """
+            SELECT TOP 1 RTRIM(LTRIM(ISNULL(NOM_FORNECEDOR, ''))) AS nom,
+                         RTRIM(LTRIM(ISNULL(CNPF_CNPJ, ISNULL(CPF, '')))) AS doc,
+                         RTRIM(LTRIM(ISNULL(END_EMAIL_PED_COMPRAS, ISNULL(END_EMAIL, '')))) AS email
+            FROM FORNECEDORES_GERAL WITH (NOLOCK)
+            WHERE COD_EMPRESA = %s AND COD_FILIAL = %s
+              AND COD_GRP_FORNECEDOR = %s AND COD_FORNECEDOR = %s
+            """,
+            (int(branch["cod_empresa"]), int(branch["cod_filial"]), payload.cod_grp_fornecedor, payload.cod_fornecedor),
+            max_rows=1,
+        )
+        if not s_rows:
+            raise HTTPException(status_code=404, detail="Fornecedor não encontrado no Horus para esta filial.")
+        clean_cnpj = clean_cnpj or _clean_digits(s_rows[0].get("doc"))
+        sup_name = sup_name or str(s_rows[0].get("nom") or "")
+        sup_email = sup_email or str(s_rows[0].get("email") or "")
+
+    uid, uname, _ = _user_meta(current_user)
+    saved_count = 0
+
+    for entry in payload.entries:
+        ce = int(entry.cod_editora)
+        disc_val = Decimal(str(entry.desconto_percentual)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        existing = (
+            db.query(HorusSupplierPublisherDiscount)
+            .filter(
+                HorusSupplierPublisherDiscount.company_id == seller_id,
+                HorusSupplierPublisherDiscount.branch_id == payload.branch_id,
+                HorusSupplierPublisherDiscount.cod_grp_fornecedor == payload.cod_grp_fornecedor,
+                HorusSupplierPublisherDiscount.cod_fornecedor == payload.cod_fornecedor,
+                HorusSupplierPublisherDiscount.cod_editora == ce,
+            )
+            .first()
+        )
+        if existing:
+            existing.cnpj_fornecedor = clean_cnpj or existing.cnpj_fornecedor
+            existing.nome_fornecedor = sup_name[:150] or existing.nome_fornecedor
+            existing.email_fornecedor = sup_email[:255] or existing.email_fornecedor
+            existing.nome_editora = valid_eds[ce][:150]
+            existing.desconto_percentual = disc_val
+            existing.active = True
+            existing.updated_by_user_id = uid
+            existing.updated_by_name = uname
+        else:
+            db.add(HorusSupplierPublisherDiscount(
+                company_id=seller_id,
+                branch_id=payload.branch_id,
+                cod_empresa=int(branch["cod_empresa"]),
+                cod_filial=int(branch["cod_filial"]),
+                cod_grp_fornecedor=payload.cod_grp_fornecedor,
+                cod_fornecedor=payload.cod_fornecedor,
+                cnpj_fornecedor=clean_cnpj or None,
+                nome_fornecedor=sup_name[:150] if sup_name else None,
+                email_fornecedor=sup_email[:255] if sup_email else None,
+                cod_editora=ce,
+                nome_editora=valid_eds[ce][:150],
+                desconto_percentual=disc_val,
+                active=True,
+                updated_by_user_id=uid,
+                updated_by_name=uname,
+            ))
+        saved_count += 1
+
+    db.commit()
+    return {
+        "success": True,
+        "saved_count": saved_count,
+        "message": f"{saved_count} editora(s)/selo(s) vinculada(s) com sucesso ao fornecedor nesta filial.",
+    }
+
+
+@router.post("/suppliers/discounts/import-from-horus")
+def import_supplier_discounts_from_horus(
+    payload: ImportHorusSupplierDiscountsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Importa rapidamente os vínculos já cadastrados em EDITORAS_FORNEC no Horus para a tabela Cronuz."""
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, payload.branch_id)
+    emp = int(branch["cod_empresa"])
+    fil = int(branch["cod_filial"])
+
+    sql_client = HorusSQLClient(db, seller_id)
+    ef_rows = sql_client.query(
+        """
+        SELECT EF.COD_EDITORA AS cod_editora,
+               RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS nome_editora,
+               ISNULL(EF.VLR_DESCONTO, 0) AS vlr_desconto
+        FROM EDITORAS_FORNEC EF WITH (NOLOCK)
+        INNER JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = EF.COD_EDITORA
+        WHERE EF.COD_EMPRESA = %s AND EF.COD_FILIAL = %s
+          AND EF.COD_GRP_FORNECEDOR = %s AND EF.COD_FORNECEDOR = %s
+        """,
+        (emp, fil, payload.cod_grp_fornecedor, payload.cod_fornecedor),
+        max_rows=500,
+    )
+    if not ef_rows:
+        raise HTTPException(
+            status_code=404,
+            detail="Nenhum vínculo encontrado em EDITORAS_FORNEC no Horus para este fornecedor nesta filial.",
+        )
+
+    entries = []
+    for r in ef_rows:
+        raw_d = float(r.get("vlr_desconto") or 0.0)
+        eff_d = raw_d if raw_d > 0 else float(payload.default_discount_if_zero or 0.0)
+        entries.append(SupplierPublisherEntry(cod_editora=int(r["cod_editora"]), desconto_percentual=min(100.0, max(0.0, eff_d))))
+
+    return upsert_supplier_publisher_discounts(
+        UpsertSupplierDiscountsPayload(
+            company_id=seller_id,
+            branch_id=payload.branch_id,
+            cod_grp_fornecedor=payload.cod_grp_fornecedor,
+            cod_fornecedor=payload.cod_fornecedor,
+            cnpj_fornecedor=payload.cnpj_fornecedor,
+            nome_fornecedor=payload.nome_fornecedor,
+            entries=entries,
+        ),
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.delete("/suppliers/discounts/{discount_id}")
+def delete_supplier_publisher_discount(
+    discount_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    row = (
+        db.query(HorusSupplierPublisherDiscount)
+        .filter(
+            HorusSupplierPublisherDiscount.id == discount_id,
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Vínculo de desconto/editora não encontrado.")
+    db.delete(row)
+    db.commit()
+    return {"success": True, "message": "Vínculo de editora removido do fornecedor."}
+
+
+# ── 4. Busca Oficial de Editoras/Selos no Horus & Conciliação Bidirecional (Horus + Cronuz) ─
+
+@router.get("/publishers/search")
+def search_horus_publishers(
+    q: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=300),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Pesquisa diretamente a tabela oficial EDITORA no Horus SQL Server.
+    Garante que qualquer vinculação ou correção de selo/editora utilize apenas códigos existentes no Horus.
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    where_sql = "1=1"
+    params: List[Any] = []
+    term = (q or "").strip()
+    if term:
+        if term.isdigit():
+            where_sql = "(ED.COD_EDITORA = %s OR ED.NOM_EDITORA LIKE %s OR ED.NOM_FANTASIA LIKE %s)"
+            params.extend([int(term), f"%{term}%", f"%{term}%"])
+        else:
+            where_sql = "(ED.NOM_EDITORA LIKE %s OR ED.NOM_FANTASIA LIKE %s)"
+            params.extend([f"%{term}%", f"%{term}%"])
+
+    rows = sql_client.query(
+        f"""
+        SELECT TOP ({int(limit)})
+            ED.COD_EDITORA AS cod_editora,
+            RTRIM(LTRIM(ISNULL(ED.NOM_EDITORA, ''))) AS nom_editora,
+            RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ''))) AS nom_fantasia,
+            RTRIM(LTRIM(ISNULL(ED.CPF_CNPJ, ''))) AS cnpj,
+            (SELECT COUNT(*) FROM ITENS_ESTOQUE_GERAL IE WITH (NOLOCK) WHERE IE.COD_EDITORA = ED.COD_EDITORA) AS qtd_itens
+        FROM EDITORA ED WITH (NOLOCK)
+        WHERE {where_sql}
+        ORDER BY CASE WHEN ED.NOM_FANTASIA IS NOT NULL AND LTRIM(RTRIM(ED.NOM_FANTASIA)) <> '' THEN ED.NOM_FANTASIA ELSE ED.NOM_EDITORA END ASC
+        """,
+        tuple(params) if params else None,
+        max_rows=limit,
+    )
+
+    out = []
+    for r in (rows or []):
+        ce = int(r["cod_editora"])
+        fant = str(r.get("nom_fantasia") or "").strip()
+        raz = str(r.get("nom_editora") or "").strip()
+        display = fant or raz or f"EDITORA #{ce}"
+        out.append({
+            "cod_editora": ce,
+            "nome_editora": display,
+            "razao_editora": raz,
+            "fantasia_editora": fant,
+            "cnpj": _clean_digits(r.get("cnpj")),
+            "qtd_itens": int(r.get("qtd_itens") or 0),
+        })
+    return {"publishers": out}
+
+
+@router.post("/items/reconcile-publisher")
+def reconcile_items_publisher_horus_and_cronuz(
+    payload: ReconcilePublisherPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Atualiza de forma segura e transacional a Editora/Selo (COD_EDITORA) de 1 ou múltiplos itens:
+      1. Valida que new_cod_editora já existe na tabela EDITORA do Horus (NUNCA cadastra editora nova no Horus).
+      2. Atualiza ITENS_ESTOQUE_GERAL.COD_EDITORA no Horus SQL Server (apenas UPDATE em itens já existentes).
+      3. Concilia imediatamente a base local prd_product (brand_id / brand) no PostgreSQL do Cronuz B2B.
+      4. Grava auditoria detalhada em pur_horus_publisher_reconcile_log (usuário, data/hora, editora anterior -> nova).
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    uid, uname, horus_user_upper = _user_meta(current_user)
+
+    target_cod_items: set[int] = {int(c) for c in (payload.cod_items or []) if int(c) > 0}
+
+    # Resolve product_ids locais (ex: vindos da tela Análise de Itens) para horus_cod_item
+    local_prods_by_id: List[Product] = []
+    if payload.product_ids:
+        local_prods_by_id = (
+            db.query(Product)
+            .filter(Product.company_id == seller_id, Product.id.in_([int(pid) for pid in payload.product_ids]))
+            .all()
+        )
+        missing_eans: List[str] = []
+        for lp in local_prods_by_id:
+            if lp.horus_cod_item and int(lp.horus_cod_item) > 0:
+                target_cod_items.add(int(lp.horus_cod_item))
+            elif lp.sku and str(lp.sku).replace("H-", "").isdigit():
+                target_cod_items.add(int(str(lp.sku).replace("H-", "")))
+            elif lp.ean_gtin:
+                missing_eans.append(str(lp.ean_gtin).strip())
+
+        if missing_eans:
+            sql_ro = HorusSQLClient(db, seller_id)
+            ph = ", ".join(["%s"] * len(missing_eans))
+            resolved_rows = sql_ro.query(
+                f"""
+                SELECT COD_ITEM AS cod_item, RTRIM(LTRIM(ISNULL(COD_BARRA_ITEM, ''))) AS barra, RTRIM(LTRIM(ISNULL(COD_ISBN_ITEM, ''))) AS isbn
+                FROM ITENS_ESTOQUE_GERAL WITH (NOLOCK)
+                WHERE COD_BARRA_ITEM IN ({ph}) OR COD_ISBN_ITEM IN ({ph})
+                """,
+                tuple(missing_eans + missing_eans),
+                max_rows=len(missing_eans) * 2,
+            )
+            for rr in (resolved_rows or []):
+                target_cod_items.add(int(rr["cod_item"]))
+
+    if not target_cod_items:
+        raise HTTPException(status_code=400, detail="Nenhum item válido do Horus identificado para atualização de editora.")
+    if len(target_cod_items) > 500:
+        raise HTTPException(status_code=400, detail="Selecione no máximo 500 itens por lote de atualização.")
+
+    conn = _open_horus_tx_connection(db, seller_id)
+    try:
+        with conn.cursor() as cur:
+            # 1. Verifica existência da nova editora em EDITORA no Horus
+            cur.execute(
+                """
+                SELECT TOP 1 COD_EDITORA,
+                             RTRIM(LTRIM(ISNULL(NOM_FANTASIA, ISNULL(NOM_EDITORA, '')))) AS nome_editora
+                FROM EDITORA WITH (NOLOCK)
+                WHERE COD_EDITORA = %s
+                """,
+                (int(payload.new_cod_editora),),
+            )
+            ed_row = cur.fetchone()
+            if not ed_row:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"A editora código {payload.new_cod_editora} não existe na tabela EDITORA do Horus.",
+                )
+            new_cod_ed = int(ed_row["COD_EDITORA"])
+            new_nom_ed = str(ed_row["nome_editora"] or f"EDITORA #{new_cod_ed}").strip()
+
+            # 2. Captura estado anterior dos itens em ITENS_ESTOQUE_GERAL
+            cods_sorted = sorted(target_cod_items)
+            cods_sql = ", ".join(str(c) for c in cods_sorted)
+            cur.execute(
+                f"""
+                SELECT IE.COD_ITEM AS cod_item,
+                       RTRIM(LTRIM(ISNULL(IE.COD_BARRA_ITEM, ISNULL(IE.COD_ISBN_ITEM, '')))) AS isbn,
+                       RTRIM(LTRIM(ISNULL(IE.NOM_ITEM, ''))) AS nom_item,
+                       IE.COD_EDITORA AS old_cod_editora,
+                       RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS old_nome_editora
+                FROM ITENS_ESTOQUE_GERAL IE
+                LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = IE.COD_EDITORA
+                WHERE IE.COD_ITEM IN ({cods_sql})
+                """
+            )
+            before_items = cur.fetchall()
+            if not before_items:
+                conn.rollback()
+                raise HTTPException(status_code=404, detail="Os itens informados não foram encontrados em ITENS_ESTOQUE_GERAL no Horus.")
+
+            # 3. Atualiza ITENS_ESTOQUE_GERAL no Horus SQL Server (apenas UPDATE de COD_EDITORA)
+            cur.execute(
+                f"""
+                UPDATE ITENS_ESTOQUE_GERAL
+                SET COD_EDITORA = %s,
+                    DAT_ULT_ATL = GETDATE(),
+                    NOM_USUARIO = %s
+                WHERE COD_ITEM IN ({cods_sql})
+                """,
+                (new_cod_ed, horus_user_upper),
+            )
+            horus_updated_count = cur.rowcount
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.error(f"[HorusPurchases] Erro ao atualizar COD_EDITORA no Horus SQL: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Falha ao atualizar editora no Horus SQL: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # 4. Concilia base PostgreSQL local do Cronuz (Brand + Product + Log de Auditoria)
+    brand = (
+        db.query(Brand)
+        .filter(Brand.company_id == seller_id, func.upper(Brand.name) == new_nom_ed.upper())
+        .first()
+    )
+    if not brand:
+        brand = Brand(company_id=seller_id, name=new_nom_ed[:100])
+        db.add(brand)
+        db.flush()
+
+    found_cods = [int(b["cod_item"]) for b in before_items]
+    found_isbns = [str(b.get("isbn") or "").strip() for b in before_items if b.get("isbn")]
+
+    local_matches = (
+        db.query(Product)
+        .filter(
+            Product.company_id == seller_id,
+            (
+                Product.horus_cod_item.in_(found_cods)
+                | (Product.ean_gtin.in_(found_isbns) if found_isbns else False)
+                | Product.id.in_([int(pid) for pid in (payload.product_ids or [])] if payload.product_ids else [-1])
+            ),
+        )
+        .all()
+    )
+    cronuz_updated_count = 0
+    for prod in local_matches:
+        prod.brand_id = brand.id
+        prod.brand = new_nom_ed[:100]
+        cronuz_updated_count += 1
+
+    origin_clean = "ANALISE_ITENS" if str(payload.origin_module or "").upper() == "ANALISE_ITENS" else "COMPRAS"
+    for bi in before_items:
+        db.add(HorusPublisherReconciliationLog(
+            company_id=seller_id,
+            cod_item=int(bi["cod_item"]),
+            isbn=str(bi.get("isbn") or "")[:30] or None,
+            nome_item=str(bi.get("nom_item") or "")[:255] or None,
+            old_cod_editora=int(bi["old_cod_editora"]) if bi.get("old_cod_editora") is not None else None,
+            old_nome_editora=str(bi.get("old_nome_editora") or "")[:150] or None,
+            new_cod_editora=new_cod_ed,
+            new_nome_editora=new_nom_ed[:150],
+            origin_module=origin_clean,
+            user_id=uid,
+            user_name=uname,
+        ))
+
+    db.commit()
+
+    return {
+        "success": True,
+        "horus_updated_count": horus_updated_count,
+        "cronuz_updated_count": cronuz_updated_count,
+        "new_cod_editora": new_cod_ed,
+        "new_nome_editora": new_nom_ed,
+        "updated_cod_items": found_cods,
+        "message": (
+            f"Editora/Selo atualizada para '{new_nom_ed}' (Cód. {new_cod_ed}) em {len(found_cods)} item(ns) "
+            f"no Horus SQL e conciliada no Cronuz B2B!"
+        ),
+    }
+
+
+# ── 5. Motor de Enriquecimento de Itens na Filial + Validação de Desconto do Fornecedor ─
+
+def _enrich_purchase_items_for_branch_and_supplier(
+    db: Session,
+    sql_client: HorusSQLClient,
+    seller_id: int,
+    branch: Dict[str, Any],
+    cod_grp_fornecedor: int,
+    cod_fornecedor: int,
+    cod_items_qty: Dict[int, int],
+) -> List[Dict[str, Any]]:
+    """
+    Dado um mapa {cod_item: quantity}, consulta no Horus SQL os dados completos do item
+    na filial selecionada (estoque disponível respeitando local, consignado recebido/enviado,
+    vendas 90d/365d, última entrada, preço de capa e editora) e cruza com pur_horus_supplier_discount.
+    """
+    if not cod_items_qty:
+        return []
+
+    emp = int(branch["cod_empresa"])
+    fil = int(branch["cod_filial"])
+    bid = int(branch["id"])
+    locais = branch.get("locais") or []
+
+    # Mapa de descontos configurados para o fornecedor na filial
+    disc_rows = (
+        db.query(HorusSupplierPublisherDiscount)
+        .filter(
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+            HorusSupplierPublisherDiscount.branch_id == bid,
+            HorusSupplierPublisherDiscount.cod_grp_fornecedor == cod_grp_fornecedor,
+            HorusSupplierPublisherDiscount.cod_fornecedor == cod_fornecedor,
+            HorusSupplierPublisherDiscount.active == True,
+        )
+        .all()
+    )
+    disc_by_editora = {int(d.cod_editora): float(d.desconto_percentual or 0.0) for d in disc_rows}
+
+    cod_list = sorted(cod_items_qty.keys())
+    items_map: Dict[int, Dict[str, Any]] = {}
+
+    cfop_vendas_in = _build_sargable_cfop_in((
+        "5101", "5102", "5108", "5113", "5114", "5115", "5403", "5405",
+        "6101", "6102", "6108", "6113", "6114", "6115", "6403", "6405",
+    ))
+    cfop_ent_in = _build_sargable_cfop_in((
+        "1101", "1102", "2101", "2102", "3101", "3102", "1917", "2917", "1113", "2113", "1114", "2114",
+    ))
+
+    for idx in range(0, len(cod_list), 200):
+        chunk = cod_list[idx:idx + 200]
+        cods_in = ", ".join(str(c) for c in chunk)
+
+        base_rows = sql_client.query(
+            f"""
+            SELECT
+                IE.COD_ITEM AS cod_item,
+                RTRIM(LTRIM(ISNULL(IE.COD_BARRA_ITEM, ISNULL(IE.COD_ISBN_ITEM, '')))) AS isbn,
+                RTRIM(LTRIM(ISNULL(IE.NOM_ITEM, ''))) AS nome_item,
+                IE.COD_EDITORA AS cod_editora,
+                RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS nome_editora,
+                ISNULL(PA.VLR_CAPA, ISNULL(IE.VLR_CAPA, 0)) AS vlr_capa,
+                ISNULL(IE.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
+                RTRIM(LTRIM(ISNULL(IE.SITUACAO_ITEM, ''))) AS situacao_item,
+                ISNULL(TS.SALDO_VENDAVEL, 0) - ISNULL(TS.SALDO_RESERVADO_VENDA, 0) AS saldo_disp,
+                ISNULL(TS.SALDO_ESTOQUE, 0) AS saldo_fisico,
+                ISNULL(TS.SALDO_CONSIGNADO_ENVIADO, 0) AS consig_enviado,
+                ISNULL(TS.SALDO_CONSIGNADO_RECEBIDO, 0) AS consig_recebido,
+                ISNULL(TS.SALDO_PREV_AGUARD_ENT, 0) AS aguardando_entrega,
+                ISNULL(TS.CUSTO_MEDIO_ESTOQUE, 0) AS custo_medio
+            FROM ITENS_ESTOQUE_GERAL IE WITH (NOLOCK)
+            LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = IE.COD_EDITORA
+            LEFT JOIN (
+                SELECT COD_ITEM, MAX(VLR_CAPA) AS VLR_CAPA
+                FROM ITENS_ESTPRECO_ATUAL WITH (NOLOCK)
+                WHERE COD_ITEM IN ({cods_in})
+                GROUP BY COD_ITEM
+            ) PA ON PA.COD_ITEM = IE.COD_ITEM
+            LEFT JOIN TABELA_SALDO_ITENS_GERAL TS WITH (NOLOCK)
+                ON TS.COD_ITEM = IE.COD_ITEM AND TS.COD_EMPRESA = %s AND TS.COD_FILIAL = %s
+            WHERE IE.COD_ITEM IN ({cods_in})
+            """,
+            (emp, fil),
+            max_rows=len(chunk) + 5,
+        )
+
+        for r in (base_rows or []):
+            ci = int(r["cod_item"])
+            ce = int(r["cod_editora"]) if r.get("cod_editora") is not None else None
+            ne = str(r.get("nome_editora") or (f"EDITORA #{ce}" if ce else "SEM EDITORA")).strip()
+            capa = round(float(r.get("vlr_capa") or 0.0), 2)
+            qty = max(1, int(cod_items_qty.get(ci, 1)))
+
+            is_pub_cfg = ce is not None and ce in disc_by_editora
+            disc_pct = disc_by_editora[ce] if is_pub_cfg else 0.0
+            unit_net = round(capa * (1.0 - disc_pct / 100.0), 4)
+            sub_gross = round(capa * qty, 2)
+            sub_net = round(unit_net * qty, 2)
+
+            warning_msg = None
+            if ce is None:
+                warning_msg = "Item sem editora cadastrada no Horus. Concilie a editora para liberar o pedido."
+            elif not is_pub_cfg:
+                warning_msg = f"A editora '{ne}' (Cód. {ce}) não está configurada para este fornecedor nesta filial."
+            elif capa <= 0:
+                warning_msg = "Item com Preço de Capa R$ 0,00 no Horus."
+
+            items_map[ci] = {
+                "cod_item": ci,
+                "isbn": str(r.get("isbn") or ""),
+                "nome_item": str(r.get("nome_item") or f"ITEM #{ci}"),
+                "cod_editora": ce,
+                "nome_editora": ne,
+                "vlr_capa": capa,
+                "qtd_caixa": int(r.get("qtd_caixa") or 0),
+                "situacao_item": str(r.get("situacao_item") or ""),
+                "stock_available": int(float(r.get("saldo_disp") or 0)),
+                "stock_physical": int(float(r.get("saldo_fisico") or 0)),
+                "consigned_sent": int(float(r.get("consig_enviado") or 0)),
+                "consigned_received": int(float(r.get("consig_recebido") or 0)),
+                "awaiting_delivery": int(float(r.get("aguardando_entrega") or 0)),
+                "cost_price": round(float(r.get("custo_medio") or 0.0), 2),
+                "min_stock": 0,
+                "sales_90": 0,
+                "sales_365": 0,
+                "last_entry_date": None,
+                "last_entry_qty": 0,
+                "last_entry_type": None,
+                "quantity": qty,
+                "publisher_configured": is_pub_cfg,
+                "discount_pct": disc_pct,
+                "unit_net_price": unit_net,
+                "subtotal_gross": sub_gross,
+                "subtotal_net": sub_net,
+                "validation_warning": warning_msg,
+            }
+
+        # Respeita COD_LOCAL configurado na filial se houver
+        if locais:
+            loc_in = ", ".join(str(int(l)) for l in locais)
+            try:
+                loc_rows = sql_client.query(
+                    f"""
+                    SELECT COD_ITEM AS cod_item, SUM(ISNULL(SALDO_TOTAL, 0)) AS saldo_loc
+                    FROM TABELA_SALDO_ITENS WITH (NOLOCK)
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s
+                      AND COD_LOCAL IN ({loc_in})
+                      AND COD_ITEM IN ({cods_in})
+                    GROUP BY COD_ITEM
+                    """,
+                    (emp, fil),
+                    max_rows=len(chunk) + 5,
+                )
+                loc_map = {int(lr["cod_item"]): int(float(lr.get("saldo_loc") or 0)) for lr in (loc_rows or [])}
+                for c_k in chunk:
+                    if c_k in items_map:
+                        items_map[c_k]["stock_available"] = loc_map.get(c_k, 0)
+            except Exception:
+                pass
+
+        # Vendas 90d / 365d na filial
+        try:
+            v_rows = sql_client.query(
+                f"""
+                SELECT
+                    NFI.COD_ITEM AS cod_item,
+                    SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -90, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS v90,
+                    SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS v365
+                FROM NF_ITENS NFI WITH (NOLOCK)
+                INNER JOIN NF_MESTRE NF WITH (NOLOCK)
+                    ON NF.COD_EMPRESA = NFI.COD_EMPRESA AND NF.COD_FILIAL = NFI.COD_FILIAL AND NF.COD_NF = NFI.COD_NF
+                WHERE NFI.COD_EMPRESA = %s AND NFI.COD_FILIAL = %s
+                  AND NFI.COD_ITEM IN ({cods_in})
+                  AND NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE())
+                  AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
+                  AND NFI.COD_NATUREZA IN ({cfop_vendas_in})
+                GROUP BY NFI.COD_ITEM
+                """,
+                (emp, fil),
+                max_rows=len(chunk) + 5,
+            )
+            for vr in (v_rows or []):
+                ci = int(vr["cod_item"])
+                if ci in items_map:
+                    items_map[ci]["sales_90"] = max(0, int(float(vr.get("v90") or 0)))
+                    items_map[ci]["sales_365"] = max(0, int(float(vr.get("v365") or 0)))
+        except Exception:
+            pass
+
+        # Última entrada na filial
+        try:
+            le_rows = sql_client.query(
+                f"""
+                WITH Ranked AS (
+                    SELECT
+                        INF.COD_ITEM AS cod_item,
+                        ISNULL(NE.DAT_RECEPCAO_NF, NE.DAT_EMISSAO_NF) AS dt,
+                        ISNULL(INF.QTD_ITENS, 0) AS qtd,
+                        RTRIM(LTRIM(ISNULL(INF.COD_NATUREZA, NE.COD_NATUREZA))) AS cfop,
+                        ROW_NUMBER() OVER (PARTITION BY INF.COD_ITEM ORDER BY ISNULL(NE.DAT_RECEPCAO_NF, NE.DAT_EMISSAO_NF) DESC, NE.COD_NF_ENTRADA DESC) AS rn
+                    FROM ITENS_NOTAS_FISCAIS INF WITH (NOLOCK)
+                    INNER JOIN NF_ENTRADA NE WITH (NOLOCK)
+                        ON NE.COD_EMPRESA = INF.COD_EMPRESA AND NE.COD_FILIAL = INF.COD_FILIAL AND NE.COD_NF_ENTRADA = INF.COD_NF_ENTRADA
+                    WHERE INF.COD_EMPRESA = %s AND INF.COD_FILIAL = %s
+                      AND INF.COD_ITEM IN ({cods_in})
+                      AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
+                      AND INF.COD_NATUREZA IN ({cfop_ent_in})
+                )
+                SELECT cod_item, dt, qtd, cfop FROM Ranked WHERE rn = 1
+                """,
+                (emp, fil),
+                max_rows=len(chunk) + 5,
+            )
+            for lr in (le_rows or []):
+                ci = int(lr["cod_item"])
+                if ci in items_map:
+                    cf_d = _clean_digits(lr.get("cfop"))
+                    items_map[ci]["last_entry_date"] = _fmt_dt(lr.get("dt"))[:10] if lr.get("dt") else None
+                    items_map[ci]["last_entry_qty"] = int(float(lr.get("qtd") or 0))
+                    items_map[ci]["last_entry_type"] = (
+                        "CONSIG." if cf_d in ("1917", "2917") else ("ACERTO" if cf_d in ("1113", "2113", "1114", "2114") else "COMPRA")
+                    )
+        except Exception:
+            pass
+
+    # Cruza Estoque Mínimo da filial (prd_branch_min_stock)
+    isbns_present = [x["isbn"] for x in items_map.values() if x.get("isbn")]
+    if isbns_present:
+        ms_rows = (
+            db.query(ProductBranchMinStock)
+            .filter(
+                ProductBranchMinStock.company_id == seller_id,
+                ProductBranchMinStock.branch_id == bid,
+                ProductBranchMinStock.isbn.in_(isbns_present),
+            )
+            .all()
+        )
+        ms_by_isbn = {str(m.isbn).strip(): int(m.min_stock or 0) for m in ms_rows}
+        for it in items_map.values():
+            if it.get("isbn") in ms_by_isbn:
+                it["min_stock"] = ms_by_isbn[it["isbn"]]
+
+    # Mantém a ordem solicitada
+    return [items_map[c] for c in cod_items_qty.keys() if c in items_map]
+
+
+@router.post("/items/lookup")
+def lookup_purchase_items(
+    payload: ItemLookupPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, payload.branch_id)
+    term = (payload.query or "").strip()
+    if not term:
+        return {"items": []}
+
+    sql_client = HorusSQLClient(db, seller_id)
+    lim = min(max(1, int(payload.limit or 30)), 100)
+    clean_code = _clean_isbn(term)
+
+    if clean_code and len(clean_code) >= 8 and clean_code.isdigit():
+        found_rows = sql_client.query(
+            f"""
+            SELECT TOP ({lim}) COD_ITEM AS cod_item
+            FROM ITENS_ESTOQUE_GERAL WITH (NOLOCK)
+            WHERE COD_BARRA_ITEM = %s OR COD_ISBN_ITEM = %s OR CAST(COD_ITEM AS VARCHAR) = %s
+            ORDER BY COD_ITEM ASC
+            """,
+            (clean_code, clean_code, clean_code),
+            max_rows=lim,
+        )
+    elif term.isdigit():
+        found_rows = sql_client.query(
+            f"""
+            SELECT TOP ({lim}) COD_ITEM AS cod_item
+            FROM ITENS_ESTOQUE_GERAL WITH (NOLOCK)
+            WHERE COD_ITEM = %s OR COD_BARRA_ITEM LIKE %s OR NOM_ITEM LIKE %s
+            ORDER BY CASE WHEN COD_ITEM = %s THEN 0 ELSE 1 END, NOM_ITEM ASC
+            """,
+            (int(term), f"%{term}%", f"%{term}%", int(term)),
+            max_rows=lim,
+        )
+    else:
+        found_rows = sql_client.query(
+            f"""
+            SELECT TOP ({lim}) IE.COD_ITEM AS cod_item
+            FROM ITENS_ESTOQUE_GERAL IE WITH (NOLOCK)
+            LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = IE.COD_EDITORA
+            WHERE IE.NOM_ITEM LIKE %s OR IE.COD_BARRA_ITEM LIKE %s OR ED.NOM_FANTASIA LIKE %s OR ED.NOM_EDITORA LIKE %s
+            ORDER BY IE.NOM_ITEM ASC
+            """,
+            (f"%{term}%", f"%{term}%", f"%{term}%", f"%{term}%"),
+            max_rows=lim,
+        )
+
+    cod_qty = {int(r["cod_item"]): max(1, int(payload.default_qty or 1)) for r in (found_rows or [])}
+    enriched = _enrich_purchase_items_for_branch_and_supplier(
+        db=db,
+        sql_client=sql_client,
+        seller_id=seller_id,
+        branch=branch,
+        cod_grp_fornecedor=payload.cod_grp_fornecedor,
+        cod_fornecedor=payload.cod_fornecedor,
+        cod_items_qty=cod_qty,
+    )
+    return {"items": enriched}
+
+
+@router.post("/items/refresh-cart")
+def refresh_purchase_cart_items(
+    payload: RefreshCartItemsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Revalida todos os itens do carrinho (após conciliar editora ou cadastrar novo desconto no fornecedor)."""
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, payload.branch_id)
+    sql_client = HorusSQLClient(db, seller_id)
+
+    cod_qty: Dict[int, int] = {}
+    for row in (payload.items or []):
+        try:
+            ci = int(row.get("cod_item") or 0)
+            qt = max(1, int(row.get("quantity") or 1))
+            if ci > 0:
+                cod_qty[ci] = qt
+        except Exception:
+            continue
+
+    enriched = _enrich_purchase_items_for_branch_and_supplier(
+        db=db,
+        sql_client=sql_client,
+        seller_id=seller_id,
+        branch=branch,
+        cod_grp_fornecedor=payload.cod_grp_fornecedor,
+        cod_fornecedor=payload.cod_fornecedor,
+        cod_items_qty=cod_qty,
+    )
+    return {"items": enriched}
+
+
+@router.post("/items/import-sheet")
+async def import_purchase_sheet_items(
+    branch_id: int = Form(...),
+    cod_grp_fornecedor: int = Form(...),
+    cod_fornecedor: int = Form(...),
+    company_id: Optional[int] = Form(None),
+    pasted_text: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Importa planilha (.xlsx / .csv) ou lista colada com ISBN e Quantidade.
+    Aplica trava estrita de 10 MB (Regra Mandatória AGENTS.md Seção 1).
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branch = _get_branch_or_404(db, seller_id, branch_id)
+
+    parsed_pairs: List[Tuple[str, int]] = []
+
+    if file and file.filename:
+        raw_bytes = await file.read(MAX_PURCHASE_SHEET_BYTES + 1)
+        if len(raw_bytes) > MAX_PURCHASE_SHEET_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="O arquivo excede o limite máximo permitido de 10 MB para este tipo de envio.",
+            )
+        fname = file.filename.lower()
+        rows_matrix: List[List[Any]] = []
+        if fname.endswith(".xlsx"):
+            wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
+            ws = wb.active
+            for r in ws.iter_rows(values_only=True):
+                rows_matrix.append(list(r))
+            wb.close()
+        elif fname.endswith(".csv") or fname.endswith(".txt"):
+            text_data = raw_bytes.decode("utf-8-sig", errors="replace")
+            sample = text_data[:2048]
+            delim = ";" if sample.count(";") >= sample.count(",") else ("," if sample.count(",") >= sample.count("\t") else "\t")
+            reader = csv.reader(io.StringIO(text_data), delimiter=delim)
+            for r in reader:
+                rows_matrix.append(r)
+        else:
+            raise HTTPException(status_code=400, detail="Formato inválido. Envie uma planilha .xlsx ou .csv (máx. 10 MB).")
+
+        isbn_col_idx = 0
+        qty_col_idx = 1
+        start_row = 0
+        if rows_matrix:
+            first_row = [str(c or "").strip().upper() for c in rows_matrix[0]]
+            has_header = any(
+                any(k in cell for k in ("ISBN", "EAN", "BARRA", "COD", "QTD", "QUANT"))
+                for cell in first_row
+            )
+            if has_header:
+                start_row = 1
+                for idx_c, h in enumerate(first_row):
+                    if any(k in h for k in ("ISBN", "EAN", "BARRA", "GTIN")):
+                        isbn_col_idx = idx_c
+                        break
+                for idx_c, h in enumerate(first_row):
+                    if idx_c != isbn_col_idx and any(k in h for k in ("QTD", "QUANT", "PEDID", "UNID", "EXEMP")):
+                        qty_col_idx = idx_c
+                        break
+
+        for r in rows_matrix[start_row:]:
+            if not r or len(r) <= isbn_col_idx:
+                continue
+            raw_code = r[isbn_col_idx]
+            if isinstance(raw_code, float) and raw_code.is_integer():
+                code_str = str(int(raw_code))
+            else:
+                code_str = _clean_isbn(str(raw_code or ""))
+            if not code_str:
+                continue
+            raw_q = r[qty_col_idx] if len(r) > qty_col_idx and r[qty_col_idx] is not None else 1
+            try:
+                qty_val = max(1, int(float(str(raw_q).replace(",", ".").strip())))
+            except Exception:
+                qty_val = 1
+            parsed_pairs.append((code_str, qty_val))
+
+    if pasted_text and pasted_text.strip():
+        for line in pasted_text.strip().splitlines():
+            ln = line.strip()
+            if not ln:
+                continue
+            parts = re.split(r"[;\t,|\s]+", ln)
+            code_str = _clean_isbn(parts[0])
+            if not code_str or code_str.upper() in ("ISBN", "EAN", "CODIGO"):
+                continue
+            qty_val = 1
+            if len(parts) > 1:
+                try:
+                    qty_val = max(1, int(float(parts[-1].replace(",", "."))))
+                except Exception:
+                    qty_val = 1
+            parsed_pairs.append((code_str, qty_val))
+
+    if not parsed_pairs:
+        raise HTTPException(status_code=400, detail="Nenhum ISBN/Código válido foi identificado na planilha ou texto.")
+
+    # Soma quantidades de ISBNs repetidos na mesma planilha
+    aggregated_by_code: Dict[str, int] = {}
+    for code_s, q_v in parsed_pairs:
+        aggregated_by_code[code_s] = aggregated_by_code.get(code_s, 0) + q_v
+
+    sql_client = HorusSQLClient(db, seller_id)
+    codes_list = list(aggregated_by_code.keys())
+    code_to_cod_item: Dict[str, int] = {}
+
+    for i in range(0, len(codes_list), 200):
+        chunk_codes = codes_list[i:i + 200]
+        ph = ", ".join(["%s"] * len(chunk_codes))
+        m_rows = sql_client.query(
+            f"""
+            SELECT COD_ITEM AS cod_item,
+                   RTRIM(LTRIM(ISNULL(COD_BARRA_ITEM, ''))) AS barra,
+                   RTRIM(LTRIM(ISNULL(COD_ISBN_ITEM, ''))) AS isbn
+            FROM ITENS_ESTOQUE_GERAL WITH (NOLOCK)
+            WHERE COD_BARRA_ITEM IN ({ph}) OR COD_ISBN_ITEM IN ({ph}) OR CAST(COD_ITEM AS VARCHAR) IN ({ph})
+            """,
+            tuple(chunk_codes + chunk_codes + chunk_codes),
+            max_rows=len(chunk_codes) * 3,
+        )
+        for mr in (m_rows or []):
+            ci = int(mr["cod_item"])
+            for cand in (mr.get("barra"), mr.get("isbn"), str(ci)):
+                c_clean = _clean_isbn(cand)
+                if c_clean and c_clean in aggregated_by_code and c_clean not in code_to_cod_item:
+                    code_to_cod_item[c_clean] = ci
+
+    not_found_codes = [c for c in codes_list if c not in code_to_cod_item]
+    cod_items_qty: Dict[int, int] = {}
+    for c_str, q_val in aggregated_by_code.items():
+        if c_str in code_to_cod_item:
+            ci = code_to_cod_item[c_str]
+            cod_items_qty[ci] = cod_items_qty.get(ci, 0) + q_val
+
+    enriched = _enrich_purchase_items_for_branch_and_supplier(
+        db=db,
+        sql_client=sql_client,
+        seller_id=seller_id,
+        branch=branch,
+        cod_grp_fornecedor=cod_grp_fornecedor,
+        cod_fornecedor=cod_fornecedor,
+        cod_items_qty=cod_items_qty,
+    )
+    unconfigured_count = sum(1 for x in enriched if not x["publisher_configured"])
+
+    return {
+        "items": enriched,
+        "total_imported": len(enriched),
+        "unconfigured_publishers_count": unconfigured_count,
+        "not_found_isbns": not_found_codes,
+        "message": f"{len(enriched)} item(ns) processado(s) para a filial '{branch['nome']}'.",
+    }
+
+
+@router.get("/template-sheet")
+def download_purchase_sheet_template():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Modelo_Pedido_Compra"
+    ws.append(["ISBN", "Quantidade"])
+    ws.append(["9788535914849", 5])
+    ws.append(["9786559210886", 10])
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 16
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=Modelo_Importacao_Pedido_Compra_Horus.xlsx"},
+    )
+
+
+# ── 6. Geração de Pedido de Compra no Horus ('AP' Aprovado) + Cronuz & Transição 'AE' ─
+
+@router.post("/orders")
+def create_horus_purchase_order(
+    payload: CreatePurchaseOrderPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera o Pedido de Compra de forma atômica e validada em PEDIDOS_COMPRA + ITENS_PEDIDO_COMPRA no Horus SQL
+    com status inicial 'AP' (Aprovado, STA_APROVACAO='S'), espelhando em pur_horus_order no Cronuz B2B.
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    branch = _get_branch_or_404(db, seller_id, payload.branch_id)
+    emp = int(branch["cod_empresa"])
+    fil = int(branch["cod_filial"])
+    bid = int(branch["id"])
+    uid, uname, horus_user_upper = _user_meta(current_user)
+
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Adicione ao menos 1 item para gerar o pedido de compra.")
+
+    # Trava de Segurança 1: Fornecedor DEVE ter selos/editoras e descontos configurados na filial
+    disc_rows = (
+        db.query(HorusSupplierPublisherDiscount)
+        .filter(
+            HorusSupplierPublisherDiscount.company_id == seller_id,
+            HorusSupplierPublisherDiscount.branch_id == bid,
+            HorusSupplierPublisherDiscount.cod_grp_fornecedor == payload.cod_grp_fornecedor,
+            HorusSupplierPublisherDiscount.cod_fornecedor == payload.cod_fornecedor,
+            HorusSupplierPublisherDiscount.active == True,
+        )
+        .all()
+    )
+    if not disc_rows:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Operação bloqueada: este fornecedor ainda não possui selos (editoras) e descontos "
+                "configurados para esta filial no Cronuz. Configure os descontos antes de gerar o pedido."
+            ),
+        )
+    disc_by_ed = {int(d.cod_editora): Decimal(str(d.desconto_percentual or 0)) for d in disc_rows}
+
+    # Consolida quantidades por cod_item
+    req_qty_by_item: Dict[int, int] = {}
+    for it in payload.items:
+        ci = int(it.cod_item)
+        qt = int(it.quantity)
+        if ci <= 0 or qt <= 0:
+            raise HTTPException(status_code=400, detail="Todos os itens devem ter código válido e quantidade maior que zero.")
+        req_qty_by_item[ci] = req_qty_by_item.get(ci, 0) + qt
+
+    sql_ro = HorusSQLClient(db, seller_id)
+    enriched_items = _enrich_purchase_items_for_branch_and_supplier(
+        db=db,
+        sql_client=sql_ro,
+        seller_id=seller_id,
+        branch=branch,
+        cod_grp_fornecedor=payload.cod_grp_fornecedor,
+        cod_fornecedor=payload.cod_fornecedor,
+        cod_items_qty=req_qty_by_item,
+    )
+    if len(enriched_items) != len(req_qty_by_item):
+        found_set = {x["cod_item"] for x in enriched_items}
+        missing_c = [c for c in req_qty_by_item.keys() if c not in found_set]
+        raise HTTPException(status_code=400, detail=f"Itens não encontrados em ITENS_ESTOQUE_GERAL no Horus: {missing_c}")
+
+    # Trava de Segurança 2: NENHUM item pode estar sem editora configurada para este fornecedor na filial ou com preço zero
+    invalid_pub_items = [x for x in enriched_items if not x["publisher_configured"]]
+    if invalid_pub_items:
+        sample_names = ", ".join(
+            f"{x['isbn'] or x['cod_item']} ({x['nome_editora']})" for x in invalid_pub_items[:5]
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Existem {len(invalid_pub_items)} item(ns) com editora não vinculada a este fornecedor nesta filial: "
+                f"{sample_names}. Ajuste a editora do item (Horus+Cronuz) ou cadastre o desconto da editora no fornecedor."
+            ),
+        )
+
+    zero_price_items = [x for x in enriched_items if float(x["vlr_capa"] or 0) <= 0]
+    if zero_price_items:
+        sample_zp = ", ".join(str(x["isbn"] or x["cod_item"]) for x in zero_price_items[:5])
+        raise HTTPException(
+            status_code=400,
+            detail=f"Existem itens com Preço de Capa zerado no Horus ({sample_zp}). Regularize antes de gerar o pedido.",
+        )
+
+    # Resolve configuração da filial
+    branch_cfg = (
+        db.query(HorusPurchaseBranchConfig)
+        .filter(HorusPurchaseBranchConfig.company_id == seller_id, HorusPurchaseBranchConfig.branch_id == bid)
+        .first()
+    )
+    eff_local = (
+        payload.cod_local
+        if payload.cod_local is not None
+        else (branch_cfg.cod_local_default if branch_cfg and branch_cfg.cod_local_default is not None else branch.get("cod_local"))
+    )
+    eff_compra_consig = "S" if str(payload.compra_consig or "N").upper() == "S" else "N"
+
+    # Cálculos financeiros exatos em Decimal (padrão Horus PEDIDOS_COMPRA + ITENS_PEDIDO_COMPRA)
+    prepared_lines = []
+    total_qty = 0
+    total_gross = Decimal("0.00")
+    total_net = Decimal("0.00")
+
+    for x in enriched_items:
+        ci = int(x["cod_item"])
+        qty = int(x["quantity"])
+        ce = int(x["cod_editora"])
+        disc_pct = disc_by_ed[ce].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        cover_dec = Decimal(str(x["vlr_capa"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        unit_net_dec = (cover_dec * (Decimal("100") - disc_pct) / Decimal("100")).quantize(
+            Decimal("0.0001"), rounding=ROUND_HALF_UP
+        )
+        line_gross = (cover_dec * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        line_net = (unit_net_dec * Decimal(qty)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        total_qty += qty
+        total_gross += line_gross
+        total_net += line_net
+
+        prepared_lines.append({
+            "cod_item": ci,
+            "isbn": x["isbn"],
+            "nome_item": x["nome_item"],
+            "cod_editora": ce,
+            "nome_editora": x["nome_editora"],
+            "quantity": qty,
+            "cover_dec": cover_dec,
+            "disc_pct": disc_pct,
+            "unit_net_dec": unit_net_dec,
+            "line_gross": line_gross,
+            "line_net": line_net,
+            "stock_available": int(x.get("stock_available") or 0),
+            "consigned_received": int(x.get("consigned_received") or 0),
+        })
+
+    total_discount = (total_gross - total_net).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    avg_disc_pct = (
+        ((total_discount / total_gross) * Decimal("100")).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        if total_gross > 0
+        else Decimal("0.0000")
+    )
+
+    # Transação Atômica no SQL Server do Horus
+    conn = _open_horus_tx_connection(db, seller_id)
+    horus_cod_pedido: Optional[int] = None
+    sup_nom = ""
+    sup_cnpj = ""
+    sup_email = ""
+    eff_dept: Optional[int] = None
+    eff_ccusto: Optional[int] = None
+
+    try:
+        with conn.cursor() as cur:
+            # Valida existência do fornecedor em FORNECEDORES_GERAL (FK_PEDIDOS_COMPRA_FORNECEDORES)
+            cur.execute(
+                """
+                SELECT TOP 1
+                    RTRIM(LTRIM(ISNULL(FG.NOM_FORNECEDOR, ''))) AS nom_fornecedor,
+                    RTRIM(LTRIM(ISNULL(FG.CNPF_CNPJ, ISNULL(FG.CPF, '')))) AS cnpj,
+                    RTRIM(LTRIM(ISNULL(FG.END_EMAIL_PED_COMPRAS, ISNULL(FG.END_EMAIL, '')))) AS email,
+                    GF.COD_DEPARTAMENTO AS grp_dept
+                FROM FORNECEDORES_GERAL FG WITH (NOLOCK)
+                LEFT JOIN GRUPO_FORNECEDORES GF WITH (NOLOCK)
+                    ON GF.COD_EMPRESA = FG.COD_EMPRESA AND GF.COD_FILIAL = FG.COD_FILIAL
+                    AND GF.COD_GRP_FORNECEDOR = FG.COD_GRP_FORNECEDOR
+                WHERE FG.COD_EMPRESA = %s AND FG.COD_FILIAL = %s
+                  AND FG.COD_GRP_FORNECEDOR = %s AND FG.COD_FORNECEDOR = %s
+                """,
+                (emp, fil, payload.cod_grp_fornecedor, payload.cod_fornecedor),
+            )
+            sup_db = cur.fetchone()
+            if not sup_db:
+                conn.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail="Fornecedor não encontrado em FORNECEDORES_GERAL para esta Empresa/Filial no Horus.",
+                )
+            sup_nom = str(sup_db.get("nom_fornecedor") or "")
+            sup_cnpj = _clean_digits(sup_db.get("cnpj"))
+            sup_email = str(sup_db.get("email") or "")
+
+            # Resolve COD_DEPARTAMENTO garantindo integridade da FK_PEDIDOS_COMPRA_DEPARTAMENTOS
+            cand_dept = (
+                payload.cod_departamento
+                or (branch_cfg.cod_departamento_default if branch_cfg else None)
+                or sup_db.get("grp_dept")
+            )
+            if cand_dept is not None:
+                cur.execute(
+                    "SELECT TOP 1 COD_DEPARTAMENTO FROM DEPARTAMENTOS_GERAL WITH (NOLOCK) WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_DEPARTAMENTO = %s",
+                    (emp, fil, int(cand_dept)),
+                )
+                if cur.fetchone():
+                    eff_dept = int(cand_dept)
+            if eff_dept is None:
+                cur.execute(
+                    """
+                    SELECT TOP 1 COD_DEPARTAMENTO, COD_CENTRO_CUSTO
+                    FROM PEDIDOS_COMPRA WITH (NOLOCK)
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_DEPARTAMENTO IS NOT NULL
+                    ORDER BY DAT_PEDIDO DESC
+                    """,
+                    (emp, fil),
+                )
+                last_pc = cur.fetchone()
+                if last_pc and last_pc.get("COD_DEPARTAMENTO") is not None:
+                    cur.execute(
+                        "SELECT TOP 1 COD_DEPARTAMENTO FROM DEPARTAMENTOS_GERAL WITH (NOLOCK) WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_DEPARTAMENTO = %s",
+                        (emp, fil, int(last_pc["COD_DEPARTAMENTO"])),
+                    )
+                    if cur.fetchone():
+                        eff_dept = int(last_pc["COD_DEPARTAMENTO"])
+                    if last_pc.get("COD_CENTRO_CUSTO") is not None:
+                        eff_ccusto = int(last_pc["COD_CENTRO_CUSTO"])
+
+            if payload.cod_centro_custo is not None:
+                eff_ccusto = int(payload.cod_centro_custo)
+            elif branch_cfg and branch_cfg.cod_centro_custo_default is not None:
+                eff_ccusto = int(branch_cfg.cod_centro_custo_default)
+
+            # Reserva próximo COD_PEDIDO na Empresa/Filial com UPDLOCK + HOLDLOCK (evita colisão concorrente)
+            cur.execute(
+                """
+                SELECT ISNULL(MAX(COD_PEDIDO), 0) + 1 AS next_ped
+                FROM PEDIDOS_COMPRA WITH (UPDLOCK, HOLDLOCK)
+                WHERE COD_EMPRESA = %s AND COD_FILIAL = %s
+                """,
+                (emp, fil),
+            )
+            next_row = cur.fetchone()
+            horus_cod_pedido = int(next_row["next_ped"]) if next_row else 1
+
+            # Insere cabeçalho em PEDIDOS_COMPRA com STATUS_PEDIDO_COMPRA = 'AP' (Aprovado)
+            cur.execute(
+                """
+                INSERT INTO PEDIDOS_COMPRA (
+                    COD_GRP_FORNECEDOR,
+                    COD_FORNECEDOR,
+                    COD_PEDIDO,
+                    COD_EMPRESA,
+                    COD_FILIAL,
+                    TIP_SITUACAO,
+                    COD_SITUACAO,
+                    COD_DEPARTAMENTO,
+                    COD_CENTRO_CUSTO,
+                    DAT_PEDIDO,
+                    QTD_ITENS,
+                    VLR_TOTAL_PEDIDO,
+                    VLR_TOTAL_DESCONTO,
+                    PER_TOTAL_DESCONTO,
+                    QTD_ITENS_ATENDIDOS,
+                    STA_APROVACAO,
+                    DAT_STATUS,
+                    STATUS_PEDIDO_COMPRA,
+                    DAT_ULT_ATL,
+                    NOM_USUARIO,
+                    COMPRA_CONSIG,
+                    GERAR_PEND,
+                    USU_APROVACAO,
+                    COD_LOCAL,
+                    STA_IMPORTADOS,
+                    VLR_FRETE
+                ) VALUES (
+                    %s, %s, %s, %s, %s,
+                    'C', 1, %s, %s, GETDATE(),
+                    %s, %s, %s, %s, 0,
+                    'S', GETDATE(), 'AP', GETDATE(), %s,
+                    %s, 'N', %s, %s, 'N', 0
+                )
+                """,
+                (
+                    int(payload.cod_grp_fornecedor),
+                    int(payload.cod_fornecedor),
+                    horus_cod_pedido,
+                    emp,
+                    fil,
+                    eff_dept,
+                    eff_ccusto,
+                    total_qty,
+                    total_gross,
+                    total_discount,
+                    avg_disc_pct,
+                    horus_user_upper,
+                    eff_compra_consig,
+                    horus_user_upper,
+                    int(eff_local) if eff_local is not None else None,
+                ),
+            )
+
+            # Insere todos os itens em ITENS_PEDIDO_COMPRA (VLR_DESCONTO = % conforme padrão nativo Horus)
+            for ln in prepared_lines:
+                cur.execute(
+                    """
+                    INSERT INTO ITENS_PEDIDO_COMPRA (
+                        TIP_SITUACAO,
+                        COD_SITUACAO,
+                        COD_EMPRESA,
+                        COD_FILIAL,
+                        COD_GRP_FORNECEDOR,
+                        COD_FORNECEDOR,
+                        COD_PEDIDO,
+                        COD_ITEM,
+                        QT_PEDIDA,
+                        QTD_ATENDIDA,
+                        VLR_PRECO,
+                        VLR_DESCONTO,
+                        DAT_STATUS_ITEM,
+                        STATUS_ITEM_PEDIDO,
+                        DAT_ULT_ATL,
+                        NOM_USUARIO,
+                        VLR_LIQUIDO
+                    ) VALUES (
+                        'C', 1, %s, %s, %s, %s, %s, %s,
+                        %s, 0, %s, %s, GETDATE(), 'AB', GETDATE(), %s, %s
+                    )
+                    """,
+                    (
+                        emp,
+                        fil,
+                        int(payload.cod_grp_fornecedor),
+                        int(payload.cod_fornecedor),
+                        horus_cod_pedido,
+                        ln["cod_item"],
+                        ln["quantity"],
+                        ln["cover_dec"],
+                        ln["disc_pct"],
+                        horus_user_upper,
+                        ln["unit_net_dec"],
+                    ),
+                )
+
+            # Insere observação em OBS_PEDIDO_COMPRA (em CAIXA ALTA) caso preenchida
+            obs_upper = _to_upper_horus(payload.observations, 250)
+            if obs_upper:
+                cur.execute(
+                    """
+                    INSERT INTO OBS_PEDIDO_COMPRA (
+                        DAT_OBS, COD_EMPRESA, COD_FILIAL, COD_GRP_FORNECEDOR,
+                        COD_FORNECEDOR, COD_PEDIDO, TIP_SITUACAO, COD_SITUACAO, OBS
+                    ) VALUES (
+                        GETDATE(), %s, %s, %s, %s, %s, 'C', 1, %s
+                    )
+                    """,
+                    (
+                        emp,
+                        fil,
+                        int(payload.cod_grp_fornecedor),
+                        int(payload.cod_fornecedor),
+                        horus_cod_pedido,
+                        obs_upper,
+                    ),
+                )
+
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        log.error(f"[HorusPurchases] Falha ao gravar PEDIDOS_COMPRA no Horus SQL: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erro ao gravar Pedido de Compra no Horus SQL: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Persiste espelho + itens + log inicial no PostgreSQL do Cronuz
+    new_order = HorusPurchaseOrder(
+        company_id=seller_id,
+        branch_id=bid,
+        branch_name=branch["nome"],
+        branch_cnpj=branch.get("cnpj") or None,
+        cod_empresa=emp,
+        cod_filial=fil,
+        cod_local=int(eff_local) if eff_local is not None else None,
+        cod_departamento=eff_dept,
+        cod_centro_custo=eff_ccusto,
+        cod_grp_fornecedor=int(payload.cod_grp_fornecedor),
+        cod_fornecedor=int(payload.cod_fornecedor),
+        cnpj_fornecedor=sup_cnpj or None,
+        nome_fornecedor=sup_nom[:150] or f"FORNECEDOR #{payload.cod_fornecedor}",
+        email_fornecedor=sup_email[:255] or None,
+        horus_cod_pedido=horus_cod_pedido,
+        compra_consig=eff_compra_consig,
+        status="APPROVED",
+        horus_status="AP",
+        total_skus=len(prepared_lines),
+        total_quantity=total_qty,
+        total_gross=total_gross,
+        total_discount=total_discount,
+        total_net=total_net,
+        avg_discount_pct=avg_disc_pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        observations=(payload.observations or "").strip() or None,
+        created_by_user_id=uid,
+        created_by_name=uname,
+        updated_by_user_id=uid,
+        updated_by_name=uname,
+    )
+    db.add(new_order)
+    db.flush()
+
+    for ln in prepared_lines:
+        db.add(HorusPurchaseOrderItem(
+            order_id=new_order.id,
+            cod_item=ln["cod_item"],
+            isbn=ln["isbn"][:30] if ln["isbn"] else None,
+            nome_item=ln["nome_item"][:255],
+            cod_editora=ln["cod_editora"],
+            nome_editora=ln["nome_editora"][:150] if ln["nome_editora"] else None,
+            quantity=ln["quantity"],
+            unit_cover_price=ln["cover_dec"],
+            discount_pct=ln["disc_pct"],
+            unit_net_price=ln["unit_net_dec"],
+            subtotal_gross=ln["line_gross"],
+            subtotal_net=ln["line_net"],
+            stock_at_order=ln["stock_available"],
+            consigned_at_order=ln["consigned_received"],
+        ))
+
+    db.add(HorusPurchaseOrderLog(
+        order_id=new_order.id,
+        action="CREATED_AP",
+        old_status=None,
+        new_status="APPROVED",
+        old_horus_status=None,
+        new_horus_status="AP",
+        details=(
+            f"Pedido #{horus_cod_pedido} gerado no Horus SQL com status AP (Aprovado) na filial "
+            f"'{branch['nome']}' ({len(prepared_lines)} títulos, {total_qty} exemplares, líquido R$ {total_net})."
+        ),
+        user_id=uid,
+        user_name=uname,
+    ))
+    db.commit()
+    db.refresh(new_order)
+
+    return {
+        "success": True,
+        "order_id": new_order.id,
+        "horus_cod_pedido": horus_cod_pedido,
+        "status": new_order.status,
+        "horus_status": new_order.horus_status,
+        "total_skus": new_order.total_skus,
+        "total_quantity": new_order.total_quantity,
+        "total_gross": float(new_order.total_gross),
+        "total_net": float(new_order.total_net),
+        "message": f"Pedido de Compra #{horus_cod_pedido} gerado com sucesso no Horus com status AP (Aprovado)!",
+    }
+
+
+def _transition_order_status_in_horus_and_cronuz(
+    db: Session,
+    seller_id: int,
+    order: HorusPurchaseOrder,
+    new_horus_status: str,
+    current_user: Any,
+    notes: Optional[str] = None,
+) -> None:
+    target_hs = _to_upper_horus(new_horus_status, 2)
+    if target_hs not in ("AE", "AP", "CA"):
+        raise HTTPException(status_code=400, detail=f"Status de destino '{target_hs}' inválido para transição.")
+
+    uid, uname, horus_user_upper = _user_meta(current_user)
+    old_hs = order.horus_status
+    old_st = order.status
+    new_st = HORUS_TO_CRONUZ_STATUS.get(target_hs, "AWAITING_DELIVERY")
+
+    conn = _open_horus_tx_connection(db, seller_id)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT TOP 1 RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st
+                FROM PEDIDOS_COMPRA
+                WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                """,
+                (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+            )
+            cur_row = cur.fetchone()
+            if not cur_row:
+                conn.rollback()
+                raise HTTPException(status_code=404, detail=f"Pedido #{order.horus_cod_pedido} não encontrado em PEDIDOS_COMPRA no Horus.")
+            live_st = str(cur_row["st"] or "")
+            if live_st in ("EE", "FE"):
+                conn.rollback()
+                raise HTTPException(status_code=400, detail="Este pedido já consta como Encerrado/Recebido (EE) no Horus e não pode ser alterado.")
+
+            if target_hs == "AE":
+                cur.execute(
+                    """
+                    UPDATE PEDIDOS_COMPRA
+                    SET STATUS_PEDIDO_COMPRA = 'AE',
+                        DAT_AE = GETDATE(),
+                        DAT_STATUS = GETDATE(),
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                    """,
+                    (horus_user_upper, order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+            elif target_hs == "CA":
+                cur.execute(
+                    """
+                    UPDATE PEDIDOS_COMPRA
+                    SET STATUS_PEDIDO_COMPRA = 'CA',
+                        DAT_CANCELAMENTO = GETDATE(),
+                        DAT_STATUS = GETDATE(),
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                    """,
+                    (horus_user_upper, order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE PEDIDOS_COMPRA
+                    SET STATUS_PEDIDO_COMPRA = 'AP',
+                        STA_APROVACAO = 'S',
+                        USU_APROVACAO = %s,
+                        DAT_STATUS = GETDATE(),
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                    """,
+                    (horus_user_upper, horus_user_upper, order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"Falha ao atualizar status em PEDIDOS_COMPRA no Horus: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    order.horus_status = target_hs
+    order.status = new_st
+    order.updated_by_user_id = uid
+    order.updated_by_name = uname
+
+    db.add(HorusPurchaseOrderLog(
+        order_id=order.id,
+        action=f"STATUS_CHANGED_{target_hs}",
+        old_status=old_st,
+        new_status=new_st,
+        old_horus_status=old_hs,
+        new_horus_status=target_hs,
+        details=notes or f"Status alterado de {old_hs} para {target_hs} ({HORUS_STATUS_LABELS.get(target_hs, target_hs)}).",
+        user_id=uid,
+        user_name=uname,
+    ))
+
+
+# ── 7. Listagem, Sincronização de Status, Detalhes e Exportação Excel do Pedido ─
+
+@router.get("/orders")
+def list_horus_purchase_orders(
+    branch_id: Optional[int] = Query(None),
+    status: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    sync_horus_status: bool = Query(True),
+    limit: int = Query(50, ge=1, le=200),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    q_db = db.query(HorusPurchaseOrder).filter(HorusPurchaseOrder.company_id == seller_id)
+
+    if branch_id is not None:
+        q_db = q_db.filter(HorusPurchaseOrder.branch_id == int(branch_id))
+    if status and status.upper() != "ALL":
+        st_up = status.upper()
+        q_db = q_db.filter((HorusPurchaseOrder.status == st_up) | (HorusPurchaseOrder.horus_status == st_up))
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        if search.strip().isdigit():
+            q_db = q_db.filter(
+                (HorusPurchaseOrder.horus_cod_pedido == int(search.strip()))
+                | (HorusPurchaseOrder.nome_fornecedor.ilike(term))
+                | (HorusPurchaseOrder.cnpj_fornecedor.ilike(term))
+            )
+        else:
+            q_db = q_db.filter(HorusPurchaseOrder.nome_fornecedor.ilike(term))
+
+    orders = q_db.order_by(HorusPurchaseOrder.created_at.desc()).limit(limit).all()
+
+    # Concilia automaticamente mudanças feitas diretamente dentro do Horus (ex: pedido encerrado EE na recepção de NF)
+    if sync_horus_status and orders:
+        try:
+            sql_client = HorusSQLClient(db, seller_id)
+            by_pair: Dict[Tuple[int, int], List[HorusPurchaseOrder]] = {}
+            for o in orders:
+                if o.horus_cod_pedido:
+                    by_pair.setdefault((int(o.cod_empresa), int(o.cod_filial)), []).append(o)
+
+            changed_any = False
+            for (emp, fil), o_list in by_pair.items():
+                peds_in = ", ".join(str(int(o.horus_cod_pedido)) for o in o_list)
+                st_rows = sql_client.query(
+                    f"""
+                    SELECT COD_PEDIDO AS cod_pedido, RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st
+                    FROM PEDIDOS_COMPRA WITH (NOLOCK)
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO IN ({peds_in})
+                    """,
+                    (emp, fil),
+                    max_rows=len(o_list) + 5,
+                )
+                live_map = {int(r["cod_pedido"]): str(r["st"] or "") for r in (st_rows or [])}
+                for o in o_list:
+                    live_hs = live_map.get(int(o.horus_cod_pedido or 0))
+                    if live_hs and live_hs != o.horus_status:
+                        old_hs = o.horus_status
+                        old_st = o.status
+                        new_st = HORUS_TO_CRONUZ_STATUS.get(live_hs, o.status)
+                        o.horus_status = live_hs
+                        o.status = new_st
+                        db.add(HorusPurchaseOrderLog(
+                            order_id=o.id,
+                            action="STATUS_SYNCED_FROM_HORUS",
+                            old_status=old_st,
+                            new_status=new_st,
+                            old_horus_status=old_hs,
+                            new_horus_status=live_hs,
+                            details=f"Status sincronizado automaticamente do Horus SQL ({old_hs} -> {live_hs}).",
+                            user_name="Horus Sync",
+                        ))
+                        changed_any = True
+            if changed_any:
+                db.commit()
+        except Exception as e:
+            log.debug(f"[HorusPurchases] Aviso ao sincronizar status de pedidos com Horus: {e}")
+
+    return {
+        "orders": [
+            {
+                "id": o.id,
+                "branch_id": o.branch_id,
+                "branch_name": o.branch_name,
+                "cod_empresa": o.cod_empresa,
+                "cod_filial": o.cod_filial,
+                "cod_grp_fornecedor": o.cod_grp_fornecedor,
+                "cod_fornecedor": o.cod_fornecedor,
+                "cnpj_fornecedor": o.cnpj_fornecedor,
+                "nome_fornecedor": o.nome_fornecedor,
+                "email_fornecedor": o.email_fornecedor,
+                "horus_cod_pedido": o.horus_cod_pedido,
+                "compra_consig": o.compra_consig,
+                "status": o.status,
+                "horus_status": o.horus_status,
+                "status_label": HORUS_STATUS_LABELS.get(o.horus_status, o.status),
+                "total_skus": o.total_skus,
+                "total_quantity": o.total_quantity,
+                "total_gross": float(o.total_gross or 0.0),
+                "total_discount": float(o.total_discount or 0.0),
+                "total_net": float(o.total_net or 0.0),
+                "avg_discount_pct": float(o.avg_discount_pct or 0.0),
+                "observations": o.observations,
+                "excel_exported_count": o.excel_exported_count,
+                "last_excel_exported_at": _fmt_dt(o.last_excel_exported_at),
+                "created_by_name": o.created_by_name,
+                "updated_by_name": o.updated_by_name,
+                "created_at": _fmt_dt(o.created_at),
+                "updated_at": _fmt_dt(o.updated_at),
+            }
+            for o in orders
+        ]
+    }
+
+
+@router.get("/orders/{order_id}")
+def get_horus_purchase_order_detail(
+    order_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    order = (
+        db.query(HorusPurchaseOrder)
+        .filter(HorusPurchaseOrder.id == order_id, HorusPurchaseOrder.company_id == seller_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
+
+    return {
+        "order": {
+            "id": order.id,
+            "branch_id": order.branch_id,
+            "branch_name": order.branch_name,
+            "branch_cnpj": order.branch_cnpj,
+            "cod_empresa": order.cod_empresa,
+            "cod_filial": order.cod_filial,
+            "cod_local": order.cod_local,
+            "cod_grp_fornecedor": order.cod_grp_fornecedor,
+            "cod_fornecedor": order.cod_fornecedor,
+            "cnpj_fornecedor": order.cnpj_fornecedor,
+            "nome_fornecedor": order.nome_fornecedor,
+            "email_fornecedor": order.email_fornecedor,
+            "horus_cod_pedido": order.horus_cod_pedido,
+            "compra_consig": order.compra_consig,
+            "status": order.status,
+            "horus_status": order.horus_status,
+            "status_label": HORUS_STATUS_LABELS.get(order.horus_status, order.status),
+            "total_skus": order.total_skus,
+            "total_quantity": order.total_quantity,
+            "total_gross": float(order.total_gross or 0.0),
+            "total_discount": float(order.total_discount or 0.0),
+            "total_net": float(order.total_net or 0.0),
+            "avg_discount_pct": float(order.avg_discount_pct or 0.0),
+            "observations": order.observations,
+            "excel_exported_count": order.excel_exported_count,
+            "last_excel_exported_at": _fmt_dt(order.last_excel_exported_at),
+            "created_by_name": order.created_by_name,
+            "updated_by_name": order.updated_by_name,
+            "created_at": _fmt_dt(order.created_at),
+            "updated_at": _fmt_dt(order.updated_at),
+        },
+        "items": [
+            {
+                "id": it.id,
+                "cod_item": it.cod_item,
+                "isbn": it.isbn,
+                "nome_item": it.nome_item,
+                "cod_editora": it.cod_editora,
+                "nome_editora": it.nome_editora,
+                "quantity": it.quantity,
+                "unit_cover_price": float(it.unit_cover_price or 0.0),
+                "discount_pct": float(it.discount_pct or 0.0),
+                "unit_net_price": float(it.unit_net_price or 0.0),
+                "subtotal_gross": float(it.subtotal_gross or 0.0),
+                "subtotal_net": float(it.subtotal_net or 0.0),
+                "stock_at_order": it.stock_at_order,
+                "consigned_at_order": it.consigned_at_order,
+            }
+            for it in order.items
+        ],
+        "logs": [
+            {
+                "id": lg.id,
+                "action": lg.action,
+                "old_status": lg.old_status,
+                "new_status": lg.new_status,
+                "old_horus_status": lg.old_horus_status,
+                "new_horus_status": lg.new_horus_status,
+                "details": lg.details,
+                "user_name": lg.user_name,
+                "created_at": _fmt_dt(lg.created_at),
+            }
+            for lg in order.logs
+        ],
+    }
+
+
+@router.patch("/orders/{order_id}/status")
+def change_horus_purchase_order_status(
+    order_id: int,
+    payload: ChangePurchaseOrderStatusPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    order = (
+        db.query(HorusPurchaseOrder)
+        .filter(HorusPurchaseOrder.id == order_id, HorusPurchaseOrder.company_id == seller_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
+
+    _transition_order_status_in_horus_and_cronuz(
+        db=db,
+        seller_id=seller_id,
+        order=order,
+        new_horus_status=payload.new_horus_status,
+        current_user=current_user,
+        notes=payload.notes,
+    )
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "success": True,
+        "status": order.status,
+        "horus_status": order.horus_status,
+        "status_label": HORUS_STATUS_LABELS.get(order.horus_status, order.status),
+        "message": f"Status do pedido #{order.horus_cod_pedido} atualizado para {order.horus_status} ({HORUS_STATUS_LABELS.get(order.horus_status, order.status)})!",
+    }
+
+
+@router.post("/orders/{order_id}/export-excel")
+def export_horus_purchase_order_excel(
+    order_id: int,
+    change_to_ae: bool = Query(False),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Gera o arquivo Excel (.xlsx) do Pedido de Compra contendo ISBN, Título, Editora, Quantidade,
+    Preço Capa, Desconto (%) e Preço/Total Líquido.
+    Se change_to_ae=True e o pedido estiver em 'AP', altera atomicamente para 'AE' no Horus
+    e 'AWAITING_DELIVERY' (Aguardando Entrega) no Cronuz, registrando histórico completo de usuário e data.
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    uid, uname, _ = _user_meta(current_user)
+    order = (
+        db.query(HorusPurchaseOrder)
+        .filter(HorusPurchaseOrder.id == order_id, HorusPurchaseOrder.company_id == seller_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
+
+    status_changed_now = False
+    if change_to_ae and order.horus_status == "AP":
+        _transition_order_status_in_horus_and_cronuz(
+            db=db,
+            seller_id=seller_id,
+            order=order,
+            new_horus_status="AE",
+            current_user=current_user,
+            notes=f"Status alterado de AP para AE (Aguardando Entrega) na exportação do Excel por {uname}.",
+        )
+        status_changed_now = True
+
+    order.excel_exported_count = int(order.excel_exported_count or 0) + 1
+    order.last_excel_exported_at = datetime.utcnow()
+    order.updated_by_user_id = uid
+    order.updated_by_name = uname
+
+    db.add(HorusPurchaseOrderLog(
+        order_id=order.id,
+        action="EXCEL_EXPORTED",
+        old_status=order.status,
+        new_status=order.status,
+        old_horus_status=order.horus_status,
+        new_horus_status=order.horus_status,
+        details=(
+            f"Planilha Excel exportada (#{order.excel_exported_count})"
+            + (" com transição automática para AE (Aguardando Entrega)." if status_changed_now else f" mantendo status {order.horus_status}.")
+        ),
+        user_id=uid,
+        user_name=uname,
+    ))
+    db.commit()
+
+    # Monta o Excel (.xlsx) executivo para envio ao Fornecedor
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Pedido_{order.horus_cod_pedido or order.id}"
+
+    thin_side = Side(style="thin", color="CBD5E1")
+    border_all = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    ws.merge_cells("A1:I1")
+    ws["A1"] = f"PEDIDO DE COMPRA #{order.horus_cod_pedido or order.id} — {order.branch_name or ''}"
+    ws["A1"].font = Font(size=13, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    ws.append([
+        "Filial:", order.branch_name or f"Emp {order.cod_empresa} / Fil {order.cod_filial}",
+        "CNPJ Filial:", order.branch_cnpj or "-",
+        "Data Emissão:", order.created_at.strftime("%d/%m/%Y %H:%M") if order.created_at else "-",
+        "Status Horus:", f"{order.horus_status} ({HORUS_STATUS_LABELS.get(order.horus_status, order.status)})",
+        "",
+    ])
+    ws.append([
+        "Fornecedor:", f"{order.nome_fornecedor} (Cód. {order.cod_fornecedor})",
+        "CNPJ Fornec.:", order.cnpj_fornecedor or "-",
+        "Modalidade:", "Consignação" if order.compra_consig == "S" else "Compra Firme",
+        "Comprador:", order.created_by_name or uname,
+        "",
+    ])
+    if order.observations:
+        ws.append(["Observações:", order.observations, "", "", "", "", "", "", ""])
+    ws.append([])
+
+    headers = [
+        "ISBN",
+        "Cód. Horus",
+        "Título",
+        "Editora / Selo",
+        "Quantidade",
+        "Preço Capa (R$)",
+        "Desconto (%)",
+        "Preço Líquido (R$)",
+        "Total Líquido (R$)",
+    ]
+    ws.append(headers)
+    header_row_idx = ws.max_row
+    for col_idx in range(1, len(headers) + 1):
+        cell = ws.cell(row=header_row_idx, column=col_idx)
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center" if col_idx not in (3, 4) else "left", vertical="center")
+        cell.border = border_all
+    ws.row_dimensions[header_row_idx].height = 22
+
+    for it in order.items:
+        ws.append([
+            it.isbn or "",
+            it.cod_item,
+            it.nome_item,
+            it.nome_editora or "",
+            int(it.quantity or 0),
+            float(it.unit_cover_price or 0.0),
+            float(it.discount_pct or 0.0),
+            float(it.unit_net_price or 0.0),
+            float(it.subtotal_net or 0.0),
+        ])
+        r_idx = ws.max_row
+        for c_i in range(1, 10):
+            c_obj = ws.cell(row=r_idx, column=c_i)
+            c_obj.border = border_all
+        ws.cell(row=r_idx, column=5).alignment = Alignment(horizontal="right")
+        ws.cell(row=r_idx, column=6).number_format = "R$ #,##0.00"
+        ws.cell(row=r_idx, column=7).number_format = "0.00\"%\""
+        ws.cell(row=r_idx, column=8).number_format = "R$ #,##0.0000"
+        ws.cell(row=r_idx, column=9).number_format = "R$ #,##0.00"
+
+    ws.append([
+        "TOTAIS DO PEDIDO",
+        "",
+        f"{order.total_skus} título(s)",
+        "",
+        int(order.total_quantity or 0),
+        float(order.total_gross or 0.0),
+        float(order.avg_discount_pct or 0.0),
+        "",
+        float(order.total_net or 0.0),
+    ])
+    tot_row_idx = ws.max_row
+    for c_i in range(1, 10):
+        c_obj = ws.cell(row=tot_row_idx, column=c_i)
+        c_obj.font = Font(bold=True, color="0F172A")
+        c_obj.fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+        c_obj.border = border_all
+    ws.cell(row=tot_row_idx, column=6).number_format = "R$ #,##0.00"
+    ws.cell(row=tot_row_idx, column=7).number_format = "0.00\"%\""
+    ws.cell(row=tot_row_idx, column=9).number_format = "R$ #,##0.00"
+
+    col_widths = [18, 13, 48, 26, 13, 16, 14, 18, 18]
+    for idx_w, w_val in enumerate(col_widths, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(idx_w)].width = w_val
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    safe_sup = re.sub(r"[^A-Za-z0-9_-]", "_", (order.nome_fornecedor or "Fornecedor")[:25]).strip("_")
+    filename = f"Pedido_Compra_{order.horus_cod_pedido or order.id}_{safe_sup}_{order.horus_status}.xlsx"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Order-Horus-Status": order.horus_status,
+            "X-Order-Cronuz-Status": order.status,
+        },
+    )

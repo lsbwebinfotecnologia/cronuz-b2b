@@ -3,39 +3,37 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   ArrowUpDown,
   BarChart3,
   Barcode,
+  BookOpen,
   Building2,
-  Calendar,
   Check,
-  ChevronLeft,
-  ChevronRight,
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   DatabaseZap,
   Download,
   Eye,
   FileSpreadsheet,
-  GripVertical,
-  Info,
-  Layers,
   Pause,
   Play,
   RefreshCw,
   RotateCcw,
   Search,
   Settings2,
-  Sparkles,
-  Store,
   TrendingUp,
+  Upload,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
+
+const MAX_SHEET_UPLOAD_BYTES = 10 * 1024 * 1024; // 10 MB
 
 interface ConfiguredBranch {
   id: number;
@@ -48,6 +46,12 @@ interface ConfiguredBranch {
   label: string;
 }
 
+interface HorusPublisherOption {
+  name: string;
+  horus_count: number;
+  local_count: number;
+}
+
 interface BranchBreakdown {
   branch_id: number;
   branch_name: string;
@@ -57,9 +61,12 @@ interface BranchBreakdown {
   locais: number[];
   stock_available: number;
   stock_physical: number;
+  min_stock?: number;
+  min_stock_status?: 'NONE' | 'BELOW_MIN' | 'NEAR_MIN' | 'OK';
   consigned_sent: number;
   consigned_received: number;
   cost_price: number;
+  sold_unit_price?: number;
   sales_365: number;
   sales_period: number;
   last_entry_date: string | null;
@@ -80,8 +87,11 @@ interface AnaliseItemRow {
   brand?: string;
   subject?: string;
   base_price: number;
+  sold_unit_price?: number;
   cost_price: number;
   stock_quantity: number;
+  min_stock: number;
+  min_stock_by_branch?: Record<string, number>;
   consignment_stock: number;
   consigned_received: number;
   sales_365: number;
@@ -125,8 +135,10 @@ type ColumnKey =
   | 'subject'
   | 'situation'
   | 'base_price'
+  | 'sold_unit_price'
   | 'cost_price'
   | 'stock_quantity'
+  | 'min_stock'
   | 'consignment_stock'
   | 'consigned_received'
   | 'sales_365'
@@ -142,8 +154,10 @@ const DEFAULT_COLUMNS: ColumnKey[] = [
   'brand',
   'situation',
   'base_price',
+  'sold_unit_price',
   'cost_price',
   'stock_quantity',
+  'min_stock',
   'consignment_stock',
   'consigned_received',
   'sales_365',
@@ -161,8 +175,10 @@ const DEFAULT_VISIBLE_COLS: Record<ColumnKey, boolean> = {
   subject: false,
   situation: true,
   base_price: true,
+  sold_unit_price: true,
   cost_price: true,
   stock_quantity: true,
+  min_stock: true,
   consignment_stock: true,
   consigned_received: true,
   sales_365: true,
@@ -178,6 +194,22 @@ function formatBrDate(iso?: string | null): string {
   const parts = s.split('-');
   if (parts.length === 3) return `${parts[2]}/${parts[1]}/${parts[0]}`;
   return s;
+}
+
+/**
+ * Avalia o status visual do Estoque Atual vs Estoque Mínimo por Produto/Filial:
+ * - Vermelho ('BELOW_MIN'): Estoque Atual < Estoque Mínimo
+ * - Laranja ('NEAR_MIN'): Estoque Atual próximo do Estoque Mínimo (entre Mínimo e Mínimo + 25% ou +2 un.)
+ * - Normal ('OK' / 'NONE')
+ */
+function evaluateMinStockStatus(currentStock: number, minStock: number): 'NONE' | 'BELOW_MIN' | 'NEAR_MIN' | 'OK' {
+  const minVal = Number(minStock || 0);
+  if (minVal <= 0) return 'NONE';
+  const curVal = Number(currentStock || 0);
+  if (curVal < minVal) return 'BELOW_MIN';
+  const nearLimit = Math.max(minVal + 2, Math.ceil(minVal * 1.25));
+  if (curVal <= nearLimit) return 'NEAR_MIN';
+  return 'OK';
 }
 
 function evaluateSituation(item: AnaliseItemRow) {
@@ -227,9 +259,61 @@ export default function HorusAnaliseItensPage() {
   const apiUrl = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000').replace(/\/$/, '');
   const [companyId, setCompanyId] = useState<number>(1);
 
-  // Filiais configuradas em /logistics/branches
+  // Filiais configuradas em /logistics/branches (suporta Todas ou Seleção Múltipla de Algumas Filiais)
   const [branches, setBranches] = useState<ConfiguredBranch[]>([]);
-  const [selectedBranchId, setSelectedBranchId] = useState<string>('ALL');
+  const [selectedBranchIds, setSelectedBranchIds] = useState<number[]>([]);
+  const [branchDropdownOpen, setBranchDropdownOpen] = useState<boolean>(false);
+  const branchDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Chave derivada ('ALL' quando todas/nenhuma filtrada, ou '3' / '3,5' quando algumas selecionadas)
+  const selectedBranchId = useMemo(() => {
+    if (
+      selectedBranchIds.length === 0 ||
+      (branches.length > 0 && selectedBranchIds.length === branches.length)
+    ) {
+      return 'ALL';
+    }
+    return selectedBranchIds.join(',');
+  }, [selectedBranchIds, branches.length]);
+
+  const selectedBranchesLabel = useMemo(() => {
+    if (
+      selectedBranchIds.length === 0 ||
+      (branches.length > 0 && selectedBranchIds.length === branches.length)
+    ) {
+      return `Todas as Filiais (${branches.length})`;
+    }
+    if (selectedBranchIds.length === 1) {
+      const b = branches.find((x) => x.id === selectedBranchIds[0]);
+      return b ? b.label : '1 filial selecionada';
+    }
+    const names = branches
+      .filter((x) => selectedBranchIds.includes(x.id))
+      .map((x) => x.nome);
+    return `${selectedBranchIds.length} filiais (${names.join(', ')})`;
+  }, [selectedBranchIds, branches]);
+
+  const toggleBranchSelection = (bid: number) => {
+    setSelectedBranchIds((prev) => {
+      // Se estava em modo 'Todas' (vazio), ao clicar em uma filial específica, seleciona ou desmarca
+      if (prev.length === 0) {
+        return [bid];
+      }
+      if (prev.includes(bid)) {
+        const next = prev.filter((x) => x !== bid);
+        return next;
+      }
+      return [...prev, bid];
+    });
+  };
+
+  // Editoras coletadas do Horus SQL para filtro multi-seleção
+  const [horusPublishers, setHorusPublishers] = useState<HorusPublisherOption[]>([]);
+  const [loadingPublishers, setLoadingPublishers] = useState<boolean>(false);
+  const [selectedPublishers, setSelectedPublishers] = useState<string[]>([]);
+  const [publisherDropdownOpen, setPublisherDropdownOpen] = useState<boolean>(false);
+  const [publisherSearchTerm, setPublisherSearchTerm] = useState<string>('');
+  const publisherDropdownRef = useRef<HTMLDivElement>(null);
 
   // Status de Sincronização Horus SQL <-> Cronuz + Background Worker
   const [syncStatus, setSyncStatus] = useState<{
@@ -251,11 +335,11 @@ export default function HorusAnaliseItensPage() {
   } | null>(null);
   const [startingBgSync, setStartingBgSync] = useState(false);
 
-  // Filtros de Pesquisa e Período de Vendas
+  // Filtros de Pesquisa, Estoque Mínimo e Período de Vendas
   const [filterTitle, setFilterTitle] = useState('');
   const [filterIsbn, setFilterIsbn] = useState('');
-  const [filterPublisher, setFilterPublisher] = useState('');
   const [filterSituation, setFilterSituation] = useState<'ALL' | 'EM_DISTRIBUICAO' | 'LANCAMENTO' | 'ESGOTADO' | 'FORA_DE_CATALOGO'>('ALL');
+  const [minStockAlertFilter, setMinStockAlertFilter] = useState<'ALL' | 'BELOW_MIN' | 'NEAR_MIN' | 'ANY_ALERT'>('ALL');
   const [hideEbooks, setHideEbooks] = useState<boolean>(true);
   const [hideOutOfStock, setHideOutOfStock] = useState<boolean>(false);
 
@@ -277,6 +361,16 @@ export default function HorusAnaliseItensPage() {
   const [pageSize, setPageSize] = useState<number>(50);
   const [quickSearchFooter, setQuickSearchFooter] = useState<string>('');
   const [sortConfig, setSortConfig] = useState<{ key: ColumnKey; direction: 'asc' | 'desc' } | null>(null);
+
+  // Seleção em Lote & Conciliação de Editora/Selo (Cronuz + Horus SQL ITENS_ESTOQUE_GERAL)
+  const [checkedItemIds, setCheckedItemIds] = useState<Record<number, boolean>>({});
+  const [showReconcilePubModal, setShowReconcilePubModal] = useState<boolean>(false);
+  const [reconcileTargetItems, setReconcileTargetItems] = useState<AnaliseItemRow[]>([]);
+  const [horusPubSearch, setHorusPubSearch] = useState<string>('');
+  const [horusPubResults, setHorusPubResults] = useState<Array<{ cod_editora: number; nome_editora: string; qtd_itens: number }>>([]);
+  const [loadingHorusPubs, setLoadingHorusPubs] = useState<boolean>(false);
+  const [selectedHorusPub, setSelectedHorusPub] = useState<{ cod_editora: number; nome_editora: string } | null>(null);
+  const [savingReconcilePub, setSavingReconcilePub] = useState<boolean>(false);
 
   // Colunas Visíveis e Ordem
   const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() => {
@@ -310,11 +404,22 @@ export default function HorusAnaliseItensPage() {
     }
     return DEFAULT_VISIBLE_COLS;
   });
-  const [dragColKey, setDragColKey] = useState<ColumnKey | null>(null);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
-  // Modal de Raio-X por Filial (Detalhamento Multi-Filial do Item)
-  const [detailModalItem, setDetailModalItem] = useState<AnaliseItemRow | null>(null);
+  // Modal de Raio-X por Filial (sincronizado ao vivo pelo ID do produto)
+  const [detailModalProductId, setDetailModalProductId] = useState<number | null>(null);
+  const detailModalItem = useMemo(
+    () => (detailModalProductId !== null ? products.find((p) => p.id === detailModalProductId) || null : null),
+    [detailModalProductId, products]
+  );
+
+  // Modal de Importação de Estoque Mínimo por Filial (ISBN + Quantidade Estoque Mínimo)
+  const [showMinStockModal, setShowMinStockModal] = useState<boolean>(false);
+  const [minStockImportBranchId, setMinStockImportBranchId] = useState<string>('');
+  const [minStockFile, setMinStockFile] = useState<File | null>(null);
+  const [minStockPastedText, setMinStockPastedText] = useState<string>('');
+  const [minStockReplaceExisting, setMinStockReplaceExisting] = useState<boolean>(true);
+  const [importingMinStock, setImportingMinStock] = useState<boolean>(false);
 
   // Modal de Exportação Excel Multi-Filial
   const [showExportModal, setShowExportModal] = useState<boolean>(false);
@@ -338,6 +443,20 @@ export default function HorusAnaliseItensPage() {
   const [horusSyncMessage, setHorusSyncMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const tableContainerRef = useRef<HTMLDivElement>(null);
+
+  // Fecha os dropdowns de filiais e editoras ao clicar fora
+  useEffect(() => {
+    const handleClickOutside = (ev: MouseEvent) => {
+      if (publisherDropdownRef.current && !publisherDropdownRef.current.contains(ev.target as Node)) {
+        setPublisherDropdownOpen(false);
+      }
+      if (branchDropdownRef.current && !branchDropdownRef.current.contains(ev.target as Node)) {
+        setBranchDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   useEffect(() => {
     const user = getUser();
@@ -366,15 +485,43 @@ export default function HorusAnaliseItensPage() {
       .then((d) => {
         if (d && Array.isArray(d.branches)) {
           setBranches(d.branches);
+          if (d.branches.length > 0) {
+            setMinStockImportBranchId(String(d.branches[0].id));
+          }
         }
       })
       .catch(() => {});
 
-    // 3. Status de Sincronização (Total Horus vs Cronuz vs Faltando)
+    // 3. Editoras Coletadas do Horus SQL
+    fetchHorusPublishers(cid, false);
+
+    // 4. Status de Sincronização (Total Horus vs Cronuz vs Faltando)
     fetchSyncStatus(cid);
 
-    // 4. Lista inicial de produtos
-    fetchProducts(cid);
+    // 5. Lista inicial de produtos
+    fetchProducts(cid, []);
+  };
+
+  const fetchHorusPublishers = async (cidOverride?: number, force = false) => {
+    const cid = cidOverride || companyId;
+    setLoadingPublishers(true);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${apiUrl}/horus-analise-itens/publishers?company_id=${cid}&force_refresh=${force}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.publishers)) {
+          setHorusPublishers(data.publishers);
+        }
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setLoadingPublishers(false);
+    }
   };
 
   const fetchSyncStatus = async (cidOverride?: number, force = false) => {
@@ -446,20 +593,24 @@ export default function HorusAnaliseItensPage() {
     } catch {}
   };
 
-  const fetchProducts = async (overrideCid?: number) => {
+  const fetchProducts = async (overrideCid?: number, overridePublishers?: string[]) => {
     setLoading(true);
     const cid = overrideCid || companyId;
+    const pubsToUse = overridePublishers !== undefined ? overridePublishers : selectedPublishers;
     try {
       const token = getToken();
       const params = new URLSearchParams();
       params.append('limit', '5000');
-      params.append('source', 'dbm');
       params.append('company_id', String(cid));
+      params.append('branch_id', selectedBranchId);
 
       const combined = [filterTitle, filterIsbn].filter(Boolean).join(' ').trim();
       if (combined) params.append('search', combined);
+      if (pubsToUse.length > 0) {
+        params.append('publishers', pubsToUse.join('||'));
+      }
 
-      const res = await fetch(`${apiUrl}/products/?${params.toString()}`, {
+      const res = await fetch(`${apiUrl}/horus-analise-itens/products?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -468,19 +619,21 @@ export default function HorusAnaliseItensPage() {
         const mapped: AnaliseItemRow[] = rawList.map((p: any) => ({
           id: p.id,
           sku: p.sku || String(p.id),
-          name: p.name || 'Sem Título',
+          name: (p.name || '').trim() || `Item #${p.horus_cod_item || p.sku || p.id}`,
           isbn: p.ean_gtin || p.isbn || p.sku || '',
           ean_gtin: p.ean_gtin || p.isbn || '',
           additional_isbns: p.additional_isbns || '',
-          brand: p.brand?.name || p.brand || 'Editora',
+          brand: p.brand?.name || p.brand || 'Sem Editora',
           subject: p.subject || p.category?.name || p.category_name || 'Geral',
           base_price: Number(p.base_price || p.price || 0),
           cost_price: Number(p.cost_price || 0),
           stock_quantity: Number(p.stock_quantity || 0),
+          min_stock: Number(p.min_stock || 0),
+          min_stock_by_branch: p.min_stock_by_branch || {},
           consignment_stock: Number(p.consignment_stock || 0),
           consigned_received: 0,
           sales_365: Number(p.sales_365 || 0),
-          sales_period: Number(p.sales_90 || 0),
+          sales_period: Number(p.sales_period ?? p.sales_90 ?? 0),
           units_per_box: Number(p.units_per_box || 0),
           launch_date: p.launch_date,
           horus_cod_item: p.horus_cod_item,
@@ -525,14 +678,22 @@ export default function HorusAnaliseItensPage() {
         if (!m1 && !m2 && !m3) return false;
       }
 
-      if (filterPublisher.trim()) {
-        const qPub = filterPublisher.toLowerCase();
-        if (!item.brand?.toLowerCase().includes(qPub)) return false;
+      if (selectedPublishers.length > 0) {
+        const itemBrandUpper = String(item.brand || '').trim().toUpperCase();
+        const matchesPub = selectedPublishers.some((sp) => sp.trim().toUpperCase() === itemBrandUpper);
+        if (!matchesPub) return false;
       }
 
       if (filterSituation !== 'ALL') {
         const sit = evaluateSituation(item);
         if (sit.key !== filterSituation) return false;
+      }
+
+      if (minStockAlertFilter !== 'ALL') {
+        const st = evaluateMinStockStatus(item.stock_quantity, item.min_stock);
+        if (minStockAlertFilter === 'BELOW_MIN' && st !== 'BELOW_MIN') return false;
+        if (minStockAlertFilter === 'NEAR_MIN' && st !== 'NEAR_MIN') return false;
+        if (minStockAlertFilter === 'ANY_ALERT' && st !== 'BELOW_MIN' && st !== 'NEAR_MIN') return false;
       }
 
       if (quickSearchFooter.trim()) {
@@ -573,6 +734,8 @@ export default function HorusAnaliseItensPage() {
             return Number(it.cost_price || 0);
           case 'stock_quantity':
             return Number(it.stock_quantity || 0);
+          case 'min_stock':
+            return Number(it.min_stock || 0);
           case 'consignment_stock':
             return Number(it.consignment_stock || 0);
           case 'consigned_received':
@@ -582,7 +745,10 @@ export default function HorusAnaliseItensPage() {
           case 'sales_period':
             return Number(it.sales_period || 0);
           case 'replenishment_suggestion':
-            return Math.max(0, Number(it.sales_period || 0) - Math.max(0, Number(it.stock_quantity || 0)));
+            return Math.max(
+              0,
+              Math.max(Number(it.sales_period || 0), Number(it.min_stock || 0)) - Math.max(0, Number(it.stock_quantity || 0))
+            );
           case 'units_per_box':
             return Number(it.units_per_box || 0);
           default:
@@ -597,8 +763,9 @@ export default function HorusAnaliseItensPage() {
     hideOutOfStock,
     filterTitle,
     filterIsbn,
-    filterPublisher,
+    selectedPublishers,
     filterSituation,
+    minStockAlertFilter,
     quickSearchFooter,
     sortConfig,
   ]);
@@ -610,11 +777,12 @@ export default function HorusAnaliseItensPage() {
     return filteredProducts.slice(pageStartIdx, pageStartIdx + pageSize);
   }, [filteredProducts, pageStartIdx, pageSize]);
 
-  // Enriquecimento em tempo real dos itens visíveis na página atual (Multi-Filial: Saldos, Custos, Consignado Env/Rec, Vendas & Última Entrada)
-  const enrichCurrentPageItems = async (itemsToEnrich: AnaliseItemRow[]) => {
+  // Enriquecimento em tempo real dos itens visíveis na página atual (Saldos reais por Filial, Custo, Consig Env/Rec, Estoque Mínimo, Vendas & Última Entrada)
+  const enrichCurrentPageItems = async (itemsToEnrich: AnaliseItemRow[], overrideBranchId?: string) => {
     if (!itemsToEnrich.length || !companyId) return;
     const pIds = itemsToEnrich.map((i) => i.id).filter(Boolean);
     if (!pIds.length) return;
+    const branchToSend = overrideBranchId ?? selectedBranchId;
 
     setEnrichingPage(true);
     try {
@@ -627,7 +795,7 @@ export default function HorusAnaliseItensPage() {
         },
         body: JSON.stringify({
           company_id: companyId,
-          branch_id: selectedBranchId,
+          branch_id: branchToSend,
           product_ids: pIds,
           sales_days: salesDays,
           sales_start_date: salesFilterMode === 'DATES' && salesStartDate ? salesStartDate : null,
@@ -646,9 +814,12 @@ export default function HorusAnaliseItensPage() {
               ...item,
               horus_cod_item: m.horus_cod_item ?? item.horus_cod_item,
               stock_quantity: Number(m.stock_quantity ?? item.stock_quantity ?? 0),
+              min_stock: Number(m.min_stock ?? item.min_stock ?? 0),
+              min_stock_by_branch: m.min_stock_by_branch ?? item.min_stock_by_branch,
               consignment_stock: Number(m.consignment_stock ?? item.consignment_stock ?? 0),
               consigned_received: Number(m.consigned_received ?? item.consigned_received ?? 0),
               cost_price: Number(m.cost_price ?? item.cost_price ?? 0),
+              sold_unit_price: Number(m.sold_unit_price ?? item.sold_unit_price ?? 0),
               sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
               sales_period: Number(m.sales_period ?? item.sales_period ?? 0),
               last_entry_date: m.last_entry_date ?? item.last_entry_date,
@@ -673,7 +844,7 @@ export default function HorusAnaliseItensPage() {
   // Dispara enriquecimento da página sempre que mudar de página, de filial ou de período de vendas
   useEffect(() => {
     if (paginatedProducts.length > 0) {
-      enrichCurrentPageItems(paginatedProducts);
+      enrichCurrentPageItems(paginatedProducts, selectedBranchId);
     }
   }, [
     safeCurrentPage,
@@ -685,6 +856,153 @@ export default function HorusAnaliseItensPage() {
     salesEndDate,
     products.length,
   ]);
+
+  // Se o usuário abrir o Raio-X Multi-Filial de um item cujo branches_breakdown ainda não chegou, busca imediatamente
+  const handleOpenDetailModal = (item: AnaliseItemRow) => {
+    setDetailModalProductId(item.id);
+    if (!item.branches_breakdown || item.branches_breakdown.length === 0) {
+      enrichCurrentPageItems([item], selectedBranchId);
+    }
+  };
+
+  // Salva o Estoque Mínimo inline para um produto em uma filial específica
+  const handleSaveBranchMinStockInline = async (item: AnaliseItemRow, branchId: number, newMinStock: number) => {
+    const cleanVal = Math.max(0, Math.floor(Number(newMinStock) || 0));
+    const isbnVal = item.ean_gtin || item.isbn || item.sku;
+    if (!isbnVal) {
+      toast.error('Produto sem ISBN/SKU para vincular estoque mínimo.');
+      return;
+    }
+
+    // Atualiza otimisticamente na UI
+    setProducts((prev) =>
+      prev.map((p) => {
+        if (p.id !== item.id) return p;
+        const nextMap = { ...(p.min_stock_by_branch || {}), [String(branchId)]: cleanVal };
+        const activeIds =
+          selectedBranchId === 'ALL'
+            ? branches.map((b) => b.id)
+            : selectedBranchIds;
+        const nextMin = activeIds.reduce(
+          (acc, bid) => acc + Number(nextMap[String(bid)] || 0),
+          0
+        );
+        const nextBreakdown = (p.branches_breakdown || []).map((bm) =>
+          bm.branch_id === branchId
+            ? {
+                ...bm,
+                min_stock: cleanVal,
+                min_stock_status: evaluateMinStockStatus(bm.stock_available, cleanVal),
+              }
+            : bm
+        );
+        return {
+          ...p,
+          min_stock: nextMin,
+          min_stock_by_branch: nextMap,
+          branches_breakdown: nextBreakdown,
+        };
+      })
+    );
+
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/horus-analise-itens/min-stock/set`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          branch_id: branchId,
+          isbn: isbnVal,
+          product_id: item.id,
+          min_stock: cleanVal,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.detail || 'Erro ao salvar estoque mínimo.');
+      }
+    } catch {
+      toast.error('Erro de conexão ao salvar estoque mínimo.');
+    }
+  };
+
+  // Importação em lote de Estoque Mínimo ao selecionar a filial (mantendo apenas ISBN e Quantidade Estoque Mínimo)
+  const handleImportBranchMinStock = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!minStockImportBranchId || minStockImportBranchId === 'ALL') {
+      toast.error('Selecione a filial configurada para importar o estoque mínimo.');
+      return;
+    }
+    if (!minStockFile && !minStockPastedText.trim()) {
+      toast.error('Selecione uma planilha (.xlsx / .csv) ou cole a lista de ISBN e Estoque Mínimo.');
+      return;
+    }
+    if (minStockFile && minStockFile.size > MAX_SHEET_UPLOAD_BYTES) {
+      toast.error('O arquivo excede o limite máximo permitido de 10 MB.');
+      return;
+    }
+
+    setImportingMinStock(true);
+    try {
+      const token = getToken();
+      const formData = new FormData();
+      formData.append('branch_id', minStockImportBranchId);
+      formData.append('company_id', String(companyId));
+      formData.append('replace_existing', String(minStockReplaceExisting));
+      if (minStockFile) {
+        formData.append('file', minStockFile);
+      }
+      if (minStockPastedText.trim()) {
+        formData.append('pasted_text', minStockPastedText.trim());
+      }
+
+      const res = await fetch(`${apiUrl}/horus-analise-itens/min-stock/import`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || 'Falha ao importar estoque mínimo.');
+      }
+      toast.success(data.message || 'Estoque mínimo importado com sucesso!');
+      setShowMinStockModal(false);
+      setMinStockFile(null);
+      setMinStockPastedText('');
+      // Seleciona a filial recém-importada e recarrega
+      setSelectedBranchIds([Number(minStockImportBranchId)]);
+      await fetchProducts(companyId);
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao importar estoque mínimo.');
+    } finally {
+      setImportingMinStock(false);
+    }
+  };
+
+  const handleDownloadMinStockTemplate = async () => {
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/horus-analise-itens/min-stock/template`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'Modelo_Estoque_Minimo_Por_Filial.xlsx';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {}
+  };
 
   const activeVisibleColumns = useMemo(
     () => columnOrder.filter((colKey) => visibleColumns[colKey] !== false),
@@ -711,13 +1029,17 @@ export default function HorusAnaliseItensPage() {
       case 'subject':
         return 'Assunto';
       case 'situation':
-        return 'Situação do Item';
+        return 'Situação';
       case 'base_price':
         return 'Preço Capa';
+      case 'sold_unit_price':
+        return 'Preço Vendido';
       case 'cost_price':
         return 'Custo Filial';
       case 'stock_quantity':
         return 'Saldo Disp.';
+      case 'min_stock':
+        return 'Est. Mínimo';
       case 'consignment_stock':
         return 'Consig. Env.';
       case 'consigned_received':
@@ -794,6 +1116,83 @@ export default function HorusAnaliseItensPage() {
     } catch {}
   };
 
+  // ── Conciliação Inteligente de Editora/Selo (Cronuz + Horus SQL) ────────────
+  const searchOfficialHorusPublishers = async (term: string) => {
+    setLoadingHorusPubs(true);
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        limit: '40',
+      });
+      if (term.trim()) params.append('q', term.trim());
+      const res = await fetch(`${apiUrl}/horus-purchases/publishers/search?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setHorusPubResults(d.publishers || []);
+      }
+    } catch {
+      toast.error('Erro ao buscar editoras no Horus SQL.');
+    } finally {
+      setLoadingHorusPubs(false);
+    }
+  };
+
+  const openReconcilePublisherModal = (itemsToEdit: AnaliseItemRow[]) => {
+    if (!itemsToEdit.length) {
+      toast.error('Selecione ao menos 1 item para ajustar a editora/selo.');
+      return;
+    }
+    setReconcileTargetItems(itemsToEdit);
+    setSelectedHorusPub(null);
+    setHorusPubSearch('');
+    setShowReconcilePubModal(true);
+    searchOfficialHorusPublishers('');
+  };
+
+  const handleConfirmReconcilePublisher = async () => {
+    if (!selectedHorusPub || !reconcileTargetItems.length) return;
+    setSavingReconcilePub(true);
+    try {
+      const token = getToken();
+      const productIds = reconcileTargetItems.map((x) => x.id);
+      const codItems = reconcileTargetItems
+        .map((x) => Number(x.horus_cod_item || 0))
+        .filter((n) => n > 0);
+      const res = await fetch(`${apiUrl}/horus-purchases/items/reconcile-publisher`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          product_ids: productIds,
+          cod_items: codItems,
+          new_cod_editora: selectedHorusPub.cod_editora,
+          origin_module: 'ANALISE_ITENS',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || 'Falha ao atualizar editora no Horus + Cronuz.');
+      }
+      toast.success(data.message || 'Editora atualizada com sucesso no Horus e no Cronuz!');
+      const targetIdSet = new Set(productIds);
+      setProducts((prev) =>
+        prev.map((p) => (targetIdSet.has(p.id) ? { ...p, brand: data.new_nome_editora } : p))
+      );
+      setCheckedItemIds({});
+      setShowReconcilePubModal(false);
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao conciliar editora.');
+    } finally {
+      setSavingReconcilePub(false);
+    }
+  };
+
   // Exportação Segura do Relatório Excel Multi-Filial
   const handleExportExcel = async () => {
     setExportingExcel(true);
@@ -810,7 +1209,9 @@ export default function HorusAnaliseItensPage() {
       });
       const combinedSearch = [filterTitle, filterIsbn].filter(Boolean).join(' ').trim();
       if (combinedSearch) params.append('search', combinedSearch);
-      if (filterPublisher.trim()) params.append('publisher', filterPublisher.trim());
+      if (selectedPublishers.length > 0) {
+        params.append('publishers', selectedPublishers.join('||'));
+      }
       if (salesFilterMode === 'DATES' && salesStartDate) {
         params.append('sales_start_date', salesStartDate);
         if (salesEndDate) params.append('sales_end_date', salesEndDate);
@@ -962,6 +1363,31 @@ export default function HorusAnaliseItensPage() {
     }
   };
 
+  // Lista filtrada de editoras do Horus dentro do dropdown multi-select
+  const filteredHorusPublishers = useMemo(() => {
+    if (!publisherSearchTerm.trim()) return horusPublishers;
+    const q = publisherSearchTerm.toLowerCase();
+    return horusPublishers.filter((p) => p.name.toLowerCase().includes(q));
+  }, [horusPublishers, publisherSearchTerm]);
+
+  const togglePublisherSelection = (pubName: string) => {
+    setSelectedPublishers((prev) =>
+      prev.includes(pubName) ? prev.filter((x) => x !== pubName) : [...prev, pubName]
+    );
+  };
+
+  // Contadores de alerta de Estoque Mínimo na listagem atual
+  const minStockAlertCounts = useMemo(() => {
+    let below = 0;
+    let near = 0;
+    for (const p of products) {
+      const st = evaluateMinStockStatus(p.stock_quantity, p.min_stock);
+      if (st === 'BELOW_MIN') below++;
+      else if (st === 'NEAR_MIN') near++;
+    }
+    return { below, near };
+  }, [products]);
+
   return (
     <div className="h-[calc(100vh-56px)] flex flex-col bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 select-none overflow-hidden">
       {/* ══════════════════════════════════════════════════════════════════════ */}
@@ -983,7 +1409,7 @@ export default function HorusAnaliseItensPage() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Saldos por filial/local (/logistics/branches), Custo Médio, Consignado Enviado &amp; Recebido, Vendas por Período e Última Entrada (Compra/Consignação).
+                Saldos individuais por filial/local (/logistics/branches), Estoque Mínimo por filial (Laranja/Vermelho), Custo Médio, Consignado Env/Rec e Última Entrada.
               </p>
             </div>
           </div>
@@ -1031,7 +1457,7 @@ export default function HorusAnaliseItensPage() {
                   disabled={startingBgSync || !syncStatus.sql_connected}
                   onClick={() => handleStartBackgroundSync(false)}
                   className="px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[11px] flex items-center gap-1 cursor-pointer shadow-2xs disabled:opacity-50"
-                  title="Sincroniza todos os itens do Horus SQL para o Cronuz em segundo plano (lotes seguros de 400 itens sem travar a tela)"
+                  title="Sincroniza todos os itens do Horus SQL para o Cronuz em segundo plano sem bloquear as consultas da tela"
                 >
                   {startingBgSync ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
                   <span>Sincronizar Tudo em 2º Plano</span>
@@ -1041,15 +1467,32 @@ export default function HorusAnaliseItensPage() {
           )}
         </div>
 
-        {/* Botões Rápidos de Configurações, Exportação Multi-Filial e Consulta Horus SQL */}
+        {/* Botões Rápidos de Configurações, Importação de Estoque Mínimo por Filial, Exportação e Consulta Horus SQL */}
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
             onClick={() => setShowSettingsModal(true)}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+            className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 border border-slate-200 dark:border-slate-700 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
           >
             <Settings2 className="w-3.5 h-3.5 text-indigo-600" />
             Configurações
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedBranchIds.length === 1) {
+                setMinStockImportBranchId(String(selectedBranchIds[0]));
+              } else if (branches.length > 0 && !minStockImportBranchId) {
+                setMinStockImportBranchId(String(branches[0].id));
+              }
+              setShowMinStockModal(true);
+            }}
+            className="px-3 py-1.5 bg-orange-50 hover:bg-orange-100 text-orange-900 border border-orange-300 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
+            title="Importar planilha de Estoque Mínimo por Filial (mantendo apenas ISBN e Quantidade Estoque Mínimo)"
+          >
+            <Upload className="w-3.5 h-3.5 text-orange-600" />
+            Importar Estoque Mínimo (Filial)
           </button>
 
           <button
@@ -1061,7 +1504,7 @@ export default function HorusAnaliseItensPage() {
             className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 font-bold rounded-lg text-xs transition flex items-center gap-1.5 cursor-pointer"
           >
             <DatabaseZap className="w-3.5 h-3.5 text-amber-600" />
-            Consultar / Importar Horus SQL
+            Consultar Horus SQL
           </button>
 
           <button
@@ -1070,24 +1513,24 @@ export default function HorusAnaliseItensPage() {
             className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg text-xs transition flex items-center gap-1.5 shadow-xs cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
-            Exportar Relatório Excel (Por Filial)
+            Exportar Excel (Por Filial)
           </button>
         </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* BARRA DE FILTROS: EMPRESA/FILIAL (/logistics/branches) + PERÍODO + BUSCA */}
+      {/* BARRA DE FILTROS: EMPRESA/FILIAL + EDITORAS DO HORUS + BUSCA           */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 py-2.5 shrink-0 space-y-2">
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            fetchProducts(companyId);
+            fetchProducts(companyId, selectedPublishers);
           }}
           className="grid grid-cols-1 md:grid-cols-12 gap-2.5 items-end"
         >
-          {/* Seletor de Filial Configurada (/logistics/branches) */}
-          <div className="md:col-span-3">
+          {/* Seletor Multi-Seleção de Filiais Configuradas (/logistics/branches) — Todas ou Algumas */}
+          <div className="md:col-span-3 relative" ref={branchDropdownRef}>
             <div className="flex items-center justify-between mb-1">
               <label className="block text-[10px] font-extrabold text-emerald-700 dark:text-emerald-400 uppercase tracking-wider">
                 Empresa / Filial / Local (Logística)
@@ -1100,23 +1543,138 @@ export default function HorusAnaliseItensPage() {
                 Configurar Filiais →
               </Link>
             </div>
-            <div className="relative">
-              <Building2 className="w-3.5 h-3.5 text-emerald-600 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <select
-                value={selectedBranchId}
-                onChange={(e) => setSelectedBranchId(e.target.value)}
-                className="w-full pl-8 pr-2.5 py-1.5 text-xs font-bold bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-300 dark:border-emerald-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
-              >
-                <option value="ALL">
-                  🏢 Todas as Filiais Configuradas ({branches.length} {branches.length === 1 ? 'filial' : 'filiais'})
-                </option>
-                {branches.map((b) => (
-                  <option key={b.id} value={String(b.id)}>
-                    {b.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+
+            <button
+              type="button"
+              onClick={() => setBranchDropdownOpen((o) => !o)}
+              className="w-full px-2.5 py-1.5 text-xs font-bold bg-emerald-50/60 dark:bg-emerald-950/25 border border-emerald-300 dark:border-emerald-800 rounded-lg text-slate-900 dark:text-white flex items-center justify-between gap-1.5 cursor-pointer hover:bg-emerald-50 transition"
+            >
+              <span className="truncate flex items-center gap-1.5">
+                <Building2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                {selectedBranchesLabel}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-60" />
+            </button>
+
+            {branchDropdownOpen && (
+              <div className="absolute left-0 right-0 md:w-96 mt-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-40 overflow-hidden text-xs">
+                <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/60 flex items-center justify-between text-[11px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBranchIds([])}
+                    className="text-emerald-700 hover:underline cursor-pointer"
+                  >
+                    ✓ Marcar Todas ({branches.length})
+                  </button>
+                  {branches.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBranchIds([branches[0].id])}
+                      className="text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      Apenas 1ª Filial
+                    </button>
+                  )}
+                </div>
+
+                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                  <label
+                    className={`flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-emerald-50/50 dark:hover:bg-slate-800 ${
+                      selectedBranchId === 'ALL' ? 'bg-emerald-50/90 dark:bg-emerald-950/30 font-extrabold' : ''
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={selectedBranchId === 'ALL'}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedBranchIds([]);
+                          } else if (branches.length > 0) {
+                            setSelectedBranchIds([branches[0].id]);
+                          }
+                        }}
+                        className="w-3.5 h-3.5 rounded text-emerald-600"
+                      />
+                      <span className="text-slate-900 dark:text-white">
+                        🏢 Todas as Filiais Configuradas ({branches.length})
+                      </span>
+                    </div>
+                  </label>
+
+                  {branches.map((b) => {
+                    const isChecked =
+                      selectedBranchId === 'ALL' || selectedBranchIds.includes(b.id);
+                    return (
+                      <label
+                        key={b.id}
+                        className={`flex items-center justify-between gap-2 px-3 py-2 cursor-pointer hover:bg-indigo-50/50 dark:hover:bg-slate-800 ${
+                          selectedBranchId !== 'ALL' && isChecked
+                            ? 'bg-indigo-50/80 dark:bg-indigo-950/30 font-bold'
+                            : ''
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => {
+                              // Se estava em Todas ('ALL') e o usuário clicou em uma filial:
+                              // se clicou para focar apenas nela ou desmarcar uma:
+                              if (selectedBranchId === 'ALL') {
+                                setSelectedBranchIds([b.id]);
+                                setMinStockImportBranchId(String(b.id));
+                              } else {
+                                toggleBranchSelection(b.id);
+                              }
+                            }}
+                            className="w-3.5 h-3.5 rounded text-indigo-600"
+                          />
+                          <div className="truncate">
+                            <span className="text-slate-900 dark:text-slate-100 block truncate">
+                              {b.nome}
+                            </span>
+                            <span className="text-[10px] font-mono text-slate-500">
+                              Emp {b.cod_empresa} • Fil {b.cod_filial}
+                              {b.locais && b.locais.length > 0 ? ` • Loc ${b.locais.join(',')}` : ''}
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setSelectedBranchIds([b.id]);
+                            setMinStockImportBranchId(String(b.id));
+                            setBranchDropdownOpen(false);
+                          }}
+                          className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-indigo-100 text-[10px] font-bold text-indigo-700 shrink-0 cursor-pointer"
+                          title="Analisar somente esta filial"
+                        >
+                          Só esta
+                        </button>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="p-2 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-600">
+                    {selectedBranchId === 'ALL'
+                      ? `Todas (${branches.length}) marcadas`
+                      : `${selectedBranchIds.length} filial(is) marcada(s)`}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setBranchDropdownOpen(false)}
+                    className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
+                  >
+                    Concluir
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="md:col-span-3">
@@ -1129,7 +1687,7 @@ export default function HorusAnaliseItensPage() {
                 type="text"
                 value={filterTitle}
                 onChange={(e) => setFilterTitle(e.target.value)}
-                placeholder="Ex: Filosofia, Arte, Romance..."
+                placeholder="Ex: Morra, Amor, Filosofia, Arte..."
                 className="w-full pl-8 pr-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
               />
             </div>
@@ -1151,17 +1709,142 @@ export default function HorusAnaliseItensPage() {
             </div>
           </div>
 
-          <div className="md:col-span-2">
-            <label className="block text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
-              Editora / Selo
-            </label>
-            <input
-              type="text"
-              value={filterPublisher}
-              onChange={(e) => setFilterPublisher(e.target.value)}
-              placeholder="Filtrar editora..."
-              className="w-full px-2.5 py-1.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-            />
+          {/* Seletor Multi-Seleção de Editoras Coletadas do Horus SQL */}
+          <div className="md:col-span-2 relative" ref={publisherDropdownRef}>
+            <div className="flex items-center justify-between mb-1">
+              <label className="block text-[10px] font-extrabold text-indigo-700 dark:text-indigo-400 uppercase tracking-wider">
+                Editoras (Horus SQL)
+              </label>
+              {selectedPublishers.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPublishers([]);
+                    fetchProducts(companyId, []);
+                  }}
+                  className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                >
+                  Limpar ({selectedPublishers.length})
+                </button>
+              )}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setPublisherDropdownOpen((o) => !o)}
+              className={`w-full px-2.5 py-1.5 text-xs rounded-lg border flex items-center justify-between gap-1.5 cursor-pointer transition ${
+                selectedPublishers.length > 0
+                  ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-400 text-indigo-900 dark:text-indigo-200 font-bold'
+                  : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200'
+              }`}
+            >
+              <span className="truncate flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                {selectedPublishers.length === 0
+                  ? `Selecionar Editoras (${horusPublishers.length})`
+                  : selectedPublishers.length === 1
+                  ? selectedPublishers[0]
+                  : `${selectedPublishers.length} editoras marcadas`}
+              </span>
+              <ChevronDown className="w-3.5 h-3.5 shrink-0 opacity-60" />
+            </button>
+
+            {publisherDropdownOpen && (
+              <div className="absolute left-0 right-0 md:w-80 mt-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-40 overflow-hidden text-xs">
+                <div className="p-2 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 space-y-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={publisherSearchTerm}
+                      onChange={(e) => setPublisherSearchTerm(e.target.value)}
+                      placeholder="Pesquisar editora do Horus..."
+                      className="w-full pl-8 pr-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-xs"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] font-bold">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const visibleNames = filteredHorusPublishers.slice(0, 50).map((p) => p.name);
+                        setSelectedPublishers((prev) => Array.from(new Set([...prev, ...visibleNames])));
+                      }}
+                      className="text-indigo-600 hover:underline cursor-pointer"
+                    >
+                      Marcar Visíveis
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fetchHorusPublishers(companyId, true)}
+                      className="text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${loadingPublishers ? 'animate-spin' : ''}`} />
+                      Atualizar do Horus
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPublishers([])}
+                      className="text-rose-600 hover:underline cursor-pointer"
+                    >
+                      Desmarcar Todas
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-64 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                  {loadingPublishers ? (
+                    <div className="p-4 text-center text-slate-500">
+                      <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-indigo-600" />
+                      Coletando editoras do Horus SQL...
+                    </div>
+                  ) : filteredHorusPublishers.length === 0 ? (
+                    <div className="p-4 text-center text-slate-400">Nenhuma editora encontrada.</div>
+                  ) : (
+                    filteredHorusPublishers.map((pub) => {
+                      const isChecked = selectedPublishers.includes(pub.name);
+                      return (
+                        <label
+                          key={pub.name}
+                          className={`flex items-center justify-between gap-2 px-3 py-1.5 cursor-pointer hover:bg-indigo-50/60 dark:hover:bg-slate-800 ${
+                            isChecked ? 'bg-indigo-50/90 dark:bg-indigo-950/40 font-bold' : ''
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => togglePublisherSelection(pub.name)}
+                              className="w-3.5 h-3.5 rounded text-indigo-600"
+                            />
+                            <span className="truncate text-slate-800 dark:text-slate-200">{pub.name}</span>
+                          </div>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 shrink-0">
+                            {pub.horus_count.toLocaleString('pt-BR')}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="p-2 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-600">
+                    {selectedPublishers.length} selecionada(s)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPublisherDropdownOpen(false);
+                      fetchProducts(companyId, selectedPublishers);
+                    }}
+                    className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs cursor-pointer"
+                  >
+                    Aplicar Filtro
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="md:col-span-2 flex items-center gap-1.5">
@@ -1177,14 +1860,16 @@ export default function HorusAnaliseItensPage() {
               )}
               Analisar
             </button>
-            {(filterTitle || filterIsbn || filterPublisher || filterSituation !== 'ALL') && (
+            {(filterTitle || filterIsbn || selectedPublishers.length > 0 || filterSituation !== 'ALL' || minStockAlertFilter !== 'ALL') && (
               <button
                 type="button"
                 onClick={() => {
                   setFilterTitle('');
                   setFilterIsbn('');
-                  setFilterPublisher('');
+                  setSelectedPublishers([]);
                   setFilterSituation('ALL');
+                  setMinStockAlertFilter('ALL');
+                  fetchProducts(companyId, []);
                 }}
                 className="py-1.5 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-lg transition cursor-pointer"
               >
@@ -1194,9 +1879,9 @@ export default function HorusAnaliseItensPage() {
           </div>
         </form>
 
-        {/* Sub-barra: Filtro de Período das Vendas + Opções de Visualização */}
+        {/* Sub-barra: Filtro de Alertas de Estoque Mínimo (Laranja/Vermelho) + Período das Vendas */}
         <div className="pt-2 border-t border-slate-100 dark:border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-xs">
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             <label className="inline-flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-600 dark:text-slate-300">
               <input
                 type="checkbox"
@@ -1216,8 +1901,51 @@ export default function HorusAnaliseItensPage() {
                 onChange={(e) => setHideOutOfStock(e.target.checked)}
                 className="w-3.5 h-3.5 rounded text-indigo-600 border-slate-300"
               />
-              Apenas com Saldo Disponível (&gt; 0)
+              Apenas com Saldo (&gt; 0)
             </label>
+
+            <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-700" />
+
+            {/* Filtros Visuais de Estoque Mínimo por Produto/Filial (Vermelho e Laranja) */}
+            <div className="inline-flex items-center gap-1 bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px]">
+              <button
+                type="button"
+                onClick={() => setMinStockAlertFilter('ALL')}
+                className={`px-2 py-0.5 rounded-md font-bold cursor-pointer ${
+                  minStockAlertFilter === 'ALL'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400'
+                }`}
+              >
+                Todos
+              </button>
+              <button
+                type="button"
+                onClick={() => setMinStockAlertFilter('BELOW_MIN')}
+                className={`px-2 py-0.5 rounded-md font-bold flex items-center gap-1 cursor-pointer ${
+                  minStockAlertFilter === 'BELOW_MIN'
+                    ? 'bg-rose-600 text-white shadow-2xs'
+                    : 'text-rose-700 dark:text-rose-400 hover:bg-rose-50'
+                }`}
+                title="Filtrar produtos cujo estoque atual na filial está ABAIXO do estoque mínimo (Sinalização Vermelha)"
+              >
+                <span className="w-2 h-2 rounded-full bg-rose-500 inline-block" />
+                <span>Abaixo do Mín. ({minStockAlertCounts.below})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setMinStockAlertFilter('NEAR_MIN')}
+                className={`px-2 py-0.5 rounded-md font-bold flex items-center gap-1 cursor-pointer ${
+                  minStockAlertFilter === 'NEAR_MIN'
+                    ? 'bg-orange-500 text-white shadow-2xs'
+                    : 'text-orange-700 dark:text-orange-400 hover:bg-orange-50'
+                }`}
+                title="Filtrar produtos cujo estoque atual na filial está PRÓXIMO do estoque mínimo (Sinalização Laranja)"
+              >
+                <span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />
+                <span>Próximo do Mín. ({minStockAlertCounts.near})</span>
+              </button>
+            </div>
 
             <div className="h-3.5 w-px bg-slate-200 dark:bg-slate-700" />
 
@@ -1279,26 +2007,60 @@ export default function HorusAnaliseItensPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-[11px] text-slate-500">
+          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500">
+            {Object.values(checkedItemIds).some(Boolean) && (
+              <button
+                type="button"
+                onClick={() => {
+                  const selRows = products.filter((p) => checkedItemIds[p.id]);
+                  openReconcilePublisherModal(selRows);
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-xs cursor-pointer"
+              >
+                <DatabaseZap className="w-3.5 h-3.5" />
+                Ajustar Editora/Selo no Horus ({Object.values(checkedItemIds).filter(Boolean).length} selecionado(s))
+              </button>
+            )}
             {enrichingPage && (
               <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-bold">
                 <RefreshCw className="w-3 h-3 animate-spin" />
-                Conciliando saldos, custos, consignados e última entrada no SQL...
+                Conciliando saldos individuais por filial no Horus SQL...
               </span>
             )}
-            <span>Duplo clique na linha para abrir o Raio-X por Filial</span>
+            <span>Clique na Editora ou selecione itens para atualizar o Selo/Editora no Horus + Cronuz</span>
           </div>
         </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* GRADE PRINCIPAL DE ALTA DENSIDADE (ESTILO EXCEL MULTI-FILIAL)         */}
+      {/* GRADE PRINCIPAL DE ALTA DENSIDADE (COM TÍTULO LARGO E ESTOQUE MÍNIMO) */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
-        <table className="w-full border-collapse text-left table-fixed min-w-[1480px]">
+        <table className="w-full border-collapse text-left table-fixed min-w-[1960px]">
           <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider select-none">
             <tr>
-              <th className="w-9 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">#</th>
+              <th className="w-14 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">
+                <div className="flex items-center justify-center gap-1">
+                  <input
+                    type="checkbox"
+                    title="Selecionar itens desta página para ajustar Editora/Selo em lote no Horus"
+                    checked={
+                      paginatedProducts.length > 0 &&
+                      paginatedProducts.every((p) => Boolean(checkedItemIds[p.id]))
+                    }
+                    onChange={(e) => {
+                      const next = { ...checkedItemIds };
+                      paginatedProducts.forEach((p) => {
+                        if (e.target.checked) next[p.id] = true;
+                        else delete next[p.id];
+                      });
+                      setCheckedItemIds(next);
+                    }}
+                    className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 cursor-pointer"
+                  />
+                  <span>#</span>
+                </div>
+              </th>
               {activeVisibleColumns.map((colKey) => {
                 const widthClass =
                   colKey === 'cod_horus'
@@ -1306,18 +2068,22 @@ export default function HorusAnaliseItensPage() {
                     : colKey === 'isbn'
                     ? 'w-32'
                     : colKey === 'name'
-                    ? 'w-[20%]'
+                    ? 'w-80 min-w-[300px]'
                     : colKey === 'brand'
-                    ? 'w-28'
+                    ? 'w-36'
                     : colKey === 'subject'
                     ? 'w-28'
                     : colKey === 'situation'
-                    ? 'w-32 text-center'
+                    ? 'w-28 text-center'
                     : colKey === 'base_price'
+                    ? 'w-24 text-right'
+                    : colKey === 'sold_unit_price'
                     ? 'w-24 text-right'
                     : colKey === 'cost_price'
                     ? 'w-24 text-right'
                     : colKey === 'stock_quantity'
+                    ? 'w-28 text-right'
+                    : colKey === 'min_stock'
                     ? 'w-24 text-right'
                     : colKey === 'consignment_stock'
                     ? 'w-24 text-right'
@@ -1361,7 +2127,7 @@ export default function HorusAnaliseItensPage() {
             ) : paginatedProducts.length === 0 ? (
               <tr>
                 <td colSpan={activeVisibleColumns.length + 2} className="py-16 text-center text-slate-500 space-y-2">
-                  <p>Nenhum item encontrado na base local para este filtro.</p>
+                  <p>Nenhum item encontrado para este filtro.</p>
                   <div className="flex items-center justify-center gap-3 pt-1">
                     <button
                       type="button"
@@ -1387,33 +2153,59 @@ export default function HorusAnaliseItensPage() {
               paginatedProducts.map((item, localIdx) => {
                 const idx = pageStartIdx + localIdx;
                 const isSelected = idx === selectedIndex;
-                const isLowStockAlert = stockAlertThreshold > 0 && item.stock_quantity <= stockAlertThreshold;
+                const minStockStatus = evaluateMinStockStatus(item.stock_quantity, item.min_stock);
+                const isBelowMin = minStockStatus === 'BELOW_MIN';
+                const isNearMin = minStockStatus === 'NEAR_MIN';
+                const isGeneralLowStock =
+                  minStockStatus === 'NONE' && stockAlertThreshold > 0 && item.stock_quantity <= stockAlertThreshold;
+
                 const sitInfo = evaluateSituation(item);
-                const sugRep = Math.max(0, Number(item.sales_period || 0) - Math.max(0, Number(item.stock_quantity || 0)));
+                const targetNeed = Math.max(Number(item.sales_period || 0), Number(item.min_stock || 0));
+                const sugRep = Math.max(0, targetNeed - Math.max(0, Number(item.stock_quantity || 0)));
+
+                const rowBgClass = isSelected
+                  ? isBelowMin || isGeneralLowStock
+                    ? 'bg-rose-100/90 dark:bg-rose-950/60 ring-1 ring-inset ring-rose-400'
+                    : isNearMin
+                    ? 'bg-orange-100/90 dark:bg-orange-950/60 ring-1 ring-inset ring-orange-400'
+                    : 'bg-indigo-50/90 dark:bg-indigo-950/50 ring-1 ring-inset ring-indigo-300'
+                  : isBelowMin || isGeneralLowStock
+                  ? 'bg-rose-50/80 dark:bg-rose-950/30 hover:bg-rose-100/70'
+                  : isNearMin
+                  ? 'bg-orange-50/80 dark:bg-orange-950/30 hover:bg-orange-100/70'
+                  : idx % 2 === 0
+                  ? 'bg-white dark:bg-slate-900 hover:bg-slate-50'
+                  : 'bg-slate-50/50 dark:bg-slate-900/40 hover:bg-slate-100/60';
 
                 return (
                   <tr
                     key={item.id}
                     onClick={() => setSelectedIndex(idx)}
-                    onDoubleClick={() => setDetailModalItem(item)}
-                    className={`transition-colors font-bold cursor-pointer ${
-                      isSelected
-                        ? isLowStockAlert
-                          ? 'bg-rose-100/85 dark:bg-rose-950/60 ring-1 ring-inset ring-rose-300'
-                          : 'bg-indigo-50/90 dark:bg-indigo-950/50 ring-1 ring-inset ring-indigo-300'
-                        : isLowStockAlert
-                        ? 'bg-rose-50/75 dark:bg-rose-950/25 hover:bg-rose-100/60'
-                        : idx % 2 === 0
-                        ? 'bg-white dark:bg-slate-900 hover:bg-slate-50'
-                        : 'bg-slate-50/50 dark:bg-slate-900/40 hover:bg-slate-100/60'
-                    }`}
+                    onDoubleClick={() => handleOpenDetailModal(item)}
+                    className={`transition-colors font-bold cursor-pointer ${rowBgClass}`}
                   >
                     <td
+                      onClick={(e) => e.stopPropagation()}
                       className={`py-1.5 px-1.5 border-r border-slate-200/80 dark:border-slate-800 text-center font-mono text-xs font-bold ${
                         isSelected ? 'bg-indigo-600 text-white' : 'bg-slate-100/70 dark:bg-slate-800/60 text-slate-500'
                       }`}
                     >
-                      {isSelected ? '▶' : idx + 1}
+                      <div className="flex items-center justify-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(checkedItemIds[item.id])}
+                          onChange={(e) =>
+                            setCheckedItemIds((prev) => {
+                              const next = { ...prev };
+                              if (e.target.checked) next[item.id] = true;
+                              else delete next[item.id];
+                              return next;
+                            })
+                          }
+                          className="w-3.5 h-3.5 rounded border-slate-300 text-indigo-600 cursor-pointer"
+                        />
+                        <span>{isSelected ? '▶' : idx + 1}</span>
+                      </div>
                     </td>
 
                     {activeVisibleColumns.map((colKey) => {
@@ -1441,12 +2233,12 @@ export default function HorusAnaliseItensPage() {
                         return (
                           <td
                             key={colKey}
-                            className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 truncate"
+                            className="py-1.5 px-2.5 border-r border-slate-200/80 dark:border-slate-800 w-80 min-w-[300px]"
                             title={item.name}
                           >
-                            <span className="truncate font-bold text-[13px] text-slate-900 dark:text-white">
-                              {item.name}
-                            </span>
+                            <div className="truncate font-extrabold text-[13px] text-slate-900 dark:text-white">
+                              {item.name || `Item #${item.horus_cod_item || item.sku}`}
+                            </div>
                           </td>
                         );
                       }
@@ -1454,9 +2246,19 @@ export default function HorusAnaliseItensPage() {
                         return (
                           <td
                             key={colKey}
-                            className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-xs font-bold text-slate-700 dark:text-slate-300"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openReconcilePublisherModal([item]);
+                            }}
+                            className="group/ed py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 truncate text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 hover:text-indigo-700 cursor-pointer"
+                            title={`${item.brand || 'Sem Editora'} — Clique para corrigir a Editora/Selo direto no Horus SQL + Cronuz`}
                           >
-                            {item.brand || '-'}
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="truncate">{item.brand || '-'}</span>
+                              <span className="opacity-0 group-hover/ed:opacity-100 text-[10px] text-indigo-600 font-extrabold shrink-0">
+                                ✎
+                              </span>
+                            </div>
                           </td>
                         );
                       }
@@ -1492,6 +2294,20 @@ export default function HorusAnaliseItensPage() {
                           </td>
                         );
                       }
+                      if (colKey === 'sold_unit_price') {
+                        const sVal = Number(item.sold_unit_price || 0);
+                        return (
+                          <td
+                            key={colKey}
+                            className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300"
+                            title="Preço Unitário Líquido Vendido (NF_ITENS.VLR_LIQUIDO_ITEM)"
+                          >
+                            {sVal > 0
+                              ? sVal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                              : '—'}
+                          </td>
+                        );
+                      }
                       if (colKey === 'cost_price') {
                         const cVal = Number(item.cost_price || item.last_entry_cost || 0);
                         return (
@@ -1511,19 +2327,69 @@ export default function HorusAnaliseItensPage() {
                           <td
                             key={colKey}
                             className={`py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-extrabold ${
-                              isLowStockAlert
-                                ? 'bg-rose-100/70 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300'
+                              isBelowMin || isGeneralLowStock
+                                ? 'bg-rose-100/85 dark:bg-rose-950/50 text-rose-800 dark:text-rose-200'
+                                : isNearMin
+                                ? 'bg-orange-100/85 dark:bg-orange-950/50 text-orange-900 dark:text-orange-200'
                                 : item.stock_quantity > 0
                                 ? 'text-emerald-700 dark:text-emerald-400'
                                 : 'text-rose-600'
                             }`}
+                            title={
+                              isBelowMin
+                                ? `🔴 Abaixo do Estoque Mínimo! (Saldo Atual: ${item.stock_quantity} / Est. Mínimo: ${item.min_stock})`
+                                : isNearMin
+                                ? `🟠 Próximo do Estoque Mínimo! (Saldo Atual: ${item.stock_quantity} / Est. Mínimo: ${item.min_stock})`
+                                : `Saldo Disponível: ${item.stock_quantity}`
+                            }
                           >
-                            {isLowStockAlert ? (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-rose-100/90 border border-rose-200 text-rose-700 font-extrabold">
+                            {isBelowMin || isGeneralLowStock ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 text-white font-extrabold shadow-2xs">
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
+                                {item.stock_quantity}
+                              </span>
+                            ) : isNearMin ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-orange-500 text-white font-extrabold shadow-2xs">
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
                                 {item.stock_quantity}
                               </span>
                             ) : (
                               item.stock_quantity
+                            )}
+                          </td>
+                        );
+                      }
+                      if (colKey === 'min_stock') {
+                        const canEditDirectly = selectedBranchIds.length === 1;
+                        return (
+                          <td
+                            key={colKey}
+                            onClick={(e) => {
+                              if (canEditDirectly) e.stopPropagation();
+                            }}
+                            className="py-1 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-bold"
+                            title={
+                              canEditDirectly
+                                ? 'Digite o Estoque Mínimo deste produto para a filial selecionada'
+                                : 'Soma do Estoque Mínimo das filiais selecionadas (selecione 1 filial acima ou abra Filiais para editar por loja)'
+                            }
+                          >
+                            {canEditDirectly ? (
+                              <input
+                                type="number"
+                                min={0}
+                                value={item.min_stock || ''}
+                                placeholder="0"
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10) || 0;
+                                  handleSaveBranchMinStockInline(item, selectedBranchIds[0], v);
+                                }}
+                                className="w-16 text-right px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono text-xs font-extrabold text-slate-900 dark:text-white focus:ring-2 focus:ring-orange-500/30"
+                              />
+                            ) : (
+                              <span className={item.min_stock > 0 ? 'text-orange-700 dark:text-orange-300 font-extrabold' : 'text-slate-400'}>
+                                {item.min_stock > 0 ? item.min_stock : '—'}
+                              </span>
                             )}
                           </td>
                         );
@@ -1587,7 +2453,7 @@ export default function HorusAnaliseItensPage() {
                           <td
                             key={colKey}
                             className="py-1.5 px-2 border-r border-slate-200/80 dark:border-slate-800 text-right font-mono text-xs font-extrabold"
-                            title="Sugestão de Reposição = Vendas no Período - Saldo Disponível"
+                            title="Sugestão de Reposição = Máx(Vendas no Período, Estoque Mínimo) - Saldo Disponível"
                           >
                             {sugRep > 0 ? (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-extrabold">
@@ -1657,7 +2523,7 @@ export default function HorusAnaliseItensPage() {
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          setDetailModalItem(item);
+                          handleOpenDetailModal(item);
                         }}
                         className="px-2 py-1 rounded-md bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 hover:border-indigo-200 text-[11px] font-bold inline-flex items-center gap-1 cursor-pointer"
                       >
@@ -1744,6 +2610,16 @@ export default function HorusAnaliseItensPage() {
         </div>
 
         <div className="flex items-center gap-3 font-mono text-[11px] text-slate-600">
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-rose-600 inline-block" />
+            Abaixo Mín.: <strong className="text-rose-700">{minStockAlertCounts.below}</strong>
+          </span>
+          <span>•</span>
+          <span className="inline-flex items-center gap-1">
+            <span className="w-2 h-2 rounded-full bg-orange-500 inline-block" />
+            Próx. Mín.: <strong className="text-orange-700">{minStockAlertCounts.near}</strong>
+          </span>
+          <span>•</span>
           <span>
             Com saldo (&gt;0):{' '}
             <strong className="text-emerald-700">
@@ -1754,16 +2630,14 @@ export default function HorusAnaliseItensPage() {
           <span>
             Filial Ativa:{' '}
             <strong className="text-indigo-700">
-              {selectedBranchId === 'ALL'
-                ? `Todas (${branches.length})`
-                : branches.find((b) => String(b.id) === selectedBranchId)?.nome || 'Padrão'}
+              {selectedBranchesLabel}
             </strong>
           </span>
         </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 1: RAIO-X MULTI-FILIAL DO ITEM (SALDO, CUSTO, CONSIG E ÚLT. ENTRADA POR FILIAL) */}
+      {/* MODAL 1: RAIO-X MULTI-FILIAL DO ITEM (SALDOS REAIS + ESTOQUE MÍNIMO POR FILIAL) */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {detailModalItem && (
@@ -1772,7 +2646,7 @@ export default function HorusAnaliseItensPage() {
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-5xl overflow-hidden text-xs"
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl w-full max-w-6xl overflow-hidden text-xs"
             >
               <div className="bg-slate-900 text-white px-5 py-3.5 flex items-center justify-between">
                 <div>
@@ -1784,7 +2658,7 @@ export default function HorusAnaliseItensPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setDetailModalItem(null)}
+                  onClick={() => setDetailModalProductId(null)}
                   className="p-1 text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
@@ -1792,118 +2666,162 @@ export default function HorusAnaliseItensPage() {
               </div>
 
               <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-                <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
-                  <table className="w-full text-left border-collapse">
-                    <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-extrabold uppercase text-slate-700 dark:text-slate-200">
-                      <tr>
-                        <th className="p-2.5 border-r border-slate-200">Filial / Loja</th>
-                        <th className="p-2.5 border-r border-slate-200 text-center">Emp / Fil / Local</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Custo Médio</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Saldo Disp.</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Consig. Env.</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Consig. Rec.</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Vendas 365d</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Vendas ({periodBadgeLabel})</th>
-                        <th className="p-2.5 border-r border-slate-200 text-right">Sug. Reposição</th>
-                        <th className="p-2.5 text-center">Última Entrada (Compra / Consig)</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-xs font-bold">
-                      {(detailModalItem.branches_breakdown && detailModalItem.branches_breakdown.length > 0
-                        ? detailModalItem.branches_breakdown
-                        : branches.map((b) => ({
-                            branch_id: b.id,
-                            branch_name: b.nome,
-                            cod_empresa: b.cod_empresa,
-                            cod_filial: b.cod_filial,
-                            cod_local: b.cod_local,
-                            locais: b.locais,
-                            stock_available: detailModalItem.stock_quantity,
-                            stock_physical: detailModalItem.stock_quantity,
-                            consigned_sent: detailModalItem.consignment_stock,
-                            consigned_received: detailModalItem.consigned_received,
-                            cost_price: detailModalItem.cost_price,
-                            sales_365: detailModalItem.sales_365,
-                            sales_period: detailModalItem.sales_period,
-                            last_entry_date: detailModalItem.last_entry_date || null,
-                            last_entry_qty: detailModalItem.last_entry_qty || 0,
-                            last_entry_cost: detailModalItem.last_entry_cost || 0,
-                            last_entry_type: detailModalItem.last_entry_type || null,
-                            last_entry_cfop: detailModalItem.last_entry_cfop || null,
-                            last_entry_nf: detailModalItem.last_entry_nf || null,
-                          }))
-                      ).map((b) => {
-                        const sug = Math.max(0, Number(b.sales_period || 0) - Math.max(0, Number(b.stock_available || 0)));
-                        return (
-                          <tr key={b.branch_id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                            <td className="p-2.5 border-r border-slate-200 font-sans font-extrabold text-slate-900 dark:text-white">
-                              {b.branch_name}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-center text-slate-600">
-                              Emp {b.cod_empresa} • Fil {b.cod_filial}
-                              {b.locais && b.locais.length > 0 ? ` • Loc ${b.locais.join(',')}` : ''}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-right text-amber-800">
-                              {Number(b.cost_price || 0) > 0
-                                ? Number(b.cost_price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-                                : '—'}
-                            </td>
-                            <td
-                              className={`p-2.5 border-r border-slate-200 text-right font-extrabold ${
-                                b.stock_available > 0 ? 'text-emerald-700' : 'text-rose-600'
-                              }`}
+                {!detailModalItem.branches_breakdown || detailModalItem.branches_breakdown.length === 0 ? (
+                  <div className="py-12 text-center text-slate-500 space-y-2">
+                    <RefreshCw className="w-6 h-6 animate-spin mx-auto text-indigo-600" />
+                    <p className="font-bold text-slate-700 dark:text-slate-200">
+                      Consultando saldos, custos e entradas individuais de cada filial no Horus SQL...
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left border-collapse">
+                      <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-extrabold uppercase text-slate-700 dark:text-slate-200">
+                        <tr>
+                          <th className="p-2.5 border-r border-slate-200">Filial / Loja</th>
+                          <th className="p-2.5 border-r border-slate-200 text-center">Emp / Fil / Local</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Preço Vendido</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Custo Médio</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Saldo Disp.</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Estoque Mín.</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Consig. Env.</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Consig. Rec.</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Vendas 365d</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Vendas ({periodBadgeLabel})</th>
+                          <th className="p-2.5 border-r border-slate-200 text-right">Sug. Reposição</th>
+                          <th className="p-2.5 text-center">Última Entrada (Compra / Consig)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-xs font-bold">
+                        {detailModalItem.branches_breakdown.map((b) => {
+                          const minVal = Number(
+                            b.min_stock ?? detailModalItem.min_stock_by_branch?.[String(b.branch_id)] ?? 0
+                          );
+                          const st = evaluateMinStockStatus(b.stock_available, minVal);
+                          const isBelow = st === 'BELOW_MIN';
+                          const isNear = st === 'NEAR_MIN';
+                          const sug = Math.max(
+                            0,
+                            Math.max(Number(b.sales_period || 0), minVal) - Math.max(0, Number(b.stock_available || 0))
+                          );
+                          return (
+                            <tr
+                              key={b.branch_id}
+                              className={
+                                isBelow
+                                  ? 'bg-rose-50/80 dark:bg-rose-950/30'
+                                  : isNear
+                                  ? 'bg-orange-50/80 dark:bg-orange-950/30'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                              }
                             >
-                              {b.stock_available}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-right text-indigo-700">
-                              {b.consigned_sent}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-right text-purple-700">
-                              {b.consigned_received}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-right">{b.sales_365}</td>
-                            <td className="p-2.5 border-r border-slate-200 text-right text-emerald-700 font-extrabold">
-                              {b.sales_period}
-                            </td>
-                            <td className="p-2.5 border-r border-slate-200 text-right">
-                              {sug > 0 ? (
-                                <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-extrabold">
-                                  +{sug}
-                                </span>
-                              ) : (
-                                '0'
-                              )}
-                            </td>
-                            <td className="p-2.5 text-center">
-                              {b.last_entry_date ? (
-                                <div className="flex flex-col items-center leading-tight">
-                                  <span className="font-extrabold text-slate-900 dark:text-white">
-                                    {formatBrDate(b.last_entry_date)} • {b.last_entry_type} (CFOP {b.last_entry_cfop})
+                              <td className="p-2.5 border-r border-slate-200 font-sans font-extrabold text-slate-900 dark:text-white">
+                                {b.branch_name}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-center text-slate-600">
+                                Emp {b.cod_empresa} • Fil {b.cod_filial}
+                                {b.locais && b.locais.length > 0 ? ` • Loc ${b.locais.join(',')}` : ''}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right text-indigo-700">
+                                {Number(b.sold_unit_price || 0) > 0
+                                  ? Number(b.sold_unit_price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                                  : '—'}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right text-amber-800">
+                                {Number(b.cost_price || 0) > 0
+                                  ? Number(b.cost_price).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                                  : '—'}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right font-extrabold">
+                                {isBelow ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-600 text-white">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {b.stock_available}
                                   </span>
-                                  <span className="text-[10px] text-slate-500">
-                                    Qtd: {b.last_entry_qty} un
-                                    {Number(b.last_entry_cost || 0) > 0
-                                      ? ` • Custo Ent: R$ ${Number(b.last_entry_cost).toFixed(2).replace('.', ',')}`
-                                      : ''}
-                                    {b.last_entry_nf ? ` • NF #${b.last_entry_nf}` : ''}
+                                ) : isNear ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-orange-500 text-white">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {b.stock_available}
                                   </span>
-                                </div>
-                              ) : (
-                                <span className="text-slate-400">Sem entrada registrada</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                                ) : (
+                                  <span className={b.stock_available > 0 ? 'text-emerald-700' : 'text-rose-600'}>
+                                    {b.stock_available}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-2 border-r border-slate-200 text-right">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={minVal || ''}
+                                  placeholder="0"
+                                  onChange={(e) => {
+                                    const v = parseInt(e.target.value, 10) || 0;
+                                    handleSaveBranchMinStockInline(detailModalItem, b.branch_id, v);
+                                  }}
+                                  className="w-16 text-right px-1.5 py-0.5 rounded border border-slate-300 bg-white dark:bg-slate-800 font-mono text-xs font-extrabold"
+                                />
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right text-indigo-700">
+                                {b.consigned_sent}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right text-purple-700">
+                                {b.consigned_received}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right">{b.sales_365}</td>
+                              <td className="p-2.5 border-r border-slate-200 text-right text-emerald-700 font-extrabold">
+                                {b.sales_period}
+                              </td>
+                              <td className="p-2.5 border-r border-slate-200 text-right">
+                                {sug > 0 ? (
+                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 font-extrabold">
+                                    +{sug}
+                                  </span>
+                                ) : (
+                                  '0'
+                                )}
+                              </td>
+                              <td className="p-2.5 text-center">
+                                {b.last_entry_date ? (
+                                  <div className="flex flex-col items-center leading-tight">
+                                    <span className="font-extrabold text-slate-900 dark:text-white">
+                                      {formatBrDate(b.last_entry_date)} • {b.last_entry_type} (CFOP {b.last_entry_cfop})
+                                    </span>
+                                    <span className="text-[10px] text-slate-500">
+                                      Qtd: {b.last_entry_qty} un
+                                      {Number(b.last_entry_cost || 0) > 0
+                                        ? ` • Custo Ent: R$ ${Number(b.last_entry_cost).toFixed(2).replace('.', ',')}`
+                                        : ''}
+                                      {b.last_entry_nf ? ` • NF #${b.last_entry_nf}` : ''}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span className="text-slate-400">Sem entrada registrada</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
 
-              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex justify-end">
+              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div className="flex items-center gap-3 text-[11px] font-semibold text-slate-600">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-600 inline-block" />
+                    Vermelho: Estoque Atual abaixo do Estoque Mínimo
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-2.5 h-2.5 rounded-full bg-orange-500 inline-block" />
+                    Laranja: Estoque Atual próximo do Estoque Mínimo
+                  </span>
+                </div>
                 <button
                   type="button"
-                  onClick={() => setDetailModalItem(null)}
+                  onClick={() => setDetailModalProductId(null)}
                   className="px-4 py-1.5 rounded-lg bg-indigo-600 text-white font-bold cursor-pointer"
                 >
                   Fechar
@@ -1915,7 +2833,153 @@ export default function HorusAnaliseItensPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 2: EXPORTAÇÃO DE RELATÓRIO EXCEL MULTI-FILIAL (REPOSIÇÃO & CUSTO) */}
+      {/* MODAL 2: IMPORTAÇÃO DE ESTOQUE MÍNIMO POR FILIAL (ISBN + QTD MÍNIMA)  */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <AnimatePresence>
+        {showMinStockModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 select-text">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden text-xs"
+            >
+              <div className="px-5 py-3.5 bg-slate-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Upload className="w-4 h-4 text-orange-400" />
+                  <div>
+                    <h3 className="text-sm font-bold">Importar Estoque Mínimo por Filial Configurada</h3>
+                    <p className="text-[11px] text-slate-300">
+                      Selecione a filial e envie apenas <strong>ISBN</strong> e <strong>Quantidade Estoque Mínimo</strong>.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMinStockModal(false)}
+                  className="p-1 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleImportBranchMinStock} className="p-5 space-y-4">
+                <div>
+                  <label className="block text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 mb-1">
+                    1. Selecionar Filial Configurada (/logistics/branches) *
+                  </label>
+                  <select
+                    required
+                    value={minStockImportBranchId}
+                    onChange={(e) => setMinStockImportBranchId(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border border-emerald-300 bg-emerald-50/40 dark:bg-slate-800 font-bold text-slate-900 dark:text-white"
+                  >
+                    <option value="" disabled>
+                      Selecione a filial...
+                    </option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={String(b.id)}>
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                      2. Arquivo Excel (.xlsx) ou CSV (.csv) — Máx. 10 MB
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleDownloadMinStockTemplate}
+                      className="text-[11px] font-bold text-indigo-600 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <Download className="w-3 h-3" />
+                      Baixar Modelo (ISBN | ESTOQUE_MINIMO)
+                    </button>
+                  </div>
+                  <input
+                    type="file"
+                    accept=".xlsx,.csv,.txt"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      if (f && f.size > MAX_SHEET_UPLOAD_BYTES) {
+                        toast.error('O arquivo excede o limite máximo permitido de 10 MB.');
+                        e.target.value = '';
+                        setMinStockFile(null);
+                        return;
+                      }
+                      setMinStockFile(f);
+                    }}
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                    Ou cole diretamente do Excel (2 colunas: ISBN e Quantidade Estoque Mínimo)
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={minStockPastedText}
+                    onChange={(e) => setMinStockPastedText(e.target.value)}
+                    placeholder={'9788552994152\t20\n9786555680614\t10'}
+                    className="w-full p-2.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-xs"
+                  />
+                </div>
+
+                <label className="flex items-start gap-2 p-2.5 rounded-xl bg-orange-50/70 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={minStockReplaceExisting}
+                    onChange={(e) => setMinStockReplaceExisting(e.target.checked)}
+                    className="mt-0.5 rounded text-orange-600"
+                  />
+                  <div>
+                    <span className="font-bold text-orange-950 dark:text-orange-200 block">
+                      Substituir estoque mínimo anterior desta filial
+                    </span>
+                    <span className="text-[11px] text-orange-800 dark:text-orange-300">
+                      Mantém na filial selecionada apenas os ISBNs e quantidades enviados nesta importação.
+                    </span>
+                  </div>
+                </label>
+
+                <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setShowMinStockModal(false)}
+                    className="px-3.5 py-1.5 rounded-lg border border-slate-200 text-slate-600 font-semibold cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={importingMinStock}
+                    className="px-4 py-1.5 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-bold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    {importingMinStock ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        Importando...
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-3.5 h-3.5" />
+                        Importar Estoque Mínimo na Filial
+                      </>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* MODAL 3: EXPORTAÇÃO DE RELATÓRIO EXCEL MULTI-FILIAL (REPOSIÇÃO & CUSTO) */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showExportModal && (
@@ -1966,13 +3030,13 @@ export default function HorusAnaliseItensPage() {
                     />
                     <div>
                       <div className="font-bold text-slate-900">
-                        Modelo Padrão — Análise de Estoque, Custo &amp; Reposição por Filial (Linhas por Filial)
+                        Modelo Padrão — Análise de Estoque, Estoque Mínimo, Custo &amp; Reposição por Filial
                       </div>
                       <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
                         Repete as linhas para cada filial configurada, exibindo <b>Empresa</b>, <b>Filial</b>,{' '}
-                        <b>Local</b>, <b>Saldo Disponível</b>, <b>Custo Médio por Filial</b>,{' '}
-                        <b>Consignado Enviado</b>, <b>Consignado Recebido</b>, <b>Vendas no Período</b>,{' '}
-                        <b>Sugestão de Reposição</b> e <b>Última Entrada (Compra ou Consignação Recebida, sem ajuste)</b> com data, CFOP e custo.
+                        <b>Local</b>, <b>Saldo Disponível Individual</b>, <b>Estoque Mínimo da Filial</b>,{' '}
+                        <b>Alerta Laranja/Vermelho</b>, <b>Custo Médio por Filial</b>, <b>Consignado Enviado &amp; Recebido</b>,{' '}
+                        <b>Vendas no Período</b>, <b>Sugestão de Reposição</b> e <b>Última Entrada (Compra/Consig)</b>.
                       </p>
                     </div>
                   </label>
@@ -1995,7 +3059,7 @@ export default function HorusAnaliseItensPage() {
                         Modelo 2 — Consolidado Geral (1 Linha por Produto)
                       </div>
                       <p className="text-[11px] text-slate-500 mt-0.5">
-                        Soma os saldos, consignados e vendas de todas as filiais filtradas em uma única linha por obra.
+                        Soma os saldos, estoques mínimos, consignados e vendas de todas as filiais filtradas em uma única linha por obra.
                       </p>
                     </div>
                   </label>
@@ -2015,7 +3079,7 @@ export default function HorusAnaliseItensPage() {
                           : 'bg-slate-50 text-slate-700 border-slate-200'
                       }`}
                     >
-                      Filtro atual ({selectedBranchId === 'ALL' ? `Todas (${branches.length})` : branches.find((b) => String(b.id) === selectedBranchId)?.nome})
+                      Filtro atual ({selectedBranchesLabel})
                     </button>
                     <button
                       type="button"
@@ -2065,7 +3129,7 @@ export default function HorusAnaliseItensPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 3: CONFIGURAÇÕES DE COLUNAS E ALERTA DE ESTOQUE                 */}
+      {/* MODAL 4: CONFIGURAÇÕES DE COLUNAS E ALERTA DE ESTOQUE                 */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showSettingsModal && (
@@ -2090,7 +3154,7 @@ export default function HorusAnaliseItensPage() {
                 <div className="p-3 rounded-xl border border-rose-200 bg-rose-50/40 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-extrabold uppercase text-rose-700">
-                      Alerta de Estoque (Geral)
+                      Alerta de Estoque (Geral — quando sem Est. Mínimo)
                     </span>
                     <span className="px-2 py-0.5 rounded bg-rose-100 border border-rose-200 text-rose-700 text-[10px] font-mono font-extrabold">
                       {stockAlertThreshold > 0 ? `≤ ${stockAlertThreshold} un.` : 'Desativado'}
@@ -2100,7 +3164,7 @@ export default function HorusAnaliseItensPage() {
                     <input
                       type="text"
                       inputMode="numeric"
-                      placeholder="Ex: 250"
+                      placeholder="Ex: 5"
                       value={stockAlertThreshold ? String(stockAlertThreshold) : ''}
                       onChange={(e) => {
                         const raw = e.target.value.replace(/\D/g, '');
@@ -2108,7 +3172,7 @@ export default function HorusAnaliseItensPage() {
                       }}
                       className="w-32 px-2.5 py-1.5 text-xs font-mono font-extrabold bg-white border border-rose-200 rounded-lg"
                     />
-                    <span className="text-[11px] text-slate-500">unidades (0 = desativar)</span>
+                    <span className="text-[11px] text-slate-500">unidades (0 = usar apenas Est. Mínimo por Filial)</span>
                   </div>
                 </div>
 
@@ -2198,7 +3262,7 @@ export default function HorusAnaliseItensPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 4: CONSULTA E IMPORTAÇÃO MANUAL EM LOTES SEGUROS (CHUNKED)      */}
+      {/* MODAL 5: CONSULTA E IMPORTAÇÃO MANUAL EM LOTES SEGUROS (CHUNKED)      */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showHorusSyncModal && (
@@ -2435,6 +3499,140 @@ export default function HorusAnaliseItensPage() {
                     className="px-4 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-700 font-bold cursor-pointer"
                   >
                     Fechar
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* MODAL DE CONCILIAÇÃO DE EDITORA/SELO (CRONUZ B2B <-> HORUS SQL) */}
+      <AnimatePresence>
+        {showReconcilePubModal && (
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+            >
+              <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-extrabold flex items-center gap-2">
+                    <DatabaseZap className="w-4 h-4 text-indigo-400" />
+                    Atualizar Editora / Selo (Cronuz + Horus SQL)
+                  </h3>
+                  <p className="text-[11px] text-slate-300 mt-0.5">
+                    Atualiza <code className="text-indigo-300">ITENS_ESTOQUE_GERAL.COD_EDITORA</code> no Horus e concilia no Cronuz ({reconcileTargetItems.length} item(ns) selecionado(s)).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowReconcilePubModal(false)}
+                  className="p-1 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3 overflow-y-auto flex-1">
+                <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-xs">
+                  <p className="font-bold text-slate-700 dark:text-slate-200 mb-1">
+                    Itens que serão atualizados ({reconcileTargetItems.length}):
+                  </p>
+                  <div className="max-h-24 overflow-y-auto space-y-1 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                    {reconcileTargetItems.slice(0, 15).map((it) => (
+                      <div key={it.id} className="truncate">
+                        • [{it.ean_gtin || it.isbn || it.sku}] {it.name} <span className="text-amber-700 dark:text-amber-400">(Atual: {it.brand || 'Sem editora'})</span>
+                      </div>
+                    ))}
+                    {reconcileTargetItems.length > 15 && (
+                      <div className="text-slate-400 italic">...e mais {reconcileTargetItems.length - 15} item(ns).</div>
+                    )}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Pesquisar Editora Oficial já cadastrada no Horus (tabela EDITORA):
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={horusPubSearch}
+                      onChange={(e) => {
+                        setHorusPubSearch(e.target.value);
+                        searchOfficialHorusPublishers(e.target.value);
+                      }}
+                      placeholder="Digite o nome ou código da editora no Horus..."
+                      className="flex-1 px-3 py-2 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 font-semibold"
+                    />
+                  </div>
+                </div>
+
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                  {loadingHorusPubs ? (
+                    <div className="p-6 text-center text-xs text-slate-500">
+                      <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-indigo-600" />
+                      Consultando tabela EDITORA no Horus SQL...
+                    </div>
+                  ) : horusPubResults.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-500">
+                      Nenhuma editora encontrada no Horus para este termo.
+                    </div>
+                  ) : (
+                    horusPubResults.map((pub) => {
+                      const isSel = selectedHorusPub?.cod_editora === pub.cod_editora;
+                      return (
+                        <button
+                          key={pub.cod_editora}
+                          type="button"
+                          onClick={() => setSelectedHorusPub({ cod_editora: pub.cod_editora, nome_editora: pub.nome_editora })}
+                          className={`w-full px-3 py-2 text-left flex items-center justify-between gap-2 text-xs transition cursor-pointer ${
+                            isSel
+                              ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-900 dark:text-indigo-200 font-extrabold'
+                              : 'hover:bg-slate-50 dark:hover:bg-slate-800/50 text-slate-700 dark:text-slate-200 font-semibold'
+                          }`}
+                        >
+                          <div className="truncate">
+                            <span className="font-mono text-[11px] px-1.5 py-0.5 rounded bg-slate-200/80 dark:bg-slate-700 mr-2">
+                              #{pub.cod_editora}
+                            </span>
+                            {pub.nome_editora}
+                          </div>
+                          <span className="text-[11px] text-slate-400 shrink-0">{pub.qtd_itens} itens</span>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+
+              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between gap-2">
+                <span className="text-xs text-slate-600 dark:text-slate-300 truncate">
+                  {selectedHorusPub ? (
+                    <>Nova Editora: <strong className="text-indigo-700 dark:text-indigo-300">#{selectedHorusPub.cod_editora} - {selectedHorusPub.nome_editora}</strong></>
+                  ) : (
+                    'Selecione uma editora acima'
+                  )}
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => setShowReconcilePubModal(false)}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!selectedHorusPub || savingReconcilePub}
+                    onClick={handleConfirmReconcilePublisher}
+                    className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                  >
+                    {savingReconcilePub ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    Confirmar no Horus + Cronuz
                   </button>
                 </div>
               </div>

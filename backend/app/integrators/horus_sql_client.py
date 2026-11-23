@@ -46,11 +46,11 @@ class HorusSQLClient:
     Gerencia um pool de conexoes por seller para alta performance.
     """
 
-    def __init__(self, db: Session, company_id: int):
+    def __init__(self, db: Session, company_id: int, pool_slot: Optional[str] = None):
         self.db = db
         self.company_id = company_id
         self._settings = self._load_settings()
-        self._conn_key = company_id
+        self._conn_key = f"{company_id}:{pool_slot}" if pool_slot else company_id
 
     def _load_settings(self):
         from app.models.company_settings import CompanySettings

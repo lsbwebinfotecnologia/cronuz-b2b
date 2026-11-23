@@ -8,32 +8,39 @@ Recursos principais:
 1. Integração nativa com Filiais do Seller (/logistics/branches - cmp_seller_branch):
    - Permite analisar uma Empresa/Filial/Local específica ou TODAS as filiais configuradas.
 2. Contador exato de sincronização (Total Horus SQL vs Sincronizados no Cronuz vs Faltando)
-   + Worker de Sincronização em Segundo Plano (Background Sync) em lotes seguros por keyset pagination
-   (COD_ITEM > last_cod_item), sem travar o Uvicorn e sem dar timeout ("Failed to fetch").
-3. Enriquecimento Multi-Filial de Alta Performance (TABELA_SALDO_ITENS_GERAL + TABELA_SALDO_ITENS):
-   - Saldo Disponível (respeitando COD_LOCAL configurado na filial quando aplicável)
+   + Worker de Sincronização em Segundo Plano (Background Sync) em conexão SQL isolada (pool_slot='bg_sync')
+   usando keyset pagination (COD_ITEM > last_cod_item), sem bloquear consultas interativas da tela.
+3. Coleta de Editoras direto do Horus SQL (/horus-analise-itens/publishers) para filtro multi-seleção,
+   com sincronização sob demanda quando o usuário filtra editoras ainda não trazidas pelo worker.
+4. Estoque Mínimo por Produto (ISBN) e por Filial Configurada (prd_branch_min_stock):
+   - Edição rápida inline por filial
+   - Rotina de Importação por Filial Selecionada (Excel/CSV ou colagem mantendo apenas ISBN e Quantidade Estoque Mínimo)
+   - Sinalização visual Vermelha (abaixo do estoque mínimo) e Laranja (próximo do estoque mínimo).
+5. Enriquecimento Multi-Filial de Alta Performance (TABELA_SALDO_ITENS_GERAL + TABELA_SALDO_ITENS):
+   - Saldo Disponível individual por filial/local (nunca repete saldo consolidado nas filiais)
    - Consignado Enviado (SALDO_CONSIGNADO_ENVIADO)
    - Consignado Recebido (SALDO_CONSIGNADO_RECEBIDO)
    - Custo Médio / Unitário por Filial (CUSTO_MEDIO_ESTOQUE / CUSTO_MEDIO_ESTOQUE_REAL)
-4. Vendas por Filial com filtro de período (dias ou intervalo de datas) via NF_ITENS + NF_MESTRE.
-5. Última Entrada confiável de COMPRA ou RECEBIMENTO EM CONSIGNAÇÃO (excluindo Ajustes!) por Filial:
-   - Combina NF_ENTRADA + ITENS_NOTAS_FISCAIS (CFOPs de Compra e Consignação Recebida 1917/2917)
-     com TABELA_MOVIMENTACAO + TPO_MOVIMENTACAO (STA_MOVTO = 'E', excluindo ajustes/devoluções).
-6. Exportação segura de Relatório Excel Multi-Filial (repetindo linhas por filial para análise
-   de estoque, custo, última entrada e sugestão de reposição baseada em vendas vs saldo).
+6. Vendas por Filial com filtro de período (dias ou intervalo de datas) via NF_ITENS + NF_MESTRE.
+7. Última Entrada confiável de COMPRA ou RECEBIMENTO EM CONSIGNAÇÃO (excluindo Ajustes!) por Filial.
+8. Exportação segura de Relatório Excel Multi-Filial com Estoque Mínimo e Status de Alerta.
 """
 
+import csv
 import io
+import json
 import logging
+import math
+import os
 import re
 import threading
 import time as _time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import String, cast, func, or_
@@ -41,16 +48,17 @@ from sqlalchemy.orm import Session
 
 from app.core.dependencies import get_current_user
 from app.db.session import SessionLocal, get_db
-from app.integrators.horus_sql_client import HorusSQLClient, HorusSQLConfigError
-from app.models.catalog_support import Brand, Category
-from app.models.company import Company
+from app.integrators.horus_sql_client import HorusSQLClient
 from app.models.company_settings import CompanySettings
 from app.models.product import Product
-from app.models.seller_branch import SellerBranch
+from app.models.seller_branch import ProductBranchMinStock, SellerBranch
 from app.models.user import User
 
 router = APIRouter(prefix="/horus-analise-itens", tags=["horus-analise-itens"])
 log = logging.getLogger(__name__)
+
+# Limite rígido de upload de planilhas (10 MB conforme regra mandatória do projeto)
+MAX_SHEET_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # ── CFOPs Oficiais para Vendas, Compras e Recebimento em Consignação ──────────
 CFOP_VENDAS_TUPLE = (
@@ -71,10 +79,6 @@ CFOP_ENTRADA_CONSIG_TUPLE = (
 
 
 def _build_sargable_cfop_in(cfop_codes: Tuple[str, ...]) -> str:
-    """
-    Gera lista literal SARGable para COD_NATUREZA IN (...), cobrindo variações
-    formatadas no Horus ('1102', '1.102', '1,102', '1.102.', '1102 ').
-    """
     variants: set[str] = set()
     for raw in cfop_codes:
         c = str(raw or "").strip().replace(".", "").replace(",", "").replace(" ", "")
@@ -92,6 +96,35 @@ SARGABLE_CFOP_ENTRADA_COMPRA_CONSIG = _build_sargable_cfop_in(
     CFOP_ENTRADA_COMPRA_TUPLE + CFOP_ENTRADA_CONSIG_TUPLE
 )
 CLEAN_CONSIG_CFOPS_SET = set(CFOP_ENTRADA_CONSIG_TUPLE)
+
+
+def _normalize_isbn(raw: Any) -> str:
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    if s.endswith(".0"):
+        s = s[:-2]
+    cleaned = re.sub(r"[^0-9Xx]", "", s).upper()
+    return cleaned or s.strip()
+
+
+def _evaluate_min_stock_status(current_stock: int, min_stock: int) -> str:
+    """
+    Avalia o status do Estoque Atual vs Estoque Mínimo:
+      - 'NONE': sem estoque mínimo configurado (min_stock <= 0)
+      - 'BELOW_MIN': Vermelho — estoque atual abaixo do estoque mínimo (current_stock < min_stock)
+      - 'NEAR_MIN': Laranja — estoque atual próximo do estoque mínimo
+                    (min_stock <= current_stock <= max(min_stock + 2, ceil(min_stock * 1.25)))
+      - 'OK': estoque confortável acima da faixa de proximidade
+    """
+    if min_stock <= 0:
+        return "NONE"
+    if current_stock < min_stock:
+        return "BELOW_MIN"
+    near_ceiling = max(min_stock + 2, int(math.ceil(min_stock * 1.25)))
+    if current_stock <= near_ceiling:
+        return "NEAR_MIN"
+    return "OK"
 
 
 def _resolve_seller_id(current_user: Any, company_id: Optional[int] = None) -> int:
@@ -144,11 +177,6 @@ def _extract_branch_locais(branch: SellerBranch) -> List[int]:
 
 
 def _load_configured_branches(db: Session, seller_id: int) -> List[Dict[str, Any]]:
-    """
-    Carrega todas as filiais ativas configuradas em /logistics/branches (cmp_seller_branch).
-    Caso o seller ainda não tenha filiais cadastradas em cmp_seller_branch, utiliza a
-    empresa/filial/local padrão de cmp_settings.
-    """
     rows = (
         db.query(SellerBranch)
         .filter(SellerBranch.company_id == seller_id, SellerBranch.active == True)
@@ -203,10 +231,120 @@ def _load_configured_branches(db: Session, seller_id: int) -> List[Dict[str, Any
     return branches
 
 
-# ── Cache do Total de Itens no Horus SQL & Estado do Background Sync Worker ───
+def _load_min_stock_map(
+    db: Session,
+    seller_id: int,
+    isbns: Optional[List[str]] = None,
+    product_ids: Optional[List[int]] = None,
+) -> Tuple[Dict[Tuple[int, str], int], Dict[Tuple[int, int], int]]:
+    """
+    Retorna dois mapas de Estoque Mínimo por filial:
+      1. by_branch_isbn[(branch_id, clean_isbn)] = min_stock
+      2. by_branch_prod[(branch_id, product_id)] = min_stock
+    """
+    q = db.query(ProductBranchMinStock).filter(ProductBranchMinStock.company_id == seller_id)
+    if isbns and product_ids:
+        clean_isbns = [i for i in isbns if i]
+        q = q.filter(
+            or_(
+                ProductBranchMinStock.isbn.in_(clean_isbns),
+                ProductBranchMinStock.product_id.in_(product_ids),
+            )
+        )
+    elif isbns:
+        clean_isbns = [i for i in isbns if i]
+        if clean_isbns:
+            q = q.filter(ProductBranchMinStock.isbn.in_(clean_isbns))
+    elif product_ids:
+        q = q.filter(ProductBranchMinStock.product_id.in_(product_ids))
+
+    rows = q.all()
+    by_branch_isbn: Dict[Tuple[int, str], int] = {}
+    by_branch_prod: Dict[Tuple[int, int], int] = {}
+    for r in rows:
+        ms = max(0, int(r.min_stock or 0))
+        if r.isbn:
+            by_branch_isbn[(int(r.branch_id), _normalize_isbn(r.isbn))] = ms
+            by_branch_isbn[(int(r.branch_id), str(r.isbn).strip())] = ms
+        if r.product_id:
+            by_branch_prod[(int(r.branch_id), int(r.product_id))] = ms
+    return by_branch_isbn, by_branch_prod
+
+
+def _resolve_product_branch_min_stock(
+    branch_id: int,
+    product_id: Optional[int],
+    isbn: Optional[str],
+    by_branch_isbn: Dict[Tuple[int, str], int],
+    by_branch_prod: Dict[Tuple[int, int], int],
+) -> int:
+    if product_id and (branch_id, int(product_id)) in by_branch_prod:
+        return by_branch_prod[(branch_id, int(product_id))]
+    if isbn:
+        norm = _normalize_isbn(isbn)
+        if (branch_id, norm) in by_branch_isbn:
+            return by_branch_isbn[(branch_id, norm)]
+        raw_s = str(isbn).strip()
+        if (branch_id, raw_s) in by_branch_isbn:
+            return by_branch_isbn[(branch_id, raw_s)]
+    return 0
+
+
+# ── Caches de Total Horus SQL, Editoras Horus SQL & Background Sync Worker ────
 _HORUS_COUNT_CACHE: Dict[int, Dict[str, Any]] = {}
+_HORUS_PUBLISHERS_CACHE: Dict[int, Dict[str, Any]] = {}
 _BG_SYNC_LOCK = threading.Lock()
 _BG_SYNC_STATES: Dict[int, Dict[str, Any]] = {}
+
+
+def _bg_state_file_path(seller_id: int) -> str:
+    return f"/tmp/cronuz_horus_bg_sync_{int(seller_id)}.json"
+
+
+def _load_shared_bg_state(seller_id: int) -> Dict[str, Any]:
+    """
+    Lê o estado compartilhado entre todos os workers do Gunicorn em /tmp.
+    Se o worker estiver marcado como is_running mas sem heartbeat há mais de 90s,
+    destrava automaticamente para permitir retomada imediata.
+    """
+    path = _bg_state_file_path(seller_id)
+    state: Dict[str, Any] = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as fp:
+                state = json.load(fp) or {}
+        except Exception:
+            state = {}
+    if not state:
+        state = dict(_BG_SYNC_STATES.get(seller_id) or {})
+
+    if state.get("is_running"):
+        hb = float(state.get("heartbeat_ts") or 0)
+        if hb > 0 and (_time.time() - hb > 90):
+            state["is_running"] = False
+            state["status_message"] = "Worker anterior interrompido. Pronto para retomar do último item sincronizado."
+    return state
+
+
+def _save_shared_bg_state(seller_id: int, state: Dict[str, Any]) -> None:
+    """
+    Salva atomicamente o estado do worker em /tmp para que todos os 4 workers do Gunicorn
+    enxerguem o progresso real e solicitações de pausa em tempo real.
+    """
+    state["heartbeat_ts"] = _time.time()
+    _BG_SYNC_STATES[seller_id] = dict(state)
+    path = _bg_state_file_path(seller_id)
+    tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fp:
+            json.dump(state, fp, ensure_ascii=False)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
 
 
 def _get_horus_total_count(sql_client: Optional[HorusSQLClient], seller_id: int, force: bool = False) -> int:
@@ -252,12 +390,15 @@ def _detect_launch_col(sql_client: HorusSQLClient) -> str:
 def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -> None:
     """
     Worker em segundo plano que sincroniza todo o acervo de ITENS_ESTOQUE_GERAL do Horus SQL
-    para a base local do Cronuz (prd_product) em lotes seguros de 400 itens usando
-    keyset pagination (I.COD_ITEM > last_cod_item).
+    para a base local do Cronuz (prd_product) em lotes seguros de 400 itens usando:
+      1. CAST(... AS NVARCHAR(...)) no SQL Server para evitar erros de cp1252/charmap (byte 0x81, 0x8d, etc.)
+      2. Retomada inteligente a partir do MAX(horus_cod_item) já sincronizado no Cronuz (para inserir novos
+         itens imediatamente no 1º lote, fazendo uma 2ª passada para eventuais lacunas anteriores).
+      3. Estado compartilhado em /tmp entre todos os workers do Gunicorn.
     """
     db = SessionLocal()
     try:
-        sql_client = HorusSQLClient(db, seller_id)
+        sql_client = HorusSQLClient(db, seller_id, pool_slot="bg_sync")
         branches = _load_configured_branches(db, seller_id)
         settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
         legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
@@ -267,7 +408,6 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
         horus_total = _get_horus_total_count(sql_client, seller_id, force=True)
         launch_col = _detect_launch_col(sql_client)
 
-        # Pré-carrega mapa rápido de produtos existentes do seller (horus_cod_item -> id, ean_gtin -> id)
         existing_rows = (
             db.query(Product.id, Product.horus_cod_item, Product.ean_gtin, Product.sku)
             .filter(Product.company_id == seller_id)
@@ -275,14 +415,17 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
         )
         by_cod_item: Dict[int, int] = {}
         by_isbn: Dict[str, int] = {}
+        max_existing_cod = 0
         for pid, h_cod, ean, sku in existing_rows:
             if h_cod is not None:
-                by_cod_item[int(h_cod)] = int(pid)
+                c_val = int(h_cod)
+                by_cod_item[c_val] = int(pid)
+                if c_val > max_existing_cod:
+                    max_existing_cod = c_val
             for raw_k in (ean, sku):
                 if raw_k and str(raw_k).strip():
                     by_isbn[str(raw_k).strip()] = int(pid)
 
-        # Cláusula de filiais para somar saldo das filiais configuradas
         branch_pairs = list({(b["cod_empresa"], b["cod_filial"]) for b in branches})
         if branch_pairs:
             pair_conds = " OR ".join(
@@ -292,43 +435,57 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
         else:
             pair_conds = "1=1"
 
+        # Se já existem itens sincronizados e ainda faltam itens novos acima do max_existing_cod,
+        # começa direto de max_existing_cod para inserir novos itens imediatamente no 1º lote!
+        # Depois que chegar ao final do Horus SQL, se ainda faltarem lacunas anteriores, faz uma 2ª passada de 0 até max_existing_cod.
+        started_from_resume = max_existing_cod > 0 and len(by_cod_item) < horus_total
+        last_cod_item = max_existing_cod if started_from_resume else 0
+        upper_bound_cod: Optional[int] = None
         batch_size = 400
-        last_cod_item = 0
 
         with _BG_SYNC_LOCK:
-            st = _BG_SYNC_STATES.get(seller_id, {})
+            st = _load_shared_bg_state(seller_id)
+            st["is_running"] = True
             st["horus_total"] = horus_total
-            st["synced_total"] = len(existing_rows)
-            st["missing_total"] = max(0, horus_total - len(existing_rows))
-            st["status_message"] = "Sincronizando lotes do Horus SQL em segundo plano..."
+            st["synced_total"] = len(by_cod_item)
+            st["missing_total"] = max(0, horus_total - len(by_cod_item))
+            st["last_cod_item"] = last_cod_item
+            st["status_message"] = (
+                f"Retomando sincronização a partir do Cód. Horus #{last_cod_item}..."
+                if started_from_resume
+                else "Sincronizando lotes do Horus SQL em segundo plano..."
+            )
+            _save_shared_bg_state(seller_id, st)
 
         while True:
-            with _BG_SYNC_LOCK:
-                st = _BG_SYNC_STATES.get(seller_id)
-                if not st or st.get("stop_requested"):
-                    if st:
-                        st["is_running"] = False
-                        st["status_message"] = "Sincronização pausada pelo usuário."
-                        st["finished_at"] = datetime.utcnow().isoformat()
-                    break
+            st_check = _load_shared_bg_state(seller_id)
+            if not st_check.get("is_running") or st_check.get("stop_requested"):
+                st_check["is_running"] = False
+                st_check["status_message"] = "Sincronização pausada pelo usuário."
+                st_check["finished_at"] = datetime.utcnow().isoformat()
+                _save_shared_bg_state(seller_id, st_check)
+                break
 
             top_clause = f"TOP ({batch_size})" if legacy_pagination else ""
             offset_clause = "" if legacy_pagination else f"OFFSET 0 ROWS FETCH NEXT {batch_size} ROWS ONLY"
             stock_having = "AND ISNULL(S.saldo_disponivel, 0) > 0" if only_with_stock else ""
+            upper_clause = f"AND I.COD_ITEM <= {int(upper_bound_cod)}" if upper_bound_cod is not None else ""
 
+            # IMPORTANTE: CAST(... AS NVARCHAR(...)) força o SQL Server a converter strings em UTF-16LE no servidor,
+            # evitando UnicodeDecodeError ('charmap' codec can't decode byte 0x81) no driver pytds!
             sql_batch = f"""
                 SELECT {top_clause}
                     I.COD_ITEM AS cod_item,
-                    RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS isbn,
-                    RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS nome_item,
-                    RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS editora,
-                    RTRIM(LTRIM(ISNULL(G.NOM_GENERO, ''))) AS assunto,
+                    CAST(RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS NVARCHAR(100)) AS isbn,
+                    CAST(RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS NVARCHAR(400)) AS nome_item,
+                    CAST(RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS NVARCHAR(250)) AS editora,
+                    CAST(RTRIM(LTRIM(ISNULL(G.NOM_GENERO, ''))) AS NVARCHAR(250)) AS assunto,
                     ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
                     ISNULL(S.saldo_disponivel, 0) AS estoque,
                     ISNULL(S.consig_enviado, 0) AS consig_enviado,
                     ISNULL(S.custo_medio, 0.0) AS custo_medio,
                     ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
-                    RTRIM(LTRIM(ISNULL(I.SITUACAO_ITEM, ''))) AS situacao_item,
+                    CAST(RTRIM(LTRIM(ISNULL(I.SITUACAO_ITEM, ''))) AS NVARCHAR(60)) AS situacao_item,
                     {launch_col} AS data_lancamento
                 FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
                 LEFT JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
@@ -349,19 +506,35 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
                     GROUP BY COD_ITEM
                 ) S ON S.cod_item = I.COD_ITEM
                 WHERE I.COD_ITEM > %s
+                  {upper_clause}
                   {stock_having}
                 ORDER BY I.COD_ITEM ASC
                 {offset_clause}
             """
-            rows = sql_client.query(sql_batch, (last_cod_item,), max_rows=batch_size + 5)
+            try:
+                rows = sql_client.query(sql_batch, (last_cod_item,), max_rows=batch_size + 5)
+            except Exception as batch_err:
+                log.warning(
+                    f"[HorusAnaliseItens] Erro no lote após COD_ITEM={last_cod_item} (company={seller_id}): {batch_err}. Pulando +1 item..."
+                )
+                last_cod_item += 1
+                continue
+
             if not rows:
+                # Se terminou a 1ª passada a partir do max_existing_cod e ainda há lacunas anteriores, faz a 2ª passada de 0 até max_existing_cod
+                if started_from_resume and upper_bound_cod is None and len(by_cod_item) < horus_total:
+                    started_from_resume = False
+                    upper_bound_cod = max_existing_cod
+                    last_cod_item = 0
+                    continue
+
                 with _BG_SYNC_LOCK:
-                    st = _BG_SYNC_STATES.get(seller_id)
-                    if st:
-                        st["is_running"] = False
-                        st["missing_total"] = 0
-                        st["status_message"] = "Sincronização em segundo plano concluída com sucesso!"
-                        st["finished_at"] = datetime.utcnow().isoformat()
+                    st = _load_shared_bg_state(seller_id)
+                    st["is_running"] = False
+                    st["missing_total"] = max(0, horus_total - len(by_cod_item))
+                    st["status_message"] = "Sincronização em segundo plano concluída com sucesso!"
+                    st["finished_at"] = datetime.utcnow().isoformat()
+                    _save_shared_bg_state(seller_id, st)
                 break
 
             created_batch = 0
@@ -377,14 +550,16 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
                 for p_obj in db.query(Product).filter(Product.id.in_(existing_ids_in_batch)).all():
                     existing_prods_map[p_obj.id] = p_obj
 
+            seen_skus_in_batch: set[str] = set()
             for r in rows:
                 cod_item = int(r["cod_item"])
                 if cod_item > last_cod_item:
                     last_cod_item = cod_item
 
                 isbn = str(r.get("isbn") or "").strip()
-                sku_val = isbn if isbn else f"H-{cod_item}"
-                nome = str(r.get("nome_item") or f"Item #{cod_item}").strip()
+                sku_val = isbn if (isbn and isbn not in by_isbn and isbn not in seen_skus_in_batch) else f"H-{cod_item}"
+                seen_skus_in_batch.add(sku_val)
+                nome = str(r.get("nome_item") or f"Item #{cod_item}").strip() or f"Item #{cod_item}"
                 editora = str(r.get("editora") or "").strip() or None
                 assunto = str(r.get("assunto") or "").strip() or None
                 preco = float(r.get("preco") or 0.0)
@@ -406,14 +581,14 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
                 pid = by_cod_item.get(cod_item) or (by_isbn.get(isbn) if isbn else None)
                 if pid and pid in existing_prods_map:
                     p_obj = existing_prods_map[pid]
-                    p_obj.name = nome
+                    p_obj.name = nome[:255]
                     p_obj.horus_cod_item = cod_item
                     if isbn and not p_obj.ean_gtin:
-                        p_obj.ean_gtin = isbn
+                        p_obj.ean_gtin = isbn[:50]
                     if editora:
-                        p_obj.brand = editora
+                        p_obj.brand = editora[:150]
                     if assunto and not p_obj.subject:
-                        p_obj.subject = assunto
+                        p_obj.subject = assunto[:150]
                     if preco > 0:
                         p_obj.base_price = preco
                     if custo_med > 0:
@@ -461,47 +636,63 @@ def _run_background_sync_worker(seller_id: int, only_with_stock: bool = False) -
                     new_objects.append(new_p)
                     created_batch += 1
 
-            if new_objects:
-                db.add_all(new_objects)
-            db.commit()
+            try:
+                if new_objects:
+                    db.add_all(new_objects)
+                db.commit()
+            except Exception as commit_err:
+                db.rollback()
+                log.warning(f"[HorusAnaliseItens] Fallback individual no lote COD_ITEM={last_cod_item}: {commit_err}")
+                created_batch = 0
+                for np_single in new_objects:
+                    try:
+                        np_single.sku = f"H-{np_single.horus_cod_item}"
+                        db.add(np_single)
+                        db.commit()
+                        created_batch += 1
+                    except Exception:
+                        db.rollback()
 
             for np_obj in new_objects:
-                if np_obj.horus_cod_item:
+                if getattr(np_obj, "id", None) and np_obj.horus_cod_item:
                     by_cod_item[int(np_obj.horus_cod_item)] = np_obj.id
-                if np_obj.ean_gtin:
+                if getattr(np_obj, "id", None) and np_obj.ean_gtin:
                     by_isbn[str(np_obj.ean_gtin)] = np_obj.id
+                if getattr(np_obj, "id", None) and np_obj.sku:
+                    by_isbn[str(np_obj.sku)] = np_obj.id
 
             with _BG_SYNC_LOCK:
-                st = _BG_SYNC_STATES.get(seller_id)
-                if st:
-                    st["processed_in_run"] = int(st.get("processed_in_run") or 0) + len(rows)
-                    st["created_in_run"] = int(st.get("created_in_run") or 0) + created_batch
-                    st["updated_in_run"] = int(st.get("updated_in_run") or 0) + updated_batch
-                    st["last_cod_item"] = last_cod_item
-                    st["synced_total"] = len(by_cod_item)
-                    st["missing_total"] = max(0, horus_total - len(by_cod_item))
-                    st["updated_at"] = datetime.utcnow().isoformat()
-                    st["status_message"] = (
-                        f"Processados {st['processed_in_run']:,} itens "
-                        f"(Criados: {st['created_in_run']:,} • Atualizados: {st['updated_in_run']:,} • Últ. Cód: #{last_cod_item})"
-                    ).replace(",", ".")
+                st = _load_shared_bg_state(seller_id)
+                st["is_running"] = True
+                st["processed_in_run"] = int(st.get("processed_in_run") or 0) + len(rows)
+                st["created_in_run"] = int(st.get("created_in_run") or 0) + created_batch
+                st["updated_in_run"] = int(st.get("updated_in_run") or 0) + updated_batch
+                st["last_cod_item"] = last_cod_item
+                st["synced_total"] = len(by_cod_item)
+                st["missing_total"] = max(0, horus_total - len(by_cod_item))
+                st["updated_at"] = datetime.utcnow().isoformat()
+                st["status_message"] = (
+                    f"Processados {st['processed_in_run']:,} itens "
+                    f"(Criados: {st['created_in_run']:,} • Atualizados: {st['updated_in_run']:,} • Últ. Cód: #{last_cod_item})"
+                ).replace(",", ".")
+                _save_shared_bg_state(seller_id, st)
 
-            _time.sleep(0.12)
+            _time.sleep(0.06)
 
     except Exception as exc:
         log.error(f"[HorusAnaliseItens] Erro no worker de background sync (company={seller_id}): {exc}")
         with _BG_SYNC_LOCK:
-            st = _BG_SYNC_STATES.get(seller_id)
-            if st:
-                st["is_running"] = False
-                st["last_error"] = str(exc)
-                st["status_message"] = f"Erro na sincronização: {str(exc)[:180]}"
-                st["finished_at"] = datetime.utcnow().isoformat()
+            st = _load_shared_bg_state(seller_id)
+            st["is_running"] = False
+            st["last_error"] = str(exc)
+            st["status_message"] = f"Erro na sincronização: {str(exc)[:180]}"
+            st["finished_at"] = datetime.utcnow().isoformat()
+            _save_shared_bg_state(seller_id, st)
     finally:
         db.close()
 
 
-# ── Endpoints de Filiais e Status de Sincronização em Background ──────────────
+# ── Endpoints de Filiais, Editoras do Horus e Status de Sincronização ─────────
 
 @router.get("/branches")
 def get_analise_itens_branches(
@@ -509,15 +700,429 @@ def get_analise_itens_branches(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Retorna as filiais configuradas em /logistics/branches (Filiais do Seller)
-    para o seletor de Empresa / Filial / Local da tela Análise de Itens.
-    """
     seller_id = _resolve_seller_id(current_user, company_id)
     branches = _load_configured_branches(db, seller_id)
     return {
         "company_id": seller_id,
         "branches": branches,
+    }
+
+
+@router.get("/publishers")
+def get_analise_itens_publishers(
+    company_id: Optional[int] = Query(None),
+    force_refresh: bool = Query(False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Coleta todas as Editoras diretamente do Horus SQL Server (tabela EDITORA + ITENS_ESTOQUE_GERAL)
+    combinadas com as editoras já sincronizadas no Cronuz, permitindo ao usuário marcar/selecionar
+    uma ou várias editoras para filtrar a tela de Análise de Itens.
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    now = _time.time()
+    cached = _HORUS_PUBLISHERS_CACHE.get(seller_id)
+    if not force_refresh and cached and (now - cached["ts"] < 300):
+        return {
+            "company_id": seller_id,
+            "source": cached.get("source", "cache"),
+            "publishers": cached["publishers"],
+        }
+
+    pub_map: Dict[str, Dict[str, Any]] = {}
+    source = "local"
+
+    # 1. Coleta direto do Horus SQL (EDITORA + ITENS_ESTOQUE_GERAL)
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+        rows = sql_client.query(
+            """
+            SELECT
+                CAST(RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS NVARCHAR(250)) AS editora,
+                COUNT(I.COD_ITEM) AS total_itens
+            FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+            INNER JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+            WHERE RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) <> ''
+            GROUP BY CAST(RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS NVARCHAR(250))
+            ORDER BY editora ASC
+            """,
+            max_rows=5000,
+        )
+        for r in (rows or []):
+            name = str(r.get("editora") or "").strip()
+            if not name:
+                continue
+            key = name.upper()
+            pub_map[key] = {
+                "name": name,
+                "horus_count": int(r.get("total_itens") or 0),
+                "local_count": 0,
+            }
+        if pub_map:
+            source = "horus_sql"
+    except Exception as e:
+        log.warning(f"[HorusAnaliseItens] Aviso ao coletar editoras do Horus SQL (company={seller_id}): {e}")
+
+    # 2. Complementa com contagem local já sincronizada no Cronuz (prd_product)
+    local_rows = (
+        db.query(Product.brand, func.count(Product.id))
+        .filter(Product.company_id == seller_id, Product.brand.isnot(None), Product.brand != "")
+        .group_by(Product.brand)
+        .all()
+    )
+    for b_name, cnt in local_rows:
+        clean_b = str(b_name or "").strip()
+        if not clean_b:
+            continue
+        key = clean_b.upper()
+        if key in pub_map:
+            pub_map[key]["local_count"] = int(cnt or 0)
+        else:
+            pub_map[key] = {
+                "name": clean_b,
+                "horus_count": int(cnt or 0),
+                "local_count": int(cnt or 0),
+            }
+
+    publishers_list = sorted(pub_map.values(), key=lambda x: x["name"].upper())
+    _HORUS_PUBLISHERS_CACHE[seller_id] = {
+        "ts": now,
+        "source": source,
+        "publishers": publishers_list,
+    }
+    return {
+        "company_id": seller_id,
+        "source": source,
+        "publishers": publishers_list,
+    }
+
+
+def _sync_items_from_horus_by_publishers(
+    db: Session,
+    seller_id: int,
+    publishers: List[str],
+    search: Optional[str] = None,
+    max_sync: int = 1200,
+) -> int:
+    """
+    Quando o usuário seleciona uma ou mais Editoras coletadas do Horus na tela e alguns itens
+    daquela editora ainda não foram trazidos pelo worker de 2º plano, busca e sincroniza
+    automaticamente os itens dessa(s) editora(s) direto do Horus SQL para que apareçam na hora.
+    """
+    clean_pubs = [p.strip() for p in publishers if p and p.strip()]
+    if not clean_pubs:
+        return 0
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+    except Exception:
+        return 0
+
+    settings = db.query(CompanySettings).filter(CompanySettings.company_id == seller_id).first()
+    legacy_pagination = getattr(settings, "horus_legacy_pagination", False) if settings else False
+    cover_primary = (settings.cover_image_base_url or "").strip().rstrip("/") if settings else ""
+    cover_secondary = (settings.cover_image_secondary_base_url or "").strip().rstrip("/") if settings else ""
+    launch_col = _detect_launch_col(sql_client)
+
+    pub_placeholders = ", ".join(["%s"] * len(clean_pubs))
+    params_list: List[Any] = [p.upper() for p in clean_pubs]
+
+    search_clause = ""
+    if search and search.strip():
+        s_term = f"%{search.strip()}%"
+        search_clause = """
+          AND (
+              I.NOM_ITEM LIKE %s
+              OR I.COD_BARRA_ITEM LIKE %s
+              OR I.COD_ISBN_ITEM LIKE %s
+              OR CAST(I.COD_ITEM AS VARCHAR(30)) LIKE %s
+          )
+        """
+        params_list.extend([s_term, s_term, s_term, s_term])
+
+    top_clause = f"TOP ({max_sync})" if legacy_pagination else ""
+    offset_clause = "" if legacy_pagination else f"OFFSET 0 ROWS FETCH NEXT {max_sync} ROWS ONLY"
+
+    sql_q = f"""
+        SELECT {top_clause}
+            I.COD_ITEM AS cod_item,
+            CAST(RTRIM(LTRIM(ISNULL(I.COD_BARRA_ITEM, ISNULL(I.COD_ISBN_ITEM, '')))) AS NVARCHAR(100)) AS isbn,
+            CAST(RTRIM(LTRIM(ISNULL(I.NOM_ITEM, ''))) AS NVARCHAR(400)) AS nome_item,
+            CAST(RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, '')))) AS NVARCHAR(250)) AS editora,
+            CAST(RTRIM(LTRIM(ISNULL(G.NOM_GENERO, ''))) AS NVARCHAR(250)) AS assunto,
+            ISNULL(PA.VLR_CAPA, ISNULL(I.VLR_CAPA, 0.0)) AS preco,
+            ISNULL(I.QTD_ITENS_CAIXA, 0) AS qtd_caixa,
+            CAST(RTRIM(LTRIM(ISNULL(I.SITUACAO_ITEM, ''))) AS NVARCHAR(60)) AS situacao_item,
+            {launch_col} AS data_lancamento
+        FROM ITENS_ESTOQUE_GERAL I WITH (NOLOCK)
+        INNER JOIN EDITORA ED WITH (NOLOCK) ON ED.COD_EDITORA = I.COD_EDITORA
+        LEFT JOIN TABELA_GENERO G WITH (NOLOCK) ON G.COD_GENERO = I.COD_GENERO
+        LEFT JOIN (
+            SELECT COD_ITEM, MAX(VLR_CAPA) AS VLR_CAPA
+            FROM ITENS_ESTPRECO_ATUAL WITH (NOLOCK)
+            GROUP BY COD_ITEM
+        ) PA ON PA.COD_ITEM = I.COD_ITEM
+        WHERE UPPER(RTRIM(LTRIM(ISNULL(ED.NOM_FANTASIA, ISNULL(ED.NOM_EDITORA, ''))))) IN ({pub_placeholders})
+          {search_clause}
+        ORDER BY I.COD_ITEM DESC
+        {offset_clause}
+    """
+    try:
+        rows = sql_client.query(sql_q, tuple(params_list), max_rows=max_sync + 5)
+    except Exception as e:
+        log.warning(f"[HorusAnaliseItens] Aviso ao sincronizar editoras sob demanda: {e}")
+        return 0
+
+    if not rows:
+        return 0
+
+    cod_list = [int(r["cod_item"]) for r in rows if r.get("cod_item") is not None]
+    isbn_list = [str(r.get("isbn") or "").strip() for r in rows if r.get("isbn")]
+    existing_prods = (
+        db.query(Product)
+        .filter(
+            Product.company_id == seller_id,
+            or_(
+                Product.horus_cod_item.in_(cod_list),
+                Product.ean_gtin.in_([x for x in isbn_list if x]),
+                Product.sku.in_([x for x in isbn_list if x]),
+            ),
+        )
+        .all()
+    )
+    by_cod: Dict[int, Product] = {}
+    by_isbn: Dict[str, Product] = {}
+    for p in existing_prods:
+        if p.horus_cod_item:
+            by_cod[int(p.horus_cod_item)] = p
+        if p.ean_gtin:
+            by_isbn[str(p.ean_gtin).strip()] = p
+        if p.sku:
+            by_isbn[str(p.sku).strip()] = p
+
+    new_objects: List[Product] = []
+    for r in rows:
+        cod_item = int(r["cod_item"])
+        isbn = str(r.get("isbn") or "").strip()
+        sku_val = isbn if isbn else f"H-{cod_item}"
+        nome = str(r.get("nome_item") or f"Item #{cod_item}").strip()
+        editora = str(r.get("editora") or "").strip() or None
+        assunto = str(r.get("assunto") or "").strip() or None
+        preco = float(r.get("preco") or 0.0)
+        qtd_cx = int(float(r.get("qtd_caixa") or 0))
+        sit_raw = str(r.get("situacao_item") or "").strip().upper()
+        raw_dt = r.get("data_lancamento")
+        l_dt: Optional[datetime] = None
+        if isinstance(raw_dt, datetime):
+            l_dt = raw_dt
+        elif raw_dt:
+            try:
+                l_dt = datetime.fromisoformat(str(raw_dt)[:19])
+            except Exception:
+                l_dt = None
+
+        p_obj = by_cod.get(cod_item) or (by_isbn.get(isbn) if isbn else None)
+        if p_obj:
+            p_obj.name = nome
+            p_obj.horus_cod_item = cod_item
+            if editora:
+                p_obj.brand = editora
+            if assunto and not p_obj.subject:
+                p_obj.subject = assunto
+            if preco > 0:
+                p_obj.base_price = preco
+        else:
+            clean_isbn = re.sub(r"[^0-9Xx]", "", isbn)
+            cov_url = None
+            if clean_isbn:
+                if cover_primary:
+                    cov_url = f"{cover_primary}/{clean_isbn}.jpg"
+                elif cover_secondary:
+                    cov_url = f"{cover_secondary}/{clean_isbn}.jpg"
+            new_p = Product(
+                company_id=seller_id,
+                sku=sku_val[:100],
+                name=nome[:255],
+                ean_gtin=isbn[:50] if isbn else None,
+                barcode=isbn[:50] if isbn else None,
+                horus_cod_item=cod_item,
+                cod_dbm=str(cod_item),
+                brand=editora[:150] if editora else None,
+                subject=assunto[:150] if assunto else None,
+                base_price=preco,
+                cost_price=0.0,
+                stock_quantity=0,
+                consignment_stock=0,
+                units_per_box=qtd_cx if qtd_cx > 0 else 0,
+                launch_date=l_dt,
+                launch_year=l_dt.year if l_dt else None,
+                launch_month=l_dt.month if l_dt else None,
+                horus_situacao_item="Fora de Catálogo" if sit_raw == "FC" else ("Esgotado" if sit_raw in ("FE", "ES") else "Em Distribuição"),
+                is_out_of_print=sit_raw in ("FC", "FE", "ES"),
+                cover_url=cov_url,
+                status="ACTIVE",
+            )
+            new_objects.append(new_p)
+            by_cod[cod_item] = new_p
+            if isbn:
+                by_isbn[isbn] = new_p
+
+    if new_objects:
+        db.add_all(new_objects)
+    db.commit()
+    return len(new_objects)
+
+
+def _parse_selected_branch_ids(
+    branch_id_raw: Optional[str],
+    branch_ids_list: Optional[List[int]],
+    all_branches: List[Dict[str, Any]],
+) -> List[int]:
+    """
+    Resolve a lista de branch_ids selecionadas pelo usuário:
+      - Se 'ALL', vazio ou todas marcadas -> retorna todos os IDs de all_branches.
+      - Se string separada por vírgula ('3,5') ou lista [3, 5] -> retorna apenas os IDs válidos selecionados.
+    """
+    valid_all = [int(b["id"]) for b in all_branches]
+    candidates: List[int] = []
+    if branch_ids_list:
+        for x in branch_ids_list:
+            try:
+                val = int(x)
+                if val in valid_all and val not in candidates:
+                    candidates.append(val)
+            except Exception:
+                pass
+    if not candidates and branch_id_raw and str(branch_id_raw).strip().upper() != "ALL":
+        for part in str(branch_id_raw).split(","):
+            s = part.strip()
+            if s.lstrip("-").isdigit():
+                val = int(s)
+                if val in valid_all and val not in candidates:
+                    candidates.append(val)
+    return candidates if candidates else valid_all
+
+
+@router.get("/products")
+def list_analise_itens_products(
+    company_id: Optional[int] = Query(None),
+    branch_id: str = Query("ALL", description="'ALL' ou IDs de filiais separados por vírgula (ex: '3,5')"),
+    search: Optional[str] = Query(None),
+    publishers: Optional[str] = Query(None, description="Lista de editoras separadas por '||' ou vírgula"),
+    limit: int = Query(5000, ge=1, le=10000),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Lista os produtos para a tela Horus Direct -> Análise de Itens com:
+    - Suporte a filtro multi-seleção de Filiais (Todas ou apenas algumas selecionadas)
+    - Suporte a filtro multi-seleção de Editoras do Horus
+    - Estoque Mínimo por Produto e por Filial Configurada (min_stock e min_stock_by_branch)
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    all_branches = _load_configured_branches(db, seller_id)
+
+    selected_pubs: List[str] = []
+    if publishers and publishers.strip():
+        sep = "||" if "||" in publishers else ","
+        selected_pubs = [p.strip() for p in publishers.split(sep) if p.strip()]
+
+    # Se o usuário selecionou editoras específicas, verifica se já estão todas sincronizadas
+    if selected_pubs:
+        local_pub_count = (
+            db.query(func.count(Product.id))
+            .filter(
+                Product.company_id == seller_id,
+                func.upper(func.trim(Product.brand)).in_([p.upper() for p in selected_pubs]),
+            )
+            .scalar()
+            or 0
+        )
+        cached_pubs = (_HORUS_PUBLISHERS_CACHE.get(seller_id) or {}).get("publishers") or []
+        horus_expected = sum(
+            int(cp.get("horus_count") or 0)
+            for cp in cached_pubs
+            if str(cp.get("name") or "").strip().upper() in {p.upper() for p in selected_pubs}
+        )
+        if local_pub_count == 0 or (horus_expected > local_pub_count and (horus_expected - local_pub_count) <= 2500):
+            _sync_items_from_horus_by_publishers(
+                db=db,
+                seller_id=seller_id,
+                publishers=selected_pubs,
+                search=search,
+                max_sync=1500,
+            )
+
+    q = db.query(Product).filter(Product.company_id == seller_id)
+    if selected_pubs:
+        q = q.filter(func.upper(func.trim(Product.brand)).in_([p.upper() for p in selected_pubs]))
+
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        q = q.filter(
+            or_(
+                Product.name.ilike(term),
+                Product.subject.ilike(term),
+                Product.brand.ilike(term),
+                Product.ean_gtin.ilike(term),
+                Product.sku.ilike(term),
+                Product.additional_isbns.ilike(term),
+                cast(Product.horus_cod_item, String).ilike(term),
+            )
+        )
+
+    rows = q.order_by(Product.id.desc()).limit(limit).all()
+
+    by_branch_isbn, by_branch_prod = _load_min_stock_map(db, seller_id)
+    branch_ids = [int(b["id"]) for b in all_branches]
+    active_bids = _parse_selected_branch_ids(branch_id, None, all_branches)
+
+    items_out: List[Dict[str, Any]] = []
+    for p in rows:
+        isbn_val = (p.ean_gtin or p.sku or "").strip()
+        min_by_b: Dict[str, int] = {}
+        for bid in branch_ids:
+            ms_val = _resolve_product_branch_min_stock(
+                branch_id=bid,
+                product_id=p.id,
+                isbn=isbn_val,
+                by_branch_isbn=by_branch_isbn,
+                by_branch_prod=by_branch_prod,
+            )
+            min_by_b[str(bid)] = ms_val
+
+        eff_min_stock = sum(min_by_b.get(str(bid), 0) for bid in active_bids)
+
+        items_out.append({
+            "id": p.id,
+            "sku": p.sku or String(p.id),
+            "name": (p.name or "").strip() or f"Item #{p.horus_cod_item or p.sku or p.id}",
+            "isbn": isbn_val,
+            "ean_gtin": p.ean_gtin or "",
+            "additional_isbns": p.additional_isbns or "",
+            "brand": (p.brand or "").strip() or "Sem Editora",
+            "subject": (p.subject or "").strip() or "Geral",
+            "base_price": float(p.base_price or 0.0),
+            "cost_price": float(p.cost_price or 0.0),
+            "stock_quantity": int(p.stock_quantity or 0),
+            "min_stock": eff_min_stock,
+            "min_stock_by_branch": min_by_b,
+            "consignment_stock": int(p.consignment_stock or 0),
+            "consigned_received": 0,
+            "sales_365": int(p.sales_365 or 0),
+            "sales_period": int(p.sales_90 or 0),
+            "units_per_box": int(p.units_per_box or 0),
+            "launch_date": p.launch_date.isoformat() if p.launch_date else None,
+            "horus_cod_item": p.horus_cod_item,
+            "horus_situacao_item": p.horus_situacao_item,
+            "is_ebook": bool(p.is_ebook),
+            "is_out_of_print": bool(p.is_out_of_print) or p.status == "INACTIVE",
+            "status": p.status,
+        })
+
+    return {
+        "items": items_out,
+        "total": len(items_out),
     }
 
 
@@ -528,10 +1133,6 @@ def get_analise_itens_sync_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Retorna a contagem exata de itens no Horus SQL vs itens já sincronizados no Cronuz,
-    quantos itens estão faltando sincronizar e o progresso em tempo real do worker em segundo plano.
-    """
     seller_id = _resolve_seller_id(current_user, company_id)
     synced_count = (
         db.query(func.count(Product.id))
@@ -552,7 +1153,7 @@ def get_analise_itens_sync_status(
     pct = round((int(synced_count) / horus_total) * 100.0, 1) if horus_total > 0 else 0.0
 
     with _BG_SYNC_LOCK:
-        bg_state = dict(_BG_SYNC_STATES.get(seller_id) or {})
+        bg_state = _load_shared_bg_state(seller_id)
 
     return {
         "company_id": seller_id,
@@ -590,18 +1191,14 @@ def start_analise_itens_background_sync(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Inicia a sincronização segura em segundo plano de todos os itens de ITENS_ESTOQUE_GERAL
-    do Horus SQL para a base do Cronuz (em lotes de 400 itens por COD_ITEM).
-    """
     seller_id = _resolve_seller_id(current_user, payload.company_id)
     try:
-        HorusSQLClient(db, seller_id)
+        HorusSQLClient(db, seller_id, pool_slot="bg_sync")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Não foi possível iniciar: conexão Horus SQL indisponível ({e}).")
 
     with _BG_SYNC_LOCK:
-        cur = _BG_SYNC_STATES.get(seller_id)
+        cur = _load_shared_bg_state(seller_id)
         if cur and cur.get("is_running"):
             return {
                 "started": False,
@@ -622,7 +1219,7 @@ def start_analise_itens_background_sync(
             "updated_at": datetime.utcnow().isoformat(),
             "finished_at": None,
         }
-        _BG_SYNC_STATES[seller_id] = new_state
+        _save_shared_bg_state(seller_id, new_state)
 
     t = threading.Thread(
         target=_run_background_sync_worker,
@@ -643,17 +1240,303 @@ def stop_analise_itens_background_sync(
     company_id: Optional[int] = Query(None),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Solicita a parada segura do worker de sincronização em segundo plano.
-    """
     seller_id = _resolve_seller_id(current_user, company_id)
     with _BG_SYNC_LOCK:
-        st = _BG_SYNC_STATES.get(seller_id)
+        st = _load_shared_bg_state(seller_id)
         if st and st.get("is_running"):
             st["stop_requested"] = True
             st["status_message"] = "Parando sincronização após concluir o lote atual..."
+            _save_shared_bg_state(seller_id, st)
             return {"stopped": True, "message": "Solicitação de pausa enviada ao worker."}
     return {"stopped": False, "message": "Nenhuma sincronização em execução no momento."}
+
+
+# ── Endpoints de Estoque Mínimo por Produto e por Filial Configurada ──────────
+
+class SetBranchMinStockPayload(BaseModel):
+    company_id: Optional[int] = None
+    branch_id: int
+    isbn: str
+    product_id: Optional[int] = None
+    min_stock: int
+
+
+@router.post("/min-stock/set")
+def set_branch_min_stock(
+    payload: SetBranchMinStockPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Define ou atualiza o Estoque Mínimo de um produto (ISBN) para uma Filial Configurada específica.
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    clean_isbn = _normalize_isbn(payload.isbn)
+    if not clean_isbn:
+        raise HTTPException(status_code=400, detail="ISBN inválido para definir estoque mínimo.")
+
+    min_val = max(0, int(payload.min_stock or 0))
+    row = (
+        db.query(ProductBranchMinStock)
+        .filter(
+            ProductBranchMinStock.company_id == seller_id,
+            ProductBranchMinStock.branch_id == int(payload.branch_id),
+            ProductBranchMinStock.isbn == clean_isbn,
+        )
+        .first()
+    )
+    if row:
+        row.min_stock = min_val
+        if payload.product_id:
+            row.product_id = int(payload.product_id)
+        row.updated_at = datetime.utcnow()
+    else:
+        row = ProductBranchMinStock(
+            company_id=seller_id,
+            branch_id=int(payload.branch_id),
+            isbn=clean_isbn,
+            product_id=int(payload.product_id) if payload.product_id else None,
+            min_stock=min_val,
+        )
+        db.add(row)
+    db.commit()
+
+    return {
+        "ok": True,
+        "branch_id": int(payload.branch_id),
+        "isbn": clean_isbn,
+        "min_stock": min_val,
+    }
+
+
+@router.get("/min-stock/template")
+def download_min_stock_template():
+    """
+    Baixa a planilha modelo (.xlsx) contendo apenas as 2 colunas exigidas:
+    ISBN | ESTOQUE_MINIMO
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Estoque_Minimo_Filial"
+    ws.append(["ISBN", "ESTOQUE_MINIMO"])
+
+    header_fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=10)
+    for col_idx in (1, 2):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    ws.append(["9788552994152", 10])
+    ws.append(["9786555680614", 5])
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["B"].width = 22
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    stream.seek(0)
+    return StreamingResponse(
+        stream,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="Modelo_Estoque_Minimo_Por_Filial.xlsx"'},
+    )
+
+
+@router.post("/min-stock/import")
+async def import_branch_min_stock_file(
+    branch_id: int = Form(..., description="ID da Filial Configurada em /logistics/branches"),
+    company_id: Optional[int] = Form(None),
+    replace_existing: bool = Form(True, description="Se True, mantém apenas os ISBNs importados nesta filial"),
+    pasted_text: Optional[str] = Form(None, description="Texto colado opcional no formato ISBN;ESTOQUE_MINIMO"),
+    file: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Importa a relação de Estoque Mínimo para a Filial selecionada, mantendo apenas:
+      - ISBN
+      - Quantidade de Estoque Mínimo
+    Aceita arquivo Excel (.xlsx) ou CSV (.csv) de até 10 MB ou colagem rápida de linhas (ISBN ; QTD).
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    branches = _load_configured_branches(db, seller_id)
+    target_branch = next((b for b in branches if int(b["id"]) == int(branch_id)), None)
+    if not target_branch:
+        raise HTTPException(
+            status_code=400,
+            detail="Selecione uma filial válida configurada em Logística -> Filiais do Seller antes de importar.",
+        )
+
+    parsed_pairs: Dict[str, int] = {}
+
+    if file and file.filename:
+        raw_bytes = await file.read()
+        if len(raw_bytes) > MAX_SHEET_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="O arquivo excede o limite máximo permitido de 10 MB para este tipo de envio.",
+            )
+        fname_lower = file.filename.lower()
+        if fname_lower.endswith(".xlsx"):
+            try:
+                wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), read_only=True, data_only=True)
+                ws = wb.active
+                for row_idx, row in enumerate(ws.iter_rows(values_only=True)):
+                    if not row or len(row) < 2:
+                        continue
+                    c0 = str(row[0] if row[0] is not None else "").strip()
+                    c1 = str(row[1] if row[1] is not None else "").strip()
+                    if row_idx == 0 and (
+                        "ISBN" in c0.upper()
+                        or "CODIGO" in c0.upper()
+                        or "BARRA" in c0.upper()
+                        or "MIN" in c1.upper()
+                    ):
+                        continue
+                    isbn_clean = _normalize_isbn(c0)
+                    if not isbn_clean:
+                        continue
+                    try:
+                        qty_val = max(0, int(float(c1.replace(",", "."))))
+                    except Exception:
+                        continue
+                    parsed_pairs[isbn_clean] = qty_val
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Não foi possível ler a planilha Excel (.xlsx): {e}")
+        else:
+            # CSV / TXT
+            try:
+                text_content = raw_bytes.decode("utf-8-sig", errors="replace")
+            except Exception:
+                text_content = raw_bytes.decode("latin-1", errors="replace")
+            for line_idx, raw_line in enumerate(text_content.splitlines()):
+                line = raw_line.strip()
+                if not line:
+                    continue
+                delim = ";" if ";" in line else ("\t" if "\t" in line else ",")
+                parts = [p.strip().strip('"').strip("'") for p in line.split(delim)]
+                if len(parts) < 2:
+                    continue
+                if line_idx == 0 and ("ISBN" in parts[0].upper() or "MIN" in parts[1].upper()):
+                    continue
+                isbn_clean = _normalize_isbn(parts[0])
+                if not isbn_clean:
+                    continue
+                try:
+                    qty_val = max(0, int(float(parts[1].replace(",", "."))))
+                except Exception:
+                    continue
+                parsed_pairs[isbn_clean] = qty_val
+
+    if pasted_text and pasted_text.strip():
+        for line_idx, raw_line in enumerate(pasted_text.strip().splitlines()):
+            line = raw_line.strip()
+            if not line:
+                continue
+            delim = ";" if ";" in line else ("\t" if "\t" in line else ",")
+            parts = [p.strip().strip('"').strip("'") for p in line.split(delim)]
+            if len(parts) < 2:
+                continue
+            if line_idx == 0 and ("ISBN" in parts[0].upper() or "MIN" in parts[1].upper()):
+                continue
+            isbn_clean = _normalize_isbn(parts[0])
+            if not isbn_clean:
+                continue
+            try:
+                qty_val = max(0, int(float(parts[1].replace(",", "."))))
+            except Exception:
+                continue
+            parsed_pairs[isbn_clean] = qty_val
+
+    if not parsed_pairs:
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhum registro válido de (ISBN, Quantidade Estoque Mínimo) foi encontrado no envio.",
+        )
+
+    # Mapeia ISBN -> product_id existente no seller para vínculo rápido
+    isbn_keys = list(parsed_pairs.keys())
+    isbn_to_pid: Dict[str, int] = {}
+    for ch_start in range(0, len(isbn_keys), 500):
+        ch = isbn_keys[ch_start:ch_start + 500]
+        prods = (
+            db.query(Product.id, Product.ean_gtin, Product.sku)
+            .filter(
+                Product.company_id == seller_id,
+                or_(Product.ean_gtin.in_(ch), Product.sku.in_(ch)),
+            )
+            .all()
+        )
+        for pid, ean, sku in prods:
+            if ean:
+                isbn_to_pid[_normalize_isbn(ean)] = int(pid)
+            if sku:
+                isbn_to_pid[_normalize_isbn(sku)] = int(pid)
+
+    if replace_existing:
+        db.query(ProductBranchMinStock).filter(
+            ProductBranchMinStock.company_id == seller_id,
+            ProductBranchMinStock.branch_id == int(branch_id),
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        new_records = [
+            ProductBranchMinStock(
+                company_id=seller_id,
+                branch_id=int(branch_id),
+                isbn=isbn_k[:50],
+                product_id=isbn_to_pid.get(isbn_k),
+                min_stock=qty_v,
+            )
+            for isbn_k, qty_v in parsed_pairs.items()
+        ]
+        db.bulk_save_objects(new_records)
+        db.commit()
+    else:
+        existing_rows = (
+            db.query(ProductBranchMinStock)
+            .filter(
+                ProductBranchMinStock.company_id == seller_id,
+                ProductBranchMinStock.branch_id == int(branch_id),
+            )
+            .all()
+        )
+        existing_map = {_normalize_isbn(r.isbn): r for r in existing_rows}
+        new_records = []
+        for isbn_k, qty_v in parsed_pairs.items():
+            if isbn_k in existing_map:
+                r_obj = existing_map[isbn_k]
+                r_obj.min_stock = qty_v
+                if isbn_k in isbn_to_pid:
+                    r_obj.product_id = isbn_to_pid[isbn_k]
+                r_obj.updated_at = datetime.utcnow()
+            else:
+                new_records.append(
+                    ProductBranchMinStock(
+                        company_id=seller_id,
+                        branch_id=int(branch_id),
+                        isbn=isbn_k[:50],
+                        product_id=isbn_to_pid.get(isbn_k),
+                        min_stock=qty_v,
+                    )
+                )
+        if new_records:
+            db.bulk_save_objects(new_records)
+        db.commit()
+
+    return {
+        "ok": True,
+        "branch_id": int(branch_id),
+        "branch_name": target_branch["nome"],
+        "imported_count": len(parsed_pairs),
+        "matched_products_count": len(isbn_to_pid),
+        "replace_existing": replace_existing,
+        "message": (
+            f"Estoque mínimo importado com sucesso para a filial '{target_branch['nome']}' "
+            f"({len(parsed_pairs)} ISBNs processados)."
+        ),
+    }
 
 
 # ── Motor Multi-Filial de Enriquecimento SQL (Saldos, Custos, Consignado, Vendas & Última Entrada) ──
@@ -666,22 +1549,6 @@ def _enrich_cod_items_multibranch(
     sales_start_date: Optional[str] = None,
     sales_end_date: Optional[str] = None,
 ) -> Dict[int, Dict[str, Any]]:
-    """
-    Para um lote de COD_ITEMs (ex: 50 a 250 itens) e uma lista de filiais configuradas (SellerBranch),
-    consulta de forma 100% indexada (COD_ITEM IN (...)) no Horus SQL Server:
-      1. TABELA_SALDO_ITENS_GERAL:
-         - SALDO_VENDAVEL, SALDO_ESTOQUE, SALDO_RESERVADO_VENDA
-         - SALDO_CONSIGNADO_ENVIADO (Consignado Enviado)
-         - SALDO_CONSIGNADO_RECEBIDO (Consignado Recebido)
-         - CUSTO_MEDIO_ESTOQUE / CUSTO_MEDIO_ESTOQUE_REAL (Custo por Filial)
-      2. TABELA_SALDO_ITENS (quando a filial possui COD_LOCAL configurado em /logistics/branches):
-         - SALDO_TOTAL por COD_LOCAL
-      3. NF_ITENS + NF_MESTRE:
-         - Vendas 365d e Vendas no Período filtrado por filial
-      4. NF_ENTRADA + ITENS_NOTAS_FISCAIS + TABELA_MOVIMENTACAO + TPO_MOVIMENTACAO:
-         - Última Entrada de COMPRA ou RECEBIMENTO EM CONSIGNAÇÃO (excluindo Ajustes!) por filial,
-           com Data da Última Entrada, Tipo (COMPRA / CONSIG. RECEBIDA), CFOP, Quantidade e Custo.
-    """
     clean_cods = sorted({int(c) for c in cod_items if c is not None and int(c) > 0})
     if not clean_cods or not target_branches:
         return {}
@@ -708,7 +1575,6 @@ def _enrich_cod_items_multibranch(
         for emp, fil in branch_by_pair.keys()
     )
 
-    # Estrutura de saída: result[cod_item] = { "consolidated": {...}, "by_branch": { branch_id: {...} } }
     result: Dict[int, Dict[str, Any]] = {}
     for c_int in clean_cods:
         by_b: Dict[int, Dict[str, Any]] = {}
@@ -725,6 +1591,7 @@ def _enrich_cod_items_multibranch(
                 "consigned_sent": 0,
                 "consigned_received": 0,
                 "cost_price": 0.0,
+                "sold_unit_price": 0.0,
                 "sales_365": 0,
                 "sales_period": 0,
                 "last_entry_date": None,
@@ -736,7 +1603,6 @@ def _enrich_cod_items_multibranch(
             }
         result[c_int] = {"by_branch": by_b}
 
-    # Determina filtro de período de vendas
     custom_date_clause = f"NF.DAT_EMISSAO_NF >= DATEADD(day, -{max(1, int(sales_days))}, GETDATE())"
     if sales_start_date and re.match(r"^\d{4}-\d{2}-\d{2}$", sales_start_date.strip()):
         s_dt = sales_start_date.strip()
@@ -750,7 +1616,7 @@ def _enrich_cod_items_multibranch(
         chunk = clean_cods[chunk_start:chunk_start + 200]
         cods_in = ", ".join(str(c) for c in chunk)
 
-        # 1. TABELA_SALDO_ITENS_GERAL (Saldos, Consignado Enviado, Consignado Recebido e Custo Médio por Filial)
+        # 1. TABELA_SALDO_ITENS_GERAL (Saldos por Empresa/Filial, Consignado Env/Rec e Custo Médio)
         try:
             sql_geral = f"""
                 SELECT
@@ -776,7 +1642,10 @@ def _enrich_cod_items_multibranch(
                 if c_int in result and pair in branch_by_pair:
                     for b in branch_by_pair[pair]:
                         b_entry = result[c_int]["by_branch"][int(b["id"])]
-                        b_entry["stock_available"] = int(float(gr.get("saldo_disp") or 0))
+                        # Se a filial possui COD_LOCAL configurado, o saldo do local virá da TABELA_SALDO_ITENS abaixo;
+                        # caso não possua local específico configurado, usa o saldo_disp geral da filial.
+                        if not b.get("locais"):
+                            b_entry["stock_available"] = int(float(gr.get("saldo_disp") or 0))
                         b_entry["stock_physical"] = int(float(gr.get("saldo_fisico") or 0))
                         b_entry["consigned_sent"] = int(float(gr.get("consig_enviado") or 0))
                         b_entry["consigned_received"] = int(float(gr.get("consig_recebido") or 0))
@@ -784,7 +1653,7 @@ def _enrich_cod_items_multibranch(
         except Exception as e:
             log.warning(f"[HorusAnaliseItens] Aviso em TABELA_SALDO_ITENS_GERAL: {e}")
 
-        # 2. TABELA_SALDO_ITENS por COD_LOCAL (se alguma filial tiver COD_LOCAL parametrizado em /logistics/branches)
+        # 2. TABELA_SALDO_ITENS por COD_LOCAL (respeita estritamente os locais de cada filial em /logistics/branches)
         branches_with_local = [b for b in target_branches if b.get("locais")]
         if branches_with_local:
             try:
@@ -822,7 +1691,7 @@ def _enrich_cod_items_multibranch(
             except Exception as e:
                 log.warning(f"[HorusAnaliseItens] Aviso em TABELA_SALDO_ITENS por local: {e}")
 
-        # 3. Vendas por Filial (365 dias + Período filtrado) em NF_ITENS + NF_MESTRE
+        # 3. Vendas por Filial (365 dias + Período filtrado + Preço Líquido Unitário Vendido) em NF_ITENS + NF_MESTRE
         try:
             sql_sales = f"""
                 SELECT
@@ -830,7 +1699,16 @@ def _enrich_cod_items_multibranch(
                     NFI.COD_FILIAL AS cod_filial,
                     NFI.COD_ITEM AS cod_item,
                     SUM(CASE WHEN NF.DAT_EMISSAO_NF >= DATEADD(day, -365, GETDATE()) THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS vds_365,
-                    SUM(CASE WHEN {custom_date_clause} THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS vds_periodo
+                    SUM(CASE WHEN {custom_date_clause} THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) AS vds_periodo,
+                    CASE
+                        WHEN SUM(CASE WHEN {custom_date_clause} AND ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) > 0
+                            THEN SUM(CASE WHEN {custom_date_clause} AND ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) * ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END)
+                                 / SUM(CASE WHEN {custom_date_clause} AND ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END)
+                        WHEN SUM(CASE WHEN ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END) > 0
+                            THEN SUM(CASE WHEN ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) * ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END)
+                                 / SUM(CASE WHEN ISNULL(NFI.VLR_LIQUIDO_ITEM, 0) > 0 THEN ISNULL(NFI.QTD_ITENS, 0) ELSE 0 END)
+                        ELSE MAX(ISNULL(NFI.VLR_LIQUIDO_ITEM, 0))
+                    END AS preco_vendido_unit
                 FROM NF_ITENS NFI WITH (NOLOCK)
                 INNER JOIN NF_MESTRE NF WITH (NOLOCK)
                     ON NF.COD_NF = NFI.COD_NF
@@ -850,10 +1728,12 @@ def _enrich_cod_items_multibranch(
                 if c_int in result and pair in branch_by_pair:
                     v365 = max(0, int(float(sr.get("vds_365") or 0)))
                     vper = max(0, int(float(sr.get("vds_periodo") or 0)))
+                    p_sold = round(float(sr.get("preco_vendido_unit") or 0.0), 2)
                     for b in branch_by_pair[pair]:
                         b_entry = result[c_int]["by_branch"][int(b["id"])]
                         b_entry["sales_365"] = v365
                         b_entry["sales_period"] = vper
+                        b_entry["sold_unit_price"] = p_sold
         except Exception as e:
             log.warning(f"[HorusAnaliseItens] Aviso ao consultar vendas por filial: {e}")
 
@@ -869,7 +1749,7 @@ def _enrich_cod_items_multibranch(
                         ISNULL(INF.QTD_ITENS, 0) AS qtd_entrada,
                         CASE
                             WHEN ISNULL(INF.VLR_CUSTO_CALCULADO, 0) > 0 THEN INF.VLR_CUSTO_CALCULADO
-                            WHEN ISNULL(INF.QTD_ITENS, 0) > 0 AND ISNULL(INF.VLR_LIQUIDO_ITEM, 0) > 0 THEN (INF.VLR_LIQUIDO_ITEM / INF.QTD_ITENS)
+                            WHEN ISNULL(INF.VLR_LIQUIDO_ITEM, 0) > 0 THEN INF.VLR_LIQUIDO_ITEM
                             ELSE ISNULL(INF.VLR_BRUTO_ITEM, 0)
                         END AS custo_entrada,
                         RTRIM(LTRIM(ISNULL(INF.COD_NATUREZA, NE.COD_NATUREZA))) AS cfop_raw,
@@ -970,7 +1850,6 @@ def _enrich_cod_items_multibranch(
                     for b in branch_by_pair[pair]:
                         b_entry = result[c_int]["by_branch"][int(b["id"])]
                         cur_dt = b_entry.get("last_entry_date")
-                        # Se NF_ENTRADA não tinha data ou se TABELA_MOVIMENTACAO tem uma entrada válida mais recente
                         if not cur_dt or dt_iso > cur_dt:
                             b_entry["last_entry_date"] = dt_iso
                             b_entry["last_entry_qty"] = qtd_m
@@ -980,7 +1859,6 @@ def _enrich_cod_items_multibranch(
         except Exception as e:
             log.warning(f"[HorusAnaliseItens] Aviso ao consultar TABELA_MOVIMENTACAO: {e}")
 
-    # Consolida métricas somadas das filiais selecionadas para cada COD_ITEM
     for c_int, data_c in result.items():
         b_list = list(data_c["by_branch"].values())
         tot_stock = sum(x["stock_available"] for x in b_list)
@@ -991,6 +1869,9 @@ def _enrich_cod_items_multibranch(
 
         costs = [x["cost_price"] for x in b_list if x["cost_price"] > 0]
         avg_cost = round(sum(costs) / len(costs), 2) if costs else 0.0
+
+        sold_prices = [x["sold_unit_price"] for x in b_list if x.get("sold_unit_price", 0) > 0]
+        avg_sold_price = round(sum(sold_prices) / len(sold_prices), 2) if sold_prices else 0.0
 
         latest_b = None
         for x in b_list:
@@ -1003,6 +1884,7 @@ def _enrich_cod_items_multibranch(
             "consigned_sent": tot_consig_sent,
             "consigned_received": tot_consig_rec,
             "cost_price": avg_cost,
+            "sold_unit_price": avg_sold_price,
             "sales_365": tot_s365,
             "sales_period": tot_sper,
             "last_entry_date": latest_b["last_entry_date"] if latest_b else None,
@@ -1017,11 +1899,12 @@ def _enrich_cod_items_multibranch(
     return result
 
 
-# ── Endpoint de Listagem e Enriquecimento em Lote da Página Atual ─────────────
+# ── Endpoint de Enriquecimento em Lote da Página Atual ────────────────────────
 
 class EnrichPagePayload(BaseModel):
     company_id: Optional[int] = None
-    branch_id: Optional[str] = "ALL"  # "ALL" ou ID de uma SellerBranch
+    branch_id: Optional[str] = "ALL"
+    branch_ids: Optional[List[int]] = None
     product_ids: List[int] = []
     sales_days: int = 90
     sales_start_date: Optional[str] = None
@@ -1035,28 +1918,20 @@ def enrich_analise_itens_page(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Enriquece instantaneamente os itens visíveis na página atual (ex: 50 itens)
-    consultando o Horus SQL Server para a filial selecionada (ou todas as filiais de /logistics/branches).
-    Retorna:
-      - Saldo Disponível
-      - Consignado Enviado
-      - Consignado Recebido
-      - Custo Médio / Unitário por Filial
-      - Vendas 365d e Vendas no Período Filtrado
-      - Última Entrada (Compra ou Consignação Recebida, excluindo ajustes) com Data, Tipo, CFOP, Qtd e Custo
-      - Breakdown detalhado por filial para cada produto
+    Enriquece instantaneamente os itens visíveis na página atual consultando TODAS as filiais
+    configuradas em /logistics/branches para que:
+      1. O Raio-X Multi-Filial (branches_breakdown) SEMPRE tenha o saldo real e distinto de cada filial
+         (nunca repetindo o saldo consolidado).
+      2. A linha principal exiba os dados consolidados APENAS das filiais selecionadas no filtro
+         (1 filial, um subconjunto de filiais ou Todas as Filiais).
+      3. O Estoque Mínimo por Produto e por Filial (min_stock) seja conciliado junto com o saldo real.
     """
     seller_id = _resolve_seller_id(current_user, payload.company_id)
     if not payload.product_ids:
         return {"metrics": {}, "branches": []}
 
     all_branches = _load_configured_branches(db, seller_id)
-    if payload.branch_id and str(payload.branch_id).upper() != "ALL":
-        target_branches = [b for b in all_branches if str(b["id"]) == str(payload.branch_id)]
-        if not target_branches:
-            target_branches = all_branches
-    else:
-        target_branches = all_branches
+    selected_bids = _parse_selected_branch_ids(payload.branch_id, payload.branch_ids, all_branches)
 
     prods = (
         db.query(Product)
@@ -1064,7 +1939,16 @@ def enrich_analise_itens_page(
         .all()
     )
     if not prods:
-        return {"metrics": {}, "branches": target_branches}
+        return {"metrics": {}, "branches": all_branches}
+
+    prod_isbns = [_normalize_isbn(p.ean_gtin or p.sku) for p in prods if (p.ean_gtin or p.sku)]
+    prod_ids = [int(p.id) for p in prods]
+    by_branch_isbn, by_branch_prod = _load_min_stock_map(
+        db=db,
+        seller_id=seller_id,
+        isbns=prod_isbns,
+        product_ids=prod_ids,
+    )
 
     sql_client = None
     try:
@@ -1072,7 +1956,6 @@ def enrich_analise_itens_page(
     except Exception:
         sql_client = None
 
-    # Resolve horus_cod_item para produtos que só tinham ISBN/SKU
     cod_to_prods: Dict[int, List[Product]] = {}
     missing_cod_prods: List[Product] = []
     for p in prods:
@@ -1117,7 +2000,7 @@ def enrich_analise_itens_page(
         enriched_by_cod = _enrich_cod_items_multibranch(
             sql_client=sql_client,
             cod_items=list(cod_to_prods.keys()),
-            target_branches=target_branches,
+            target_branches=all_branches,
             sales_days=payload.sales_days,
             sales_start_date=payload.sales_start_date,
             sales_end_date=payload.sales_end_date,
@@ -1126,30 +2009,78 @@ def enrich_analise_itens_page(
             e_data = enriched_by_cod.get(c_int)
             if not e_data:
                 continue
-            cons = e_data["consolidated"]
-            by_b_list = list(e_data["by_branch"].values())
             for p_obj in p_list:
+                isbn_val = p_obj.ean_gtin or p_obj.sku or ""
+                by_b_list: List[Dict[str, Any]] = []
+                min_by_b: Dict[str, int] = {}
+                for b in all_branches:
+                    bid = int(b["id"])
+                    raw_bm = dict(e_data["by_branch"].get(bid) or {})
+                    ms_val = _resolve_product_branch_min_stock(
+                        branch_id=bid,
+                        product_id=p_obj.id,
+                        isbn=isbn_val,
+                        by_branch_isbn=by_branch_isbn,
+                        by_branch_prod=by_branch_prod,
+                    )
+                    raw_bm["min_stock"] = ms_val
+                    raw_bm["min_stock_status"] = _evaluate_min_stock_status(
+                        int(raw_bm.get("stock_available") or 0),
+                        ms_val,
+                    )
+                    min_by_b[str(bid)] = ms_val
+                    by_b_list.append(raw_bm)
+
+                # Consolida apenas as filiais marcadas em selected_bids (1, algumas ou todas)
+                sel_branch_entries = [
+                    e_data["by_branch"][bid]
+                    for bid in selected_bids
+                    if bid in e_data["by_branch"]
+                ] or list(e_data["by_branch"].values())
+
+                sel_stock = sum(int(x.get("stock_available") or 0) for x in sel_branch_entries)
+                sel_consig_sent = sum(int(x.get("consigned_sent") or 0) for x in sel_branch_entries)
+                sel_consig_rec = sum(int(x.get("consigned_received") or 0) for x in sel_branch_entries)
+                sel_s365 = sum(int(x.get("sales_365") or 0) for x in sel_branch_entries)
+                sel_sper = sum(int(x.get("sales_period") or 0) for x in sel_branch_entries)
+                sel_min = sum(min_by_b.get(str(bid), 0) for bid in selected_bids)
+
+                sel_costs = [float(x.get("cost_price") or 0.0) for x in sel_branch_entries if float(x.get("cost_price") or 0.0) > 0]
+                sel_avg_cost = round(sum(sel_costs) / len(sel_costs), 2) if sel_costs else float(p_obj.cost_price or 0.0)
+
+                sel_sold_prices = [float(x.get("sold_unit_price") or 0.0) for x in sel_branch_entries if float(x.get("sold_unit_price") or 0.0) > 0]
+                sel_avg_sold = round(sum(sel_sold_prices) / len(sel_sold_prices), 2) if sel_sold_prices else 0.0
+
+                latest_sel = None
+                for x in sel_branch_entries:
+                    if x.get("last_entry_date"):
+                        if not latest_sel or x["last_entry_date"] > latest_sel["last_entry_date"]:
+                            latest_sel = x
+
                 metrics_out[str(p_obj.id)] = {
                     "horus_cod_item": c_int,
-                    "stock_quantity": cons["stock_available"],
-                    "consignment_stock": cons["consigned_sent"],
-                    "consigned_received": cons["consigned_received"],
-                    "cost_price": cons["cost_price"] if cons["cost_price"] > 0 else float(p_obj.cost_price or 0.0),
-                    "sales_365": cons["sales_365"],
-                    "sales_period": cons["sales_period"],
-                    "last_entry_date": cons["last_entry_date"],
-                    "last_entry_qty": cons["last_entry_qty"],
-                    "last_entry_cost": cons["last_entry_cost"],
-                    "last_entry_type": cons["last_entry_type"],
-                    "last_entry_cfop": cons["last_entry_cfop"],
-                    "last_entry_nf": cons["last_entry_nf"],
-                    "last_entry_branch": cons["last_entry_branch"],
+                    "stock_quantity": sel_stock,
+                    "min_stock": sel_min,
+                    "min_stock_by_branch": min_by_b,
+                    "consignment_stock": sel_consig_sent,
+                    "consigned_received": sel_consig_rec,
+                    "cost_price": sel_avg_cost,
+                    "sold_unit_price": sel_avg_sold,
+                    "sales_365": sel_s365,
+                    "sales_period": sel_sper,
+                    "last_entry_date": latest_sel["last_entry_date"] if latest_sel else None,
+                    "last_entry_qty": latest_sel["last_entry_qty"] if latest_sel else 0,
+                    "last_entry_cost": latest_sel["last_entry_cost"] if latest_sel else 0.0,
+                    "last_entry_type": latest_sel["last_entry_type"] if latest_sel else None,
+                    "last_entry_cfop": latest_sel["last_entry_cfop"] if latest_sel else None,
+                    "last_entry_nf": latest_sel["last_entry_nf"] if latest_sel else None,
+                    "last_entry_branch": latest_sel["branch_name"] if latest_sel else None,
                     "branches_breakdown": by_b_list,
                 }
 
     return {
         "metrics": metrics_out,
-        "branches": target_branches,
+        "branches": all_branches,
     }
 
 
@@ -1158,10 +2089,11 @@ def enrich_analise_itens_page(
 @router.get("/export-excel")
 def export_analise_itens_excel(
     company_id: Optional[int] = Query(None),
-    branch_id: str = Query("ALL", description="ALL para todas as filiais configuradas ou ID da SellerBranch"),
+    branch_id: str = Query("ALL", description="ALL para todas as filiais configuradas ou IDs separados por vírgula"),
     model: str = Query("MULTIBRANCH_REPLENISHMENT", description="MULTIBRANCH_REPLENISHMENT (1 linha por item/filial) ou CONSOLIDATED"),
     search: Optional[str] = Query(None),
     publisher: Optional[str] = Query(None),
+    publishers: Optional[str] = Query(None, description="Lista de editoras selecionadas separadas por '||'"),
     situation: Optional[str] = Query("ALL"),
     hide_ebooks: bool = Query(True),
     hide_out_of_stock: bool = Query(False),
@@ -1172,23 +2104,10 @@ def export_analise_itens_excel(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Exporta o Relatório Excel de Análise de Itens e Reposição por Filial:
-    - Modelo Padrão (MULTIBRANCH_REPLENISHMENT): Repete 1 linha por Filial configurada para cada item,
-      exibindo Empresa, Filial, Local, Cód Horus, ISBN, Título, Editora, Preço Capa, Custo Médio Filial,
-      Saldo Disponível Filial, Consignado Enviado, Consignado Recebido, Vendas 365d, Vendas no Período,
-      Sugestão de Reposição (Vendas Período - Saldo Disponível) e Dados Confiáveis da Última Entrada
-      (Compra ou Consignação Recebida, excluindo ajustes: Data, Tipo, CFOP, Qtd, Custo Últ. Entrada e NF).
-    - Modelo Consolidado (CONSOLIDATED): 1 linha consolidada por item somando as filiais filtradas.
-    """
     seller_id = _resolve_seller_id(current_user, company_id)
     all_branches = _load_configured_branches(db, seller_id)
-    if branch_id and str(branch_id).upper() != "ALL":
-        target_branches = [b for b in all_branches if str(b["id"]) == str(branch_id)]
-        if not target_branches:
-            target_branches = all_branches
-    else:
-        target_branches = all_branches
+    selected_bids = _parse_selected_branch_ids(branch_id, None, all_branches)
+    target_branches = [b for b in all_branches if int(b["id"]) in selected_bids] or all_branches
 
     q = db.query(Product).filter(Product.company_id == seller_id)
     if search and search.strip():
@@ -1202,14 +2121,21 @@ def export_analise_itens_excel(
                 cast(Product.horus_cod_item, String).ilike(term),
             )
         )
-    if publisher and publisher.strip():
+    if publishers and publishers.strip():
+        sep = "||" if "||" in publishers else ","
+        sel_pubs = [p.strip().upper() for p in publishers.split(sep) if p.strip()]
+        if sel_pubs:
+            q = q.filter(func.upper(func.trim(Product.brand)).in_(sel_pubs))
+    elif publisher and publisher.strip():
         q = q.filter(Product.brand.ilike(f"%{publisher.strip()}%"))
+
     if hide_ebooks:
         q = q.filter(or_(Product.is_ebook == False, Product.is_ebook.is_(None)))
     if hide_out_of_stock:
         q = q.filter(Product.stock_quantity > 0, or_(Product.is_out_of_print == False, Product.is_out_of_print.is_(None)))
 
     products = q.order_by(Product.horus_cod_item.desc().nullslast(), Product.id.desc()).limit(max_items).all()
+    by_branch_isbn, by_branch_prod = _load_min_stock_map(db, seller_id)
 
     sql_client = None
     try:
@@ -1253,9 +2179,12 @@ def export_analise_itens_excel(
         "Assunto / Gênero",
         "Situação do Item",
         "Preço Capa (R$)",
+        "Preço Vendido Unit. (R$)",
         "Custo Médio Filial (R$)",
         "Custo Últ. Entrada (R$)",
         "Saldo Disponível",
+        "Estoque Mínimo",
+        "Alerta Estoque Mín.",
         "Consig. Enviado",
         "Consig. Recebido",
         "Vendas 365d",
@@ -1284,10 +2213,20 @@ def export_analise_itens_excel(
         parts = str(iso_str)[:10].split("-")
         return f"{parts[2]}/{parts[1]}/{parts[0]}" if len(parts) == 3 else str(iso_str)
 
+    def _status_label(st_code: str) -> str:
+        if st_code == "BELOW_MIN":
+            return "ABAIXO DO MÍNIMO (VERMELHO)"
+        if st_code == "NEAR_MIN":
+            return "PRÓXIMO DO MÍNIMO (LARANJA)"
+        if st_code == "OK":
+            return "ACIMA DO MÍNIMO"
+        return "—"
+
     for p in products:
         c_int = int(p.horus_cod_item) if (p.horus_cod_item and int(p.horus_cod_item) > 0) else 0
         e_item = enriched_map.get(c_int)
         sit_label = p.horus_situacao_item or ("Esgotado" if p.is_out_of_print else "Em Distribuição")
+        isbn_val = p.ean_gtin or p.sku or ""
 
         if is_multibranch:
             for b in target_branches:
@@ -1296,12 +2235,12 @@ def export_analise_itens_excel(
                     e_item["by_branch"].get(bid)
                     if (e_item and bid in e_item["by_branch"])
                     else {
-                        "stock_available": int(p.stock_quantity or 0) if len(target_branches) == 1 else 0,
-                        "consigned_sent": int(p.consignment_stock or 0) if len(target_branches) == 1 else 0,
+                        "stock_available": 0,
+                        "consigned_sent": 0,
                         "consigned_received": 0,
                         "cost_price": float(p.cost_price or 0.0),
-                        "sales_365": int(p.sales_365 or 0) if len(target_branches) == 1 else 0,
-                        "sales_period": int(p.sales_90 or 0) if len(target_branches) == 1 else 0,
+                        "sales_365": 0,
+                        "sales_period": 0,
                         "last_entry_date": None,
                         "last_entry_qty": 0,
                         "last_entry_cost": 0.0,
@@ -1313,8 +2252,16 @@ def export_analise_itens_excel(
                 saldo_disp = int(b_metrics.get("stock_available") or 0)
                 if hide_out_of_stock and saldo_disp <= 0:
                     continue
+                ms_val = _resolve_product_branch_min_stock(
+                    branch_id=bid,
+                    product_id=p.id,
+                    isbn=isbn_val,
+                    by_branch_isbn=by_branch_isbn,
+                    by_branch_prod=by_branch_prod,
+                )
+                ms_status = _evaluate_min_stock_status(saldo_disp, ms_val)
                 vds_per = int(b_metrics.get("sales_period") or 0)
-                sug_rep = max(0, vds_per - max(0, saldo_disp))
+                sug_rep = max(0, max(vds_per, ms_val) - max(0, saldo_disp))
                 loc_str = ", ".join(str(x) for x in (b.get("locais") or [])) or (str(b.get("cod_local") or ""))
 
                 ws.append([
@@ -1330,9 +2277,12 @@ def export_analise_itens_excel(
                     p.subject or "",
                     sit_label,
                     round(float(p.base_price or 0.0), 2),
+                    round(float(b_metrics.get("sold_unit_price") or 0.0), 2),
                     round(float(b_metrics.get("cost_price") or p.cost_price or 0.0), 2),
                     round(float(b_metrics.get("last_entry_cost") or 0.0), 2),
                     saldo_disp,
+                    ms_val,
+                    _status_label(ms_status),
                     int(b_metrics.get("consigned_sent") or 0),
                     int(b_metrics.get("consigned_received") or 0),
                     int(b_metrics.get("sales_365") or 0),
@@ -1368,8 +2318,19 @@ def export_analise_itens_excel(
             saldo_disp = int(cons.get("stock_available") or 0)
             if hide_out_of_stock and saldo_disp <= 0:
                 continue
+            tot_ms = sum(
+                _resolve_product_branch_min_stock(
+                    branch_id=int(b["id"]),
+                    product_id=p.id,
+                    isbn=isbn_val,
+                    by_branch_isbn=by_branch_isbn,
+                    by_branch_prod=by_branch_prod,
+                )
+                for b in target_branches
+            )
+            ms_status = _evaluate_min_stock_status(saldo_disp, tot_ms)
             vds_per = int(cons.get("sales_period") or 0)
-            sug_rep = max(0, vds_per - max(0, saldo_disp))
+            sug_rep = max(0, max(vds_per, tot_ms) - max(0, saldo_disp))
 
             ws.append([
                 "TODAS" if len(target_branches) > 1 else int(target_branches[0]["cod_empresa"]),
@@ -1384,9 +2345,12 @@ def export_analise_itens_excel(
                 p.subject or "",
                 sit_label,
                 round(float(p.base_price or 0.0), 2),
+                round(float(cons.get("sold_unit_price") or 0.0), 2),
                 round(float(cons.get("cost_price") or p.cost_price or 0.0), 2),
                 round(float(cons.get("last_entry_cost") or 0.0), 2),
                 saldo_disp,
+                tot_ms,
+                _status_label(ms_status),
                 int(cons.get("consigned_sent") or 0),
                 int(cons.get("consigned_received") or 0),
                 int(cons.get("sales_365") or 0),

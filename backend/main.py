@@ -108,6 +108,7 @@ from app.models import school as school_models
 from app.api import master_sessions
 from app.api import dbm as dbm_api
 from app.api import horus_analise_itens as horus_analise_itens_api
+from app.api import horus_purchases as horus_purchases_api
 from app.api import cafeteria as cafeteria_api
 from app.api import bookinfo_metadata
 from app.api import backorders as backorders_api
@@ -131,6 +132,7 @@ from app.models import mercadolivre as mercadolivre_models
 from app.models import estantevirtual as estantevirtual_models
 from app.models import horus_reconciliation_closing as horus_rec_closing_models
 from app.models import horus_reconciliation_template as horus_rec_template_models
+from app.models import horus_purchase as horus_purchase_models
 from app.core import security
 from app.core import dependencies
 from pydantic import BaseModel
@@ -188,6 +190,7 @@ mercadolivre_models.Base.metadata.create_all(bind=engine)
 estantevirtual_models.Base.metadata.create_all(bind=engine)
 horus_rec_closing_models.Base.metadata.create_all(bind=engine)
 horus_rec_template_models.Base.metadata.create_all(bind=engine)
+horus_purchase_models.Base.metadata.create_all(bind=engine)
 try:
     from sqlalchemy import text as _sql_text
     with engine.begin() as _conn:
@@ -225,6 +228,7 @@ try:
         _conn.execute(_sql_text("ALTER TABLE usr_user ADD COLUMN IF NOT EXISTS sidebar_collapsed BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS stock_alert_threshold INTEGER NOT NULL DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_analise_itens BOOLEAN NOT NULL DEFAULT FALSE"))
+        _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_compras BOOLEAN NOT NULL DEFAULT FALSE"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 
@@ -421,6 +425,7 @@ if _SERVER_ROLE != "horus_api_only":
     app.include_router(master_sessions.router)
     app.include_router(dbm_api.router)
     app.include_router(horus_analise_itens_api.router)
+    app.include_router(horus_purchases_api.router)
     app.include_router(cafeteria_api.router)
     app.include_router(cafeteria_api.public_router)
     app.include_router(bookinfo_metadata.router)

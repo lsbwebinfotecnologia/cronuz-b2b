@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import relationship
 from datetime import datetime
@@ -36,3 +36,29 @@ class SellerBranch(Base):
 
     # Explicit relationships with foreign_keys as per Rule 1
     company = relationship("Company", back_populates="branches", foreign_keys=[company_id])
+
+
+class ProductBranchMinStock(Base):
+    """
+    Estoque Mínimo parametrizado por Produto (ISBN) e por Filial Configurada (cmp_seller_branch).
+    Utilizado no módulo Horus Direct -> Análise de Itens (/horus-direct/analise-itens)
+    para sinalização visual:
+      - Vermelho: Estoque Atual < Estoque Mínimo
+      - Laranja: Estoque Atual próximo do Estoque Mínimo
+    """
+    __tablename__ = "prd_branch_min_stock"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(Integer, ForeignKey("cmp_company.id", ondelete="CASCADE"), nullable=False, index=True)
+    branch_id = Column(Integer, nullable=False, index=True)  # ID de cmp_seller_branch (ou 0 para filial padrão)
+    isbn = Column(String(50), nullable=False, index=True)
+    product_id = Column(Integer, ForeignKey("prd_product.id", ondelete="SET NULL"), nullable=True, index=True)
+    min_stock = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "branch_id", "isbn", name="uq_prd_branch_min_stock_company_branch_isbn"),
+        Index("ix_prd_branch_min_stock_lookup", "company_id", "branch_id", "isbn"),
+    )
+
