@@ -6,28 +6,41 @@ import {
   ArrowRight,
   Ban,
   Building2,
+  Calendar,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   ChevronsLeft,
   ChevronsRight,
   ClipboardList,
   Clock,
+  Columns3,
   DatabaseZap,
+  DollarSign,
   Download,
+  Eye,
+  EyeOff,
   FileCheck2,
   FileSpreadsheet,
   FileWarning,
   History,
   Mail,
+  Maximize2,
+  Minimize2,
   Package,
   Plus,
   RefreshCw,
+  RotateCcw,
+  Scale,
   Search,
   Settings2,
   ShieldAlert,
   ShieldCheck,
+  Sparkles,
+  Tag,
   Trash2,
   Upload,
   X,
@@ -316,6 +329,13 @@ interface XmlKpiCounters {
   has_divergence: number;
 }
 
+type DeskHeroSubTab =
+  | 'PEDIDO'
+  | 'SELOS_DESCONTOS'
+  | 'ENTRADAS'
+  | 'CONSIG_ACERTOS'
+  | 'DEVOLUCOES_PEDIDOS';
+
 function formatMoney(v: number): string {
   return Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 }
@@ -352,15 +372,15 @@ function formatCnpj(raw?: string | null): string {
 function getXmlDecisionBadgeClass(xmlStatus?: string | null): string {
   switch (xmlStatus) {
     case 'XML_OK':
-      return 'bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800';
+      return 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800';
     case 'PENDING_REVIEW':
-      return 'bg-amber-50 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800';
+      return 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800';
     case 'ACCEPTED_WITH_DIVERGENCE':
-      return 'bg-indigo-50 text-indigo-800 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800';
+      return 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800';
     case 'REJECTED':
-      return 'bg-rose-50 text-rose-800 border-rose-300 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800';
+      return 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800';
     default:
-      return 'bg-slate-100 text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
+      return 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700';
   }
 }
 
@@ -399,16 +419,36 @@ export default function HorusDirectComprasPage() {
   const [selectedBranchId, setSelectedBranchId] = useState<number | null>(null);
   const [loadingBranches, setLoadingBranches] = useState<boolean>(true);
 
-  // 2. Busca e Dossiê do Fornecedor
+  // 2. Seletor / Pesquisa de Fornecedor no Topo (Estilo DBM CustomerAutocomplete)
+  const supplierDropdownRef = useRef<HTMLDivElement | null>(null);
+  const supplierSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const [isSupplierPickerOpen, setIsSupplierPickerOpen] = useState<boolean>(false);
+  const [supplierPickerMode, setSupplierPickerMode] = useState<'SAVED' | 'HORUS'>('SAVED');
   const [supplierQuery, setSupplierQuery] = useState<string>('');
-  const [onlyConfiguredSuppliers, setOnlyConfiguredSuppliers] = useState<boolean>(false);
-  const [supplierResults, setSupplierResults] = useState<SupplierSummary[]>([]);
+  const [savedSuppliersList, setSavedSuppliersList] = useState<SupplierSummary[]>([]);
+  const [horusSuppliersList, setHorusSuppliersList] = useState<SupplierSummary[]>([]);
+  const [hasSearchedHorusSuppliers, setHasSearchedHorusSuppliers] = useState<boolean>(false);
   const [loadingSuppliers, setLoadingSuppliers] = useState<boolean>(false);
+
   const [supplierOverview, setSupplierOverview] = useState<SupplierOverviewData | null>(null);
   const [loadingOverview, setLoadingOverview] = useState<boolean>(false);
-  const [supplierSubTab, setSupplierSubTab] = useState<
-    'DISCOUNTS' | 'ENTRADAS' | 'CONSIG' | 'ACERTOS' | 'DEVOLUCOES' | 'PEDIDOS_HORUS'
-  >('DISCOUNTS');
+  const [showSupplierHistoryCards, setShowSupplierHistoryCards] = useState<boolean>(true);
+  const [deskHeroTab, setDeskHeroTab] = useState<DeskHeroSubTab>('PEDIDO');
+
+  // Toggles visuais da grade principal (estilo DBM Gestão de Pedidos)
+  const [isGridMaximized, setIsGridMaximized] = useState<boolean>(false);
+  const [gridFilterTerm, setGridFilterTerm] = useState<string>('');
+  const [showColIsbn, setShowColIsbn] = useState<boolean>(true);
+  const [showColSaldos, setShowColSaldos] = useState<boolean>(true);
+  const [showColPrices, setShowColPrices] = useState<boolean>(true);
+
+  // Gaveta Retrátil de Importação de Planilha / Texto no topo (igual ao DBM)
+  const [isIntakeDrawerOpen, setIsIntakeDrawerOpen] = useState<boolean>(false);
+  const [intakeMode, setIntakeMode] = useState<'EXCEL' | 'TEXT'>('EXCEL');
+  const [sheetFile, setSheetFile] = useState<File | null>(null);
+  const [sheetPastedText, setSheetPastedText] = useState<string>('');
+  const [importingSheet, setImportingSheet] = useState<boolean>(false);
+  const [lastNotFoundIsbns, setLastNotFoundIsbns] = useState<string[]>([]);
 
   // 3. Modal de Vínculo de Múltiplos Selos/Editoras + Desconto (%) no Fornecedor
   const [showAddPublisherModal, setShowAddPublisherModal] = useState<boolean>(false);
@@ -423,11 +463,10 @@ export default function HorusDirectComprasPage() {
   const [batchDiscountPct, setBatchDiscountPct] = useState<number>(50);
   const [savingSupplierDiscounts, setSavingSupplierDiscounts] = useState<boolean>(false);
 
-  // Edição inline de desconto de uma editora já vinculada
   const [editingDiscountId, setEditingDiscountId] = useState<number | null>(null);
   const [editingDiscountPct, setEditingDiscountPct] = useState<number>(0);
 
-  // 4. Pesquisa de Itens, Planilha e Carrinho do Pedido de Compra
+  // 4. Pesquisa de Itens e Grade Principal do Pedido
   const [itemSearchTerm, setItemSearchTerm] = useState<string>('');
   const [itemSearchDefaultQty, setItemSearchDefaultQty] = useState<number>(1);
   const [itemLookupResults, setItemLookupResults] = useState<CartPurchaseItem[]>([]);
@@ -439,13 +478,6 @@ export default function HorusDirectComprasPage() {
   const [compraConsig, setCompraConsig] = useState<'N' | 'S'>('N');
   const [orderObservations, setOrderObservations] = useState<string>('');
   const [creatingOrder, setCreatingOrder] = useState<boolean>(false);
-
-  // Modal Importar Planilha ISBN + Quantidade
-  const [showSheetModal, setShowSheetModal] = useState<boolean>(false);
-  const [sheetFile, setSheetFile] = useState<File | null>(null);
-  const [sheetPastedText, setSheetPastedText] = useState<string>('');
-  const [importingSheet, setImportingSheet] = useState<boolean>(false);
-  const [lastNotFoundIsbns, setLastNotFoundIsbns] = useState<string[]>([]);
 
   // 5. Modal de Conciliação de Editora/Selo (Cronuz + Horus ITENS_ESTOQUE_GERAL)
   const [showReconcileModal, setShowReconcileModal] = useState<boolean>(false);
@@ -460,7 +492,7 @@ export default function HorusDirectComprasPage() {
   } | null>(null);
   const [savingReconcile, setSavingReconcile] = useState<boolean>(false);
 
-  // 6. Folha de Dados de Pedidos Gerados (AP / AE / XML OK)
+  // 6. Pedidos Gerados (AP / AE / XML OK)
   const [ordersList, setOrdersList] = useState<SavedPurchaseOrder[]>([]);
   const [selectedOrderIndex, setSelectedOrderIndex] = useState<number>(0);
   const [loadingOrders, setLoadingOrders] = useState<boolean>(false);
@@ -484,7 +516,7 @@ export default function HorusDirectComprasPage() {
 
   // 7. Central de Auditoria & Análise Posterior de XML da NF-e
   const xmlFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [xmlTargetOrderId, setXmlTargetOrderId] = useState<string>(''); // '' = Auto-detectar
+  const [xmlTargetOrderId, setXmlTargetOrderId] = useState<string>('');
   const [xmlUploadFile, setXmlUploadFile] = useState<File | null>(null);
   const [xmlAutoAcceptIfOk, setXmlAutoAcceptIfOk] = useState<boolean>(true);
   const [xmlAdvanceHorusToAe, setXmlAdvanceHorusToAe] = useState<boolean>(true);
@@ -505,7 +537,6 @@ export default function HorusDirectComprasPage() {
   const [xmlDivergenceAxisFilter, setXmlDivergenceAxisFilter] = useState<string>('ALL');
   const [xmlSearchFilter, setXmlSearchFilter] = useState<string>('');
 
-  // Modal Ficha Mestre-Detalhe de Análise Posterior & Pontuação do XML
   const [xmlAuditDetailModal, setXmlAuditDetailModal] = useState<{
     audit: XmlAuditSummary;
     items: XmlAuditItemRow[];
@@ -541,6 +572,20 @@ export default function HorusDirectComprasPage() {
     () => branches.find((b) => b.id === selectedBranchId) || null,
     [branches, selectedBranchId]
   );
+
+  // Fecha popover de fornecedor ao clicar fora
+  useEffect(() => {
+    const onOutside = (ev: MouseEvent) => {
+      if (
+        supplierDropdownRef.current &&
+        !supplierDropdownRef.current.contains(ev.target as Node)
+      ) {
+        setIsSupplierPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, []);
 
   // ── Inicialização de Empresa e Filiais ─────────────────────────────────────
   const fetchBranches = useCallback(
@@ -581,27 +626,33 @@ export default function HorusDirectComprasPage() {
     fetchBranches(cid);
   }, [fetchBranches]);
 
-  // ── Carrega Fornecedores ao trocar Filial ou Filtro ────────────────────────
-  const searchSuppliers = useCallback(
-    async (bid: number, qStr: string, onlyCfg: boolean) => {
+  // ── Busca de Fornecedores Salvos (Cronuz) vs Pesquisa sob Demanda no Horus ──
+  const loadSavedSuppliersForBranch = useCallback(
+    async (bid: number, qStr = '') => {
       setLoadingSuppliers(true);
       try {
         const token = getToken();
         const params = new URLSearchParams({
           branch_id: String(bid),
           company_id: String(companyId),
-          only_configured: String(onlyCfg),
+          only_configured: 'true',
           limit: '60',
         });
         if (qStr.trim()) params.append('q', qStr.trim());
         const res = await fetch(`${apiUrl}/horus-purchases/suppliers/search?${params.toString()}`, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.detail || 'Erro ao buscar fornecedores no Horus.');
-        setSupplierResults(data.suppliers || []);
-      } catch (e: any) {
-        toast.error(e?.message || 'Erro ao consultar fornecedores.');
+        if (res.ok) {
+          const data = await res.json();
+          const saved: SupplierSummary[] = data.suppliers || [];
+          setSavedSuppliersList(saved);
+          // Se a filial ainda não possui nenhum fornecedor configurado salvo, abre direto a aba de pesquisa Horus sem listar tudo antes de clicar em pesquisar
+          if (saved.length === 0 && !qStr.trim()) {
+            setSupplierPickerMode('HORUS');
+          }
+        }
+      } catch {
+        // silent
       } finally {
         setLoadingSuppliers(false);
       }
@@ -609,7 +660,40 @@ export default function HorusDirectComprasPage() {
     [apiUrl, companyId]
   );
 
-  // Carrega resumo rápido de Pedidos e Auditorias de XML da filial para alimentar contadores da Barra Fixa
+  const executeHorusSupplierSearch = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (selectedBranchId === null) return;
+
+    if (supplierPickerMode === 'SAVED') {
+      await loadSavedSuppliersForBranch(selectedBranchId, supplierQuery);
+      return;
+    }
+
+    setLoadingSuppliers(true);
+    setHasSearchedHorusSuppliers(true);
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        branch_id: String(selectedBranchId),
+        company_id: String(companyId),
+        only_configured: 'false',
+        limit: '60',
+      });
+      if (supplierQuery.trim()) params.append('q', supplierQuery.trim());
+      const res = await fetch(`${apiUrl}/horus-purchases/suppliers/search?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Erro ao pesquisar fornecedores no Horus.');
+      setHorusSuppliersList(data.suppliers || []);
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao consultar fornecedores no Horus.');
+    } finally {
+      setLoadingSuppliers(false);
+    }
+  };
+
+  // ── Pedidos e Auditorias de XML ────────────────────────────────────────────
   const fetchOrdersList = useCallback(
     async (silent = false) => {
       if (!silent) setLoadingOrders(true);
@@ -675,7 +759,9 @@ export default function HorusDirectComprasPage() {
 
   useEffect(() => {
     if (selectedBranchId !== null) {
-      searchSuppliers(selectedBranchId, supplierQuery, onlyConfiguredSuppliers);
+      setHorusSuppliersList([]);
+      setHasSearchedHorusSuppliers(false);
+      loadSavedSuppliersForBranch(selectedBranchId, '');
       fetchOrdersList(true);
       fetchXmlAuditsList(true);
       const b = branches.find((x) => x.id === selectedBranchId);
@@ -684,7 +770,7 @@ export default function HorusDirectComprasPage() {
         setCompraConsig(b.config.compra_consig_default === 'S' ? 'S' : 'N');
       }
     }
-  }, [selectedBranchId, onlyConfiguredSuppliers]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedBranchId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (activeMainTab === 'ORDERS') {
@@ -708,74 +794,6 @@ export default function HorusDirectComprasPage() {
     }
   }, [activeMainTab, selectedBranchId, apiUrl, companyId, fetchOrdersList, fetchXmlAuditsList]);
 
-  // ── Atalhos de Teclado Estilo Access Moderno nas Folhas de Dados (↑ ↓ Home End Enter Esc) ─
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-        if (e.key === 'Escape') {
-          (e.target as HTMLElement).blur();
-        }
-        return;
-      }
-
-      if (e.key === 'Escape') {
-        if (xmlAuditDetailModal) setXmlAuditDetailModal(null);
-        else if (detailModalData) setDetailModalData(null);
-        else if (exportPromptOrder) setExportPromptOrder(null);
-        else if (showAddPublisherModal) setShowAddPublisherModal(false);
-        else if (showSheetModal) setShowSheetModal(false);
-        else if (showReconcileModal) setShowReconcileModal(false);
-        return;
-      }
-
-      if (xmlAuditDetailModal || detailModalData || exportPromptOrder || showAddPublisherModal || showSheetModal || showReconcileModal) {
-        return;
-      }
-
-      if (activeMainTab === 'ORDERS' && ordersList.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setSelectedOrderIndex((p) => Math.min(ordersList.length - 1, p + 1));
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setSelectedOrderIndex((p) => Math.max(0, p - 1));
-        } else if (e.key === 'Home') {
-          e.preventDefault();
-          setSelectedOrderIndex(0);
-        } else if (e.key === 'End') {
-          e.preventDefault();
-          setSelectedOrderIndex(ordersList.length - 1);
-        } else if (e.key === 'Enter') {
-          e.preventDefault();
-          const sel = ordersList[selectedOrderIndex];
-          if (sel) openOrderDetailModal(sel.id);
-        }
-      } else if (activeMainTab === 'XML_AUDIT' && xmlAuditsList.length > 0) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          setSelectedXmlIndex((p) => Math.min(xmlAuditsList.length - 1, p + 1));
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          setSelectedXmlIndex((p) => Math.max(0, p - 1));
-        } else if (e.key === 'Home') {
-          e.preventDefault();
-          setSelectedXmlIndex(0);
-        } else if (e.key === 'End') {
-          e.preventDefault();
-          setSelectedXmlIndex(xmlAuditsList.length - 1);
-        } else if (e.key === 'Enter') {
-          e.preventDefault();
-          const sel = xmlAuditsList[selectedXmlIndex];
-          if (sel) openXmlAuditDetailModal(sel.id);
-        }
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }); // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Selecionar Fornecedor e Carregar Dossiê 360° ───────────────────────────
   const loadSupplierOverview = async (
     bid: number,
@@ -783,6 +801,7 @@ export default function HorusDirectComprasPage() {
     codForn: number,
     preserveCart = false
   ) => {
+    setIsSupplierPickerOpen(false);
     setLoadingOverview(true);
     if (!preserveCart) {
       setCartItems([]);
@@ -803,9 +822,12 @@ export default function HorusDirectComprasPage() {
       const res = await fetch(`${apiUrl}/horus-purchases/suppliers/overview?${params.toString()}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Erro ao carregar dossiê do fornecedor.');
+      const data: SupplierOverviewData = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error((data as any).detail || 'Erro ao carregar dossiê do fornecedor.');
       setSupplierOverview(data);
+      if (!preserveCart) {
+        setDeskHeroTab(data.is_ready_for_purchase ? 'PEDIDO' : 'SELOS_DESCONTOS');
+      }
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao carregar dados do fornecedor.');
     } finally {
@@ -904,7 +926,8 @@ export default function HorusDirectComprasPage() {
       await loadSupplierOverview(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, true);
       await refreshCurrentCart(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, cartItems);
       fetchBranches(companyId, selectedBranchId);
-      searchSuppliers(selectedBranchId, supplierQuery, onlyConfiguredSuppliers);
+      loadSavedSuppliersForBranch(selectedBranchId, '');
+      setDeskHeroTab('PEDIDO');
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao vincular descontos.');
     } finally {
@@ -960,6 +983,7 @@ export default function HorusDirectComprasPage() {
       toast.success('Vínculo de editora removido.');
       await loadSupplierOverview(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, true);
       await refreshCurrentCart(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, cartItems);
+      loadSavedSuppliersForBranch(selectedBranchId, '');
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao remover editora.');
     }
@@ -992,6 +1016,8 @@ export default function HorusDirectComprasPage() {
       toast.success(data.message || 'Editoras importadas do Horus!');
       await loadSupplierOverview(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, true);
       await refreshCurrentCart(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor, cartItems);
+      loadSavedSuppliersForBranch(selectedBranchId, '');
+      setDeskHeroTab('PEDIDO');
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao importar vínculos do Horus.');
     } finally {
@@ -1002,7 +1028,15 @@ export default function HorusDirectComprasPage() {
   // ── Pesquisa de Itens & Importação de Planilha (Máx 10 MB) ─────────────────
   const handleLookupItems = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supplierOverview || selectedBranchId === null) return;
+    if (!supplierOverview || selectedBranchId === null) {
+      toast.error('Selecione o fornecedor no topo antes de adicionar itens.');
+      return;
+    }
+    if (!supplierOverview.is_ready_for_purchase) {
+      toast.error('Vincule os selos e descontos do fornecedor antes de adicionar itens.');
+      setDeskHeroTab('SELOS_DESCONTOS');
+      return;
+    }
     if (!itemSearchTerm.trim()) return;
     setSearchingItems(true);
     try {
@@ -1031,7 +1065,7 @@ export default function HorusDirectComprasPage() {
         addOrMergeItemToCart(list[0], Math.max(1, itemSearchDefaultQty));
         setItemSearchTerm('');
         setItemLookupResults([]);
-        toast.success(`Item '${list[0].nome_item}' adicionado à folha do pedido.`);
+        toast.success(`'${list[0].nome_item}' adicionado ao pedido.`);
       } else {
         setItemLookupResults(list);
         if (list.length === 0) toast.error('Nenhum item encontrado no acervo do Horus.');
@@ -1090,11 +1124,43 @@ export default function HorusDirectComprasPage() {
     );
   };
 
+  const handleQtyKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, rowIndex: number, totalRows: number) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter') {
+      e.preventDefault();
+      const nextIdx = (rowIndex + 1) % totalRows;
+      const el = document.getElementById(`compras-qty-${nextIdx}`) as HTMLInputElement | null;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const prevIdx = (rowIndex - 1 + totalRows) % totalRows;
+      const el = document.getElementById(`compras-qty-${prevIdx}`) as HTMLInputElement | null;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    }
+  };
+
   const handleImportSheet = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supplierOverview || selectedBranchId === null) return;
-    if (!sheetFile && !sheetPastedText.trim()) {
-      toast.error('Selecione uma planilha (.xlsx / .csv) ou cole os ISBNs e quantidades.');
+    if (!supplierOverview || selectedBranchId === null) {
+      toast.error('Selecione o fornecedor no topo antes de importar itens.');
+      return;
+    }
+    if (!supplierOverview.is_ready_for_purchase) {
+      toast.error('Configure os selos e descontos do fornecedor antes de importar.');
+      setDeskHeroTab('SELOS_DESCONTOS');
+      return;
+    }
+    if (intakeMode === 'EXCEL' && !sheetFile) {
+      toast.error('Selecione uma planilha (.xlsx / .csv) para importar.');
+      return;
+    }
+    if (intakeMode === 'TEXT' && !sheetPastedText.trim()) {
+      toast.error('Cole os ISBNs e quantidades no campo de texto.');
       return;
     }
     if (sheetFile && sheetFile.size > MAX_SHEET_BYTES) {
@@ -1110,8 +1176,8 @@ export default function HorusDirectComprasPage() {
       fd.append('cod_grp_fornecedor', String(sup.cod_grp_fornecedor));
       fd.append('cod_fornecedor', String(sup.cod_fornecedor));
       fd.append('company_id', String(companyId));
-      if (sheetFile) fd.append('file', sheetFile);
-      if (sheetPastedText.trim()) fd.append('pasted_text', sheetPastedText.trim());
+      if (intakeMode === 'EXCEL' && sheetFile) fd.append('file', sheetFile);
+      if (intakeMode === 'TEXT' && sheetPastedText.trim()) fd.append('pasted_text', sheetPastedText.trim());
 
       const res = await fetch(`${apiUrl}/horus-purchases/items/import-sheet`, {
         method: 'POST',
@@ -1143,16 +1209,17 @@ export default function HorusDirectComprasPage() {
       });
 
       setLastNotFoundIsbns(data.not_found_isbns || []);
-      setShowSheetModal(false);
+      setIsIntakeDrawerOpen(false);
       setSheetFile(null);
       setSheetPastedText('');
+      setDeskHeroTab('PEDIDO');
 
       if (data.unconfigured_publishers_count > 0) {
         toast.warning(
-          `${imported.length} item(ns) importado(s), porém ${data.unconfigured_publishers_count} possuem editora não vinculada ao fornecedor.`
+          `${imported.length} item(ns) carregado(s), porém ${data.unconfigured_publishers_count} possuem editora não vinculada ao fornecedor.`
         );
       } else {
-        toast.success(data.message || `${imported.length} item(ns) importado(s) com sucesso!`);
+        toast.success(data.message || `${imported.length} item(ns) carregado(s) na grade!`);
       }
     } catch (err: any) {
       toast.error(err?.message || 'Falha ao importar planilha.');
@@ -1203,7 +1270,19 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  // ── Totais e Validações do Carrinho ────────────────────────────────────────
+  // ── Filtros e Totais da Grade ──────────────────────────────────────────────
+  const visibleCartItems = useMemo(() => {
+    if (!gridFilterTerm.trim()) return cartItems;
+    const q = gridFilterTerm.trim().toLowerCase();
+    return cartItems.filter(
+      (it) =>
+        it.nome_item.toLowerCase().includes(q) ||
+        it.isbn.toLowerCase().includes(q) ||
+        it.nome_editora.toLowerCase().includes(q) ||
+        String(it.cod_item).includes(q)
+    );
+  }, [cartItems, gridFilterTerm]);
+
   const cartSummary = useMemo(() => {
     const skus = cartItems.length;
     let totalQty = 0;
@@ -1218,23 +1297,39 @@ export default function HorusDirectComprasPage() {
     }
     const discVal = Math.max(0, gross - net);
     const avgDisc = gross > 0 ? (discVal / gross) * 100 : 0;
-    return { skus, totalQty, gross, net, discVal, avgDisc, invalidCount };
-  }, [cartItems]);
+    const minFat = supplierOverview?.supplier.fat_minimo || 0;
+    const minReached = net >= minFat;
+    return { skus, totalQty, gross, net, discVal, avgDisc, invalidCount, minFat, minReached };
+  }, [cartItems, supplierOverview]);
 
   const ordersTotalNetSum = useMemo(
     () => ordersList.reduce((acc, o) => acc + Number(o.total_net || 0), 0),
     [ordersList]
   );
 
+  // Resumo dos 4 cards do fornecedor (igual ao padrão DBM)
+  const supplierTopMetrics = useMemo(() => {
+    const h = supplierOverview?.history;
+    const lastCompra = h?.entradas_compra?.[0] || null;
+    const lastConsig = h?.consignacoes_recebidas?.[0] || null;
+    const lastAcerto = h?.acertos_consignacao?.[0] || null;
+    const lastDevol = h?.devolucoes?.[0] || null;
+    return { lastCompra, lastConsig, lastAcerto, lastDevol };
+  }, [supplierOverview]);
+
   // ── Gerar Pedido de Compra no Horus (Status AP - Aprovado) ─────────────────
   const handleCreatePurchaseOrder = async () => {
-    if (!supplierOverview || selectedBranchId === null) return;
+    if (!supplierOverview || selectedBranchId === null) {
+      toast.error('Selecione o fornecedor no topo antes de gerar o pedido.');
+      return;
+    }
     if (!supplierOverview.is_ready_for_purchase) {
-      toast.error('Configure os selos/editoras e descontos do fornecedor nesta filial antes de continuar.');
+      toast.error('Configure os selos/editoras e descontos do fornecedor nesta filial.');
+      setDeskHeroTab('SELOS_DESCONTOS');
       return;
     }
     if (!cartItems.length) {
-      toast.error('Adicione itens ao pedido de compra.');
+      toast.error('Adicione itens à grade do pedido de compra.');
       return;
     }
     if (cartSummary.invalidCount > 0) {
@@ -1559,36 +1654,6 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  // Cabeçalho contextual do Objeto ativo (Estilo Access Moderno)
-  const activeObjectMeta = useMemo(() => {
-    switch (activeMainTab) {
-      case 'ORDERS':
-        return {
-          badge: 'FOLHA DE DADOS',
-          title: 'Pedidos de Compra (AP / AE / XML OK)',
-          subtitle: 'Controle de pedidos gerados no Horus, exportação Excel e status de conferência de XML.',
-        };
-      case 'XML_AUDIT':
-        return {
-          badge: 'FOLHA DE DADOS & AUDITORIA',
-          title: 'Conferência Preventiva de XML (NF-e vs Pedido)',
-          subtitle: 'Valide Preço de Capa, Desconto (%) e Quantidade antes da mercadoria chegar na doca.',
-        };
-      case 'BRANCH_CONFIG':
-        return {
-          badge: 'FORMULÁRIO DE PARÂMETROS',
-          title: 'Padrões Operacionais & E-mail da Filial',
-          subtitle: 'Configuração individualizada de local, departamento e texto de envio ao fornecedor.',
-        };
-      default:
-        return {
-          badge: 'FORMULÁRIO MESTRE-DETALHE',
-          title: 'Mesa de Compras & Reposição Multi-Filial',
-          subtitle: 'Selecione fornecedor, governe descontos por selo, concilie editoras no Horus e gere pedidos AP.',
-        };
-    }
-  }, [activeMainTab]);
-
   const filteredXmlModalItems = useMemo(() => {
     if (!xmlAuditDetailModal) return [];
     if (xmlModalItemFilter === 'DIVERGENT') {
@@ -1600,10 +1665,13 @@ export default function HorusDirectComprasPage() {
     return xmlAuditDetailModal.items;
   }, [xmlAuditDetailModal, xmlModalItemFilter]);
 
+  const activeSuppliersInDropdown =
+    supplierPickerMode === 'SAVED' ? savedSuppliersList : horusSuppliersList;
+
   return (
-    <div className="w-full space-y-2.5 pb-12">
+    <div className="w-full space-y-4 pb-16 font-sans">
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* 1. BARRA DE MENUS FIXOS NO TOPO (ESTILO ACCESS MODERNO)                */}
+      {/* BARRA DE ATALHOS FIXOS NO TOPO (IGUAL GESTÃO DE PEDIDOS DBM)           */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <HorusComprasPinnedNavBar
         activeTab={activeMainTab}
@@ -1614,243 +1682,452 @@ export default function HorusDirectComprasPage() {
       />
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* 2. FAIXA DE OBJETO & SELETOR DE FILIAL ATIVA (CABEÇALHO ACCESS)        */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 shadow-2xs overflow-hidden">
-        <div className="px-3.5 py-2.5 bg-gradient-to-r from-slate-100 via-slate-50 to-white dark:from-slate-900 dark:via-slate-900 dark:to-slate-950 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2.5">
-          <div className="flex items-start sm:items-center gap-2.5 min-w-0">
-            <div className="w-9 h-9 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
-              {activeMainTab === 'XML_AUDIT' ? (
-                <FileCheck2 className="w-4 h-4" />
-              ) : activeMainTab === 'ORDERS' ? (
-                <ClipboardList className="w-4 h-4" />
-              ) : activeMainTab === 'BRANCH_CONFIG' ? (
-                <Settings2 className="w-4 h-4" />
-              ) : (
-                <Package className="w-4 h-4" />
-              )}
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <span className="px-1.5 py-0.5 text-[10px] font-black uppercase tracking-wider rounded bg-slate-200/90 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
-                  {activeObjectMeta.badge}
-                </span>
-                <h1 className="text-sm sm:text-base font-black text-slate-900 dark:text-white truncate">
-                  {activeObjectMeta.title}
-                </h1>
-              </div>
-              <p className="text-[11px] text-slate-500 truncate">{activeObjectMeta.subtitle}</p>
-            </div>
-          </div>
-
-          {/* Caixa Estruturada de Filial Ativa + Indicadores Rápidos */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-2 bg-white dark:bg-slate-950 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 shadow-2xs">
-              <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
-              <div>
-                <span className="block text-[9px] uppercase font-black tracking-wider text-slate-400 leading-none">
-                  Filial Ativa (Horus)
-                </span>
-                <select
-                  disabled={loadingBranches}
-                  value={selectedBranchId ?? ''}
-                  onChange={(e) => {
-                    const nextBid = Number(e.target.value);
-                    setSelectedBranchId(nextBid);
-                    setSupplierOverview(null);
-                    setCartItems([]);
-                    setCheckedCartCods({});
-                  }}
-                  className="bg-transparent text-xs font-extrabold text-slate-900 dark:text-white focus:outline-none pr-3 cursor-pointer"
-                >
-                  {branches.map((b) => (
-                    <option key={b.id} value={b.id} className="text-slate-900">
-                      {b.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {(activeMainTab === 'ORDERS' || activeMainTab === 'XML_AUDIT') && (
-              <div className="hidden xl:flex items-center gap-1.5 text-[11px] text-slate-500 bg-slate-100/80 dark:bg-slate-800/70 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700">
-                <kbd className="px-1 py-0.2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-mono text-[10px]">
-                  ↑↓
-                </kbd>
-                <span>Navegar</span>
-                <span>•</span>
-                <kbd className="px-1 py-0.2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded font-mono text-[10px]">
-                  Enter
-                </kbd>
-                <span>Abrir Ficha</span>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* OBJETO 1: MESA DE COMPRAS (FORMULÁRIO MESTRE-DETALHE ACCESS MODERNO)   */}
+      {/* ABA 1: MESA DE COMPRAS (LAYOUT FLUIDO E ESPAÇADO ESTILO DBM DESK)      */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeMainTab === 'DESK' && (
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-2.5">
-          {/* PAINEL ESQUERDO (XL 4): FOLHA DE FORNECEDORES DA FILIAL */}
-          <div className="xl:col-span-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 flex flex-col max-h-[720px] overflow-hidden shadow-2xs">
-            <div className="px-3 py-2 bg-slate-100/90 dark:bg-slate-800/80 border-b border-slate-300/80 dark:border-slate-800 flex items-center justify-between gap-2">
-              <div>
-                <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
-                  Seletor de Registro • Fornecedor
+        <div className="space-y-4">
+          {/* 1. BARRA DE COMANDO SUPERIOR: Filial ➔ Pesquisar Fornecedor ➔ Observação ➔ Ações */}
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs flex flex-col xl:flex-row xl:items-center justify-between gap-3.5">
+            <div className="flex flex-col md:flex-row md:items-center gap-3 flex-1 min-w-0">
+              {/* Identidade do Módulo */}
+              <div className="shrink-0 pr-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block leading-none mb-1">
+                  Gestão de Compras Horus
                 </span>
-                <h2 className="text-xs font-extrabold text-slate-900 dark:text-white">
-                  Fornecedores ({selectedBranch?.nome || ''})
-                </h2>
+                <h1 className="text-base font-black text-slate-900 dark:text-white leading-tight whitespace-nowrap">
+                  Mesa de Reposição
+                </h1>
               </div>
-              <label className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-600 dark:text-slate-300 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={onlyConfiguredSuppliers}
-                  onChange={(e) => setOnlyConfiguredSuppliers(e.target.checked)}
-                  className="rounded border-slate-300 text-indigo-600"
-                />
-                Com Selos
-              </label>
-            </div>
 
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (selectedBranchId !== null) {
-                  searchSuppliers(selectedBranchId, supplierQuery, onlyConfiguredSuppliers);
-                }
-              }}
-              className="p-2 bg-slate-50/70 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex gap-1.5"
-            >
-              <input
-                type="text"
-                value={supplierQuery}
-                onChange={(e) => setSupplierQuery(e.target.value)}
-                placeholder="Razão, Fantasia, CNPJ ou #Cód..."
-                className="flex-1 px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
-              />
-              <button
-                type="submit"
-                disabled={loadingSuppliers}
-                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold cursor-pointer flex items-center gap-1"
-              >
-                {loadingSuppliers ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                Filtrar
-              </button>
-            </form>
+              <div className="h-7 w-px bg-slate-200 dark:bg-slate-800 hidden md:block shrink-0" />
 
-            <div className="flex-1 overflow-y-auto">
-              {loadingSuppliers ? (
-                <div className="py-12 text-center text-xs text-slate-500">
-                  <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1.5 text-indigo-600" />
-                  Consultando FORNECEDORES_GERAL...
+              {/* 1º Seletor de Filial */}
+              <div className="flex items-center gap-2.5 bg-slate-50 dark:bg-slate-950 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 shrink-0">
+                <Building2 className="w-4 h-4 text-indigo-600 shrink-0" />
+                <div>
+                  <span className="block text-[9px] uppercase font-bold tracking-wider text-slate-400 leading-none mb-0.5">
+                    1. Filial Destino
+                  </span>
+                  <select
+                    disabled={loadingBranches}
+                    value={selectedBranchId ?? ''}
+                    onChange={(e) => {
+                      const nextBid = Number(e.target.value);
+                      setSelectedBranchId(nextBid);
+                      setSupplierOverview(null);
+                      setCartItems([]);
+                      setCheckedCartCods({});
+                    }}
+                    className="bg-transparent text-xs font-bold text-slate-900 dark:text-white focus:outline-none pr-3 cursor-pointer"
+                  >
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id} className="text-slate-900">
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ) : supplierResults.length === 0 ? (
-                <div className="py-10 px-4 text-center text-xs text-slate-500">
-                  Nenhum fornecedor localizado nesta filial.
-                </div>
-              ) : (
-                <table className="w-full text-left text-xs border-collapse">
-                  <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
-                    <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                      <th className="w-6 py-1.5 text-center">▶</th>
-                      <th className="py-1.5 px-2 w-16">Cód.</th>
-                      <th className="py-1.5 px-2">Fornecedor / CNPJ</th>
-                      <th className="py-1.5 px-2 w-20 text-center">Selos</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800">
-                    {supplierResults.map((sup, sIdx) => {
-                      const isActive =
-                        supplierOverview?.supplier.cod_fornecedor === sup.cod_fornecedor &&
-                        supplierOverview?.supplier.cod_grp_fornecedor === sup.cod_grp_fornecedor;
-                      return (
-                        <tr
-                          key={`${sup.cod_grp_fornecedor}-${sup.cod_fornecedor}`}
-                          onClick={() => {
-                            if (selectedBranchId !== null) {
-                              loadSupplierOverview(selectedBranchId, sup.cod_grp_fornecedor, sup.cod_fornecedor);
+              </div>
+
+              {/* 2º Seletor Inteligente de Fornecedor no Topo (Salvos ou Pesquisa Horus sob demanda) */}
+              <div className="relative flex-1 min-w-[260px] max-w-xl" ref={supplierDropdownRef}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextOpen = !isSupplierPickerOpen;
+                    setIsSupplierPickerOpen(nextOpen);
+                    if (nextOpen) {
+                      setTimeout(() => supplierSearchInputRef.current?.focus(), 60);
+                    }
+                  }}
+                  className={`w-full px-3.5 py-2.5 rounded-xl border text-left flex items-center justify-between gap-2 transition-all cursor-pointer ${
+                    isSupplierPickerOpen
+                      ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-white dark:bg-slate-950'
+                      : 'border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-950 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <Search className="w-4 h-4 text-indigo-600 shrink-0" />
+                    <div className="min-w-0">
+                      <span className="block text-[9px] uppercase font-bold tracking-wider text-slate-400 leading-none mb-0.5">
+                        2. Fornecedor na Filial
+                      </span>
+                      {supplierOverview ? (
+                        <span className="text-xs font-bold text-slate-900 dark:text-white truncate block">
+                          #{supplierOverview.supplier.cod_fornecedor} — {supplierOverview.supplier.nom_fornecedor}
+                        </span>
+                      ) : (
+                        <span className="text-xs font-medium text-slate-500 dark:text-slate-400 truncate block">
+                          Selecionar fornecedor salvo ou pesquisar no Horus...
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {supplierOverview && (
+                      <span
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          setSupplierOverview(null);
+                          setCartItems([]);
+                          setCheckedCartCods({});
+                          setIsSupplierPickerOpen(true);
+                        }}
+                        className="p-1 rounded-full hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700"
+                        title="Trocar fornecedor"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </span>
+                    )}
+                    <ChevronDown
+                      className={`w-4 h-4 text-slate-400 transition-transform ${
+                        isSupplierPickerOpen ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </div>
+                </button>
+
+                {/* Popover Amplo de Pesquisa de Fornecedor (Salvos vs Consultar no Horus) */}
+                {isSupplierPickerOpen && (
+                  <div className="absolute left-0 right-0 sm:w-[540px] mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-50 overflow-hidden">
+                    <div className="p-3.5 bg-slate-50/80 dark:bg-slate-950/60 border-b border-slate-200/80 dark:border-slate-800 space-y-3">
+                      {/* Abas de Origem da Busca: Salvos no Cronuz vs Consultar no Banco do Horus */}
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="inline-flex p-1 rounded-xl bg-slate-200/70 dark:bg-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSupplierPickerMode('SAVED');
+                              if (selectedBranchId !== null) {
+                                loadSavedSuppliersForBranch(selectedBranchId, supplierQuery);
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              supplierPickerMode === 'SAVED'
+                                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-2xs'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                            }`}
+                          >
+                            Já Salvos na Filial ({savedSuppliersList.length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSupplierPickerMode('HORUS')}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                              supplierPickerMode === 'HORUS'
+                                ? 'bg-white dark:bg-slate-900 text-indigo-700 dark:text-indigo-300 shadow-2xs'
+                                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                            }`}
+                          >
+                            Consultar no Horus (SQL)
+                          </button>
+                        </div>
+
+                        <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+                          {selectedBranch?.nome}
+                        </span>
+                      </div>
+
+                      {/* Campo de Pesquisa + Botão Pesquisar */}
+                      <form onSubmit={executeHorusSupplierSearch} className="flex gap-2">
+                        <div className="relative flex-1">
+                          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            ref={supplierSearchInputRef}
+                            type="text"
+                            value={supplierQuery}
+                            onChange={(e) => setSupplierQuery(e.target.value)}
+                            placeholder={
+                              supplierPickerMode === 'SAVED'
+                                ? 'Filtrar fornecedores já configurados...'
+                                : 'Digite nome, fantasia, CNPJ ou código e clique em Pesquisar...'
                             }
-                          }}
-                          className={`cursor-pointer transition-colors divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                            isActive
-                              ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-950 dark:text-indigo-100'
-                              : sIdx % 2 === 0
-                              ? 'bg-white dark:bg-slate-900 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                              : 'bg-slate-50/50 dark:bg-slate-800/20 hover:bg-slate-100/70 dark:hover:bg-slate-800/40'
-                          }`}
+                            className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-medium focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={loadingSuppliers}
+                          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
                         >
-                          <td className="py-1.5 text-center font-mono text-[10px] text-indigo-600 font-black">
-                            {isActive ? '▶' : ''}
-                          </td>
-                          <td className="py-1.5 px-2 font-mono font-bold text-[11px] text-slate-600 dark:text-slate-300">
-                            #{sup.cod_fornecedor}
-                          </td>
-                          <td className="py-1.5 px-2 max-w-[180px]">
-                            <div className="font-extrabold text-slate-900 dark:text-white truncate">
-                              {sup.nom_fornecedor}
-                            </div>
-                            <div className="text-[10px] font-mono text-slate-500">{formatCnpj(sup.cnpj)}</div>
-                          </td>
-                          <td className="py-1.5 px-2 text-center">
-                            {sup.is_configured ? (
-                              <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-300 text-[10px] font-extrabold font-mono">
-                                {sup.configured_publishers_count} OK
-                              </span>
-                            ) : (
-                              <span className="inline-block px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-300 text-[10px] font-bold">
-                                Pendente
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              )}
+                          {loadingSuppliers ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Search className="w-3.5 h-3.5" />
+                          )}
+                          Pesquisar
+                        </button>
+                      </form>
+                    </div>
+
+                    {/* Lista de Resultados do Popover */}
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/80 p-1.5">
+                      {loadingSuppliers ? (
+                        <div className="py-10 text-center text-xs text-slate-500">
+                          <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
+                          Consultando fornecedores...
+                        </div>
+                      ) : supplierPickerMode === 'HORUS' && !hasSearchedHorusSuppliers ? (
+                        <div className="py-10 px-6 text-center space-y-1.5">
+                          <DatabaseZap className="w-6 h-6 text-indigo-500 mx-auto opacity-80" />
+                          <p className="text-xs font-bold text-slate-700 dark:text-slate-200">
+                            Pesquisa sob demanda no banco do Horus
+                          </p>
+                          <p className="text-[11px] text-slate-500">
+                            Digite o nome, CNPJ ou código do fornecedor acima e clique em <strong>Pesquisar</strong> para buscar em <code>FORNECEDORES_GERAL</code>.
+                          </p>
+                        </div>
+                      ) : activeSuppliersInDropdown.length === 0 ? (
+                        <div className="py-10 px-6 text-center space-y-2">
+                          <p className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                            {supplierPickerMode === 'SAVED'
+                              ? 'Nenhum fornecedor configurado ainda nesta filial.'
+                              : 'Nenhum fornecedor encontrado no Horus para este termo.'}
+                          </p>
+                          {supplierPickerMode === 'SAVED' && (
+                            <button
+                              type="button"
+                              onClick={() => setSupplierPickerMode('HORUS')}
+                              className="px-3 py-1.5 rounded-xl bg-indigo-50 text-indigo-700 text-xs font-bold cursor-pointer"
+                            >
+                              Pesquisar no banco do Horus →
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        activeSuppliersInDropdown.map((sup) => {
+                          const isSelected =
+                            supplierOverview?.supplier.cod_fornecedor === sup.cod_fornecedor &&
+                            supplierOverview?.supplier.cod_grp_fornecedor === sup.cod_grp_fornecedor;
+                          return (
+                            <button
+                              key={`${sup.cod_grp_fornecedor}-${sup.cod_fornecedor}`}
+                              type="button"
+                              onClick={() => {
+                                if (selectedBranchId !== null) {
+                                  loadSupplierOverview(
+                                    selectedBranchId,
+                                    sup.cod_grp_fornecedor,
+                                    sup.cod_fornecedor
+                                  );
+                                }
+                              }}
+                              className={`w-full px-3.5 py-2.5 rounded-xl text-left flex items-center justify-between gap-3 transition cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/50 text-indigo-950 dark:text-indigo-100'
+                                  : 'hover:bg-slate-50 dark:hover:bg-slate-800/60'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                  {sup.nom_fornecedor}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-500 mt-0.5">
+                                  Cód. #{sup.cod_fornecedor} (Grp {sup.cod_grp_fornecedor}) • CNPJ{' '}
+                                  {formatCnpj(sup.cnpj)}
+                                </div>
+                              </div>
+
+                              <div className="shrink-0">
+                                {sup.is_configured ? (
+                                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">
+                                    <Check className="w-3 h-3" />
+                                    {sup.configured_publishers_count} selo(s)
+                                  </span>
+                                ) : (
+                                  <span className="inline-block px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold">
+                                    Configurar
+                                  </span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
-            <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800/90 border-t border-slate-300/80 dark:border-slate-700 text-[11px] font-mono font-bold text-slate-600 dark:text-slate-300 flex items-center justify-between">
-              <span>Registros: {supplierResults.length}</span>
-              <span>Filial #{selectedBranch?.cod_filial || '—'}</span>
+            {/* Direita da Barra de Comando: Importar Pedido + Gerenciar Selos + Gerar Pedido AP */}
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsIntakeDrawerOpen(!isIntakeDrawerOpen)}
+                className={`inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                  isIntakeDrawerOpen
+                    ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                    : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800'
+                }`}
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>Importar Planilha / Lista</span>
+                {isIntakeDrawerOpen ? (
+                  <ChevronUp className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                )}
+              </button>
+
+              {supplierOverview && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPubsForSupplier({});
+                    setPubSearchTerm('');
+                    setShowAddPublisherModal(true);
+                    searchHorusPublishersForModal('');
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 text-slate-700 dark:text-slate-200 text-xs font-bold transition cursor-pointer"
+                >
+                  <Tag className="w-4 h-4 text-indigo-600" />
+                  <span>Selos &amp; Descontos ({supplierOverview.configured_discounts.length})</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={
+                  !supplierOverview ||
+                  !supplierOverview.is_ready_for_purchase ||
+                  cartItems.length === 0 ||
+                  cartSummary.invalidCount > 0 ||
+                  creatingOrder
+                }
+                onClick={handleCreatePurchaseOrder}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-300 dark:disabled:bg-slate-800 text-white disabled:text-slate-500 text-xs font-bold shadow-sm transition cursor-pointer disabled:cursor-not-allowed"
+              >
+                {creatingOrder ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4" />
+                )}
+                <span>Gerar Pedido AP</span>
+              </button>
             </div>
           </div>
 
-          {/* PAINEL DIREITO (XL 8): CABEÇALHO DO FORNECEDOR + SUBFOLHAS + SUBFORMULÁRIO DE PEDIDO */}
-          <div className="xl:col-span-8 space-y-2.5">
-            {loadingOverview ? (
-              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-800 p-12 text-center text-xs text-slate-500">
-                <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
-                Carregando ficha do fornecedor, entradas, consignações, acertos, devoluções e descontos...
+          {/* 2. DADOS DO FORNECEDOR + 4 CARDS ESPAÇADOS DE HISTÓRICO (PADRÃO DBM) */}
+          {loadingOverview ? (
+            <div className="bg-white dark:bg-slate-900 p-8 rounded-2xl border border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500 shadow-xs">
+              <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
+              Carregando histórico de entradas, consignação, acertos, devoluções e descontos do fornecedor...
+            </div>
+          ) : !supplierOverview ? (
+            <div className="bg-white dark:bg-slate-900 px-5 py-4 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-950/50 text-indigo-600 flex items-center justify-center shrink-0">
+                  <Search className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-xs sm:text-sm font-bold text-slate-800 dark:text-slate-100">
+                    1. Escolha a Filial acima ➔ 2. Clique no campo de Fornecedor para selecionar um salvo ou pesquisar no Horus ➔ 3. Monte o pedido na grade ampla abaixo
+                  </h2>
+                </div>
               </div>
-            ) : !supplierOverview ? (
-              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300 dark:border-slate-700 p-10 text-center space-y-2">
-                <Building2 className="w-8 h-8 text-slate-400 mx-auto" />
-                <h3 className="text-sm font-extrabold text-slate-800 dark:text-slate-200">
-                  Selecione um Fornecedor na Folha Lateral
-                </h3>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Ao selecionar o registro do fornecedor, o formulário carregará últimas entradas, consignação, acertos, devoluções e a tabela obrigatória de descontos por editora/selo na filial.
-                </p>
-              </div>
-            ) : (
-              <>
-                {/* FICHA MESTRE DO FORNECEDOR (CAMPOS ESTILO FORMULÁRIO ACCESS MODERNO) */}
-                <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 overflow-hidden shadow-2xs">
-                  <div className="px-3.5 py-2 bg-slate-100/95 dark:bg-slate-800/80 border-b border-slate-300/80 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-mono text-[10px] font-black">
-                        FORN #{supplierOverview.supplier.cod_fornecedor}
-                      </span>
-                      <h2 className="text-sm font-black text-slate-900 dark:text-white truncate">
-                        {supplierOverview.supplier.nom_fornecedor}
-                      </h2>
-                    </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSupplierPickerOpen(true);
+                  setTimeout(() => supplierSearchInputRef.current?.focus(), 60);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shrink-0 cursor-pointer"
+              >
+                Selecionar Fornecedor
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Faixa Limpa de Identificação do Fornecedor */}
+              <div className="bg-white dark:bg-slate-900 px-4 py-3 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5">
+                  <div className="flex items-center gap-2 font-bold text-slate-900 dark:text-white">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Fornecedor:</span>
+                    <span className="text-sm font-extrabold">{supplierOverview.supplier.nom_fornecedor}</span>
+                  </div>
 
+                  <div className="flex items-center gap-1.5 font-mono text-slate-600 dark:text-slate-400">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 font-sans">CNPJ:</span>
+                    <span>{formatCnpj(supplierOverview.supplier.cnpj)}</span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
+                    <span className="text-[10px] uppercase font-bold text-slate-400">Horus:</span>
+                    <span className="font-mono font-semibold">
+                      #{supplierOverview.supplier.cod_fornecedor} (Grp {supplierOverview.supplier.cod_grp_fornecedor})
+                    </span>
+                  </div>
+
+                  {supplierOverview.supplier.prazo_pagamentos && (
+                    <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-400">
+                      <span className="text-[10px] uppercase font-bold text-slate-400">Prazo:</span>
+                      <span className="font-semibold">{supplierOverview.supplier.prazo_pagamentos}</span>
+                    </div>
+                  )}
+
+                  {cartSummary.minFat > 0 && (
+                    <div className="flex items-center gap-1.5 bg-indigo-50 dark:bg-indigo-950/40 px-2.5 py-1 rounded-xl border border-indigo-200 dark:border-indigo-800">
+                      <Scale className="w-3.5 h-3.5 text-indigo-600" />
+                      <span className="text-[10px] font-bold uppercase text-indigo-900 dark:text-indigo-300">
+                        Fat. Mín:
+                      </span>
+                      <span className="font-mono font-bold text-indigo-950 dark:text-white">
+                        {formatMoney(cartSummary.minFat)}
+                      </span>
+                      <span
+                        className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
+                          cartSummary.minReached ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
+                        }`}
+                      >
+                        {cartSummary.minReached ? '✓ OK' : 'PENDENTE'}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowSupplierHistoryCards(!showSupplierHistoryCards)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 transition cursor-pointer"
+                  >
+                    {showSupplierHistoryCards ? (
+                      <EyeOff className="w-3.5 h-3.5 text-slate-500" />
+                    ) : (
+                      <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                    )}
+                    <span>{showSupplierHistoryCards ? 'Ocultar Cards' : 'Exibir Cards'}</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Alerta Amplo caso ainda não tenha Selos/Descontos vinculados nesta filial */}
+              {!supplierOverview.is_ready_for_purchase && (
+                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3 text-xs text-amber-950 dark:text-amber-200">
+                    <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-bold">
+                        Configure os Selos (Editoras) e Descontos deste fornecedor na filial {selectedBranch?.nome}
+                      </p>
+                      <p className="text-xs opacity-90">
+                        Para segurança comercial, vincule ao menos uma editora e seu desconto antes de liberar a digitação do pedido.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {supplierOverview.horus_suggested_publishers.some((s) => s.source === 'EDITORAS_FORNEC') && (
+                      <button
+                        type="button"
+                        disabled={savingSupplierDiscounts}
+                        onClick={handleImportFromHorusEditorasFornec}
+                        className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold cursor-pointer"
+                      >
+                        Importar de EDITORAS_FORNEC
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => {
@@ -1859,938 +2136,1306 @@ export default function HorusDirectComprasPage() {
                         setShowAddPublisherModal(true);
                         searchHorusPublishersForModal('');
                       }}
-                      className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer shrink-0"
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
                     >
-                      <Plus className="w-3.5 h-3.5" />
-                      Vincular Selos / Descontos
+                      + Vincular Selos Agora
                     </button>
                   </div>
+                </div>
+              )}
 
-                  {/* Campos de Cabeçalho Estilo Access */}
-                  <div className="grid grid-cols-2 sm:grid-cols-5 divide-x divide-y sm:divide-y-0 divide-slate-200 dark:divide-slate-800 border-b border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 text-xs">
-                    <div className="p-2">
-                      <span className="block text-[9px] font-black uppercase text-slate-400">CNPJ Fornecedor</span>
-                      <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                        {formatCnpj(supplierOverview.supplier.cnpj)}
+              {/* 4 Cards Executivos Espaçados (Compra, Consignação, Acerto, Devolução — clicáveis!) */}
+              {showSupplierHistoryCards && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                  {/* Card 1: Última Compra */}
+                  <button
+                    type="button"
+                    onClick={() => setDeskHeroTab('ENTRADAS')}
+                    className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs text-left hover:border-emerald-400 transition cursor-pointer flex flex-col justify-between gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-emerald-700 dark:text-emerald-400 flex items-center gap-1.5">
+                        <DollarSign className="w-4 h-4" />
+                        Última Entrada Compra
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-200 font-mono text-[11px] font-bold">
+                        <Calendar className="w-3 h-3" />
+                        {supplierTopMetrics.lastCompra ? formatDateBr(supplierTopMetrics.lastCompra.data_nf) : '—'}
                       </span>
                     </div>
-                    <div className="p-2">
-                      <span className="block text-[9px] font-black uppercase text-slate-400">Grupo / Depto</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200 truncate block">
-                        Grp {supplierOverview.supplier.cod_grp_fornecedor} • {supplierOverview.supplier.nom_grupo || 'Geral'}
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-base font-black font-mono text-slate-900 dark:text-white">
+                        {supplierTopMetrics.lastCompra
+                          ? formatMoney(supplierTopMetrics.lastCompra.vlr_liquido)
+                          : 'R$ 0,00'}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {supplierTopMetrics.lastCompra
+                          ? `${supplierTopMetrics.lastCompra.qtd_exemplares} un • NF ${supplierTopMetrics.lastCompra.nro_nf}`
+                          : `${supplierOverview.history.entradas_compra.length} notas (12m)`}
                       </span>
                     </div>
-                    <div className="p-2">
-                      <span className="block text-[9px] font-black uppercase text-slate-400">Prazo Pagto</span>
-                      <span className="font-bold text-slate-800 dark:text-slate-200">
-                        {supplierOverview.supplier.prazo_pagamentos || 'Padrão'}
+                  </button>
+
+                  {/* Card 2: Consignação na Filial */}
+                  <button
+                    type="button"
+                    onClick={() => setDeskHeroTab('CONSIG_ACERTOS')}
+                    className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs text-left hover:border-indigo-400 transition cursor-pointer flex flex-col justify-between gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-indigo-700 dark:text-indigo-400 flex items-center gap-1.5">
+                        <Package className="w-4 h-4" />
+                        Consignação na Filial
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-800 dark:text-indigo-200 font-mono text-[11px] font-bold">
+                        {supplierOverview.history.consigned_balance_summary.total_skus} tít.
                       </span>
                     </div>
-                    <div className="p-2">
-                      <span className="block text-[9px] font-black uppercase text-slate-400">Fat. Mínimo</span>
-                      <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                        {supplierOverview.supplier.fat_minimo > 0
-                          ? formatMoney(supplierOverview.supplier.fat_minimo)
-                          : '—'}
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-base font-black font-mono text-indigo-700 dark:text-indigo-300">
+                        {supplierOverview.history.consigned_balance_summary.total_units} exemp.
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {supplierTopMetrics.lastConsig
+                          ? `Últ. ${formatDateBr(supplierTopMetrics.lastConsig.data_nf)}`
+                          : 'Sem remessa rec.'}
                       </span>
                     </div>
-                    <div className="p-2 col-span-2 sm:col-span-1">
-                      <span className="block text-[9px] font-black uppercase text-slate-400">Consig. na Filial</span>
-                      <span className="font-mono font-extrabold text-purple-700 dark:text-purple-300">
-                        {supplierOverview.history.consigned_balance_summary.total_units} un ({supplierOverview.history.consigned_balance_summary.total_skus} tít.)
+                  </button>
+
+                  {/* Card 3: Último Acerto */}
+                  <button
+                    type="button"
+                    onClick={() => setDeskHeroTab('CONSIG_ACERTOS')}
+                    className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs text-left hover:border-sky-400 transition cursor-pointer flex flex-col justify-between gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-sky-700 dark:text-sky-400 flex items-center gap-1.5">
+                        <Scale className="w-4 h-4" />
+                        Último Acerto
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-sky-50 dark:bg-sky-950/60 text-sky-800 dark:text-sky-200 font-mono text-[11px] font-bold">
+                        <Calendar className="w-3 h-3" />
+                        {supplierTopMetrics.lastAcerto ? formatDateBr(supplierTopMetrics.lastAcerto.data_nf) : '—'}
                       </span>
                     </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-base font-black font-mono text-slate-900 dark:text-white">
+                        {supplierTopMetrics.lastAcerto
+                          ? formatMoney(supplierTopMetrics.lastAcerto.vlr_liquido)
+                          : 'R$ 0,00'}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {supplierTopMetrics.lastAcerto
+                          ? `${supplierTopMetrics.lastAcerto.qtd_exemplares} un • NF ${supplierTopMetrics.lastAcerto.nro_nf}`
+                          : 'Sem acertos (12m)'}
+                      </span>
+                    </div>
+                  </button>
+
+                  {/* Card 4: Última Devolução */}
+                  <button
+                    type="button"
+                    onClick={() => setDeskHeroTab('DEVOLUCOES_PEDIDOS')}
+                    className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs text-left hover:border-amber-400 transition cursor-pointer flex flex-col justify-between gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-amber-700 dark:text-amber-400 flex items-center gap-1.5">
+                        <RotateCcw className="w-4 h-4" />
+                        Última Devolução
+                      </span>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-50 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 font-mono text-[11px] font-bold">
+                        <Calendar className="w-3 h-3" />
+                        {supplierTopMetrics.lastDevol ? formatDateBr(supplierTopMetrics.lastDevol.data_nf) : '—'}
+                      </span>
+                    </div>
+                    <div className="flex items-baseline justify-between pt-1">
+                      <span className="text-base font-black font-mono text-slate-900 dark:text-white">
+                        {supplierTopMetrics.lastDevol
+                          ? formatMoney(supplierTopMetrics.lastDevol.vlr_liquido)
+                          : 'R$ 0,00'}
+                      </span>
+                      <span className="text-[11px] text-slate-500 font-mono">
+                        {supplierTopMetrics.lastDevol
+                          ? `${supplierTopMetrics.lastDevol.qtd_exemplares} un • NF ${supplierTopMetrics.lastDevol.nro_nf}`
+                          : 'Sem devoluções (12m)'}
+                      </span>
+                    </div>
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 3. GAVETA RETRÁTIL DE IMPORTAÇÃO INTELIGENTE (EXCEL OU TEXTO COLADO) */}
+          {isIntakeDrawerOpen && (
+            <form
+              onSubmit={handleImportSheet}
+              className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-indigo-200 dark:border-indigo-900 shadow-md space-y-4"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-white">
+                  <Sparkles className="w-4 h-4 text-indigo-600" />
+                  <span>Importar Itens do Pedido (ISBN + Quantidade — Máx. 10 MB)</span>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <a
+                    href={`${apiUrl}/horus-purchases/template-sheet`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-bold text-indigo-600 hover:underline flex items-center gap-1"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    Baixar Modelo .xlsx
+                  </a>
+
+                  <div className="inline-flex rounded-xl p-1 bg-slate-100 dark:bg-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setIntakeMode('EXCEL')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        intakeMode === 'EXCEL'
+                          ? 'bg-white dark:bg-slate-900 text-emerald-700 shadow-2xs'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      Planilha (.xlsx / .csv)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIntakeMode('TEXT')}
+                      className={`px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                        intakeMode === 'TEXT'
+                          ? 'bg-white dark:bg-slate-900 text-indigo-700 shadow-2xs'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      Texto / Colar do Excel
+                    </button>
                   </div>
+                </div>
+              </div>
 
-                  {/* Alerta bloqueante caso o fornecedor ainda não tenha selos/descontos na filial */}
-                  {!supplierOverview.is_ready_for_purchase && (
-                    <div className="m-3 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-start gap-2 text-xs text-amber-950 dark:text-amber-200">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div>
-                          <p className="font-extrabold">
-                            Trava Comercial: configure os Selos (Editoras) e Descontos deste fornecedor nesta filial para liberar pedidos.
-                          </p>
-                        </div>
-                      </div>
-                      {supplierOverview.horus_suggested_publishers.some((s) => s.source === 'EDITORAS_FORNEC') && (
-                        <button
-                          type="button"
-                          disabled={savingSupplierDiscounts}
-                          onClick={handleImportFromHorusEditorasFornec}
-                          className="px-2.5 py-1 rounded bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-extrabold whitespace-nowrap cursor-pointer"
-                        >
-                          Importar de EDITORAS_FORNEC
-                        </button>
-                      )}
-                    </div>
-                  )}
+              {intakeMode === 'EXCEL' ? (
+                <div className="border-2 border-dashed border-emerald-200 dark:border-emerald-800 rounded-2xl p-5 text-center bg-emerald-50/30 dark:bg-emerald-950/10">
+                  <input
+                    type="file"
+                    id="compras-sheet-input"
+                    accept=".xlsx,.csv,.txt"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0] || null;
+                      if (f && f.size > MAX_SHEET_BYTES) {
+                        toast.error('O arquivo excede o limite máximo permitido de 10 MB.');
+                        e.target.value = '';
+                        return;
+                      }
+                      setSheetFile(f);
+                    }}
+                  />
+                  <label
+                    htmlFor="compras-sheet-input"
+                    className="cursor-pointer text-xs sm:text-sm text-emerald-700 dark:text-emerald-300 font-bold inline-flex items-center gap-2"
+                  >
+                    <FileSpreadsheet className="w-5 h-5" />
+                    {sheetFile
+                      ? `${sheetFile.name} (Clique para trocar)`
+                      : 'Clique aqui para selecionar a planilha (.xlsx ou .csv)'}
+                  </label>
+                </div>
+              ) : (
+                <textarea
+                  rows={4}
+                  value={sheetPastedText}
+                  onChange={(e) => setSheetPastedText(e.target.value)}
+                  placeholder={'Cole aqui linhas com ISBN e quantidade (ex: 9788535914849   10)...'}
+                  className="w-full rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 p-3 font-mono text-xs focus:outline-none focus:border-indigo-500"
+                />
+              )}
 
-                  {/* Guias de Subfolhas de Dados do Fornecedor */}
-                  <div className="px-3 pt-2 bg-slate-100/70 dark:bg-slate-800/50 flex items-center gap-1 overflow-x-auto border-b border-slate-300/80 dark:border-slate-800 text-[11px]">
-                    {[
-                      { id: 'DISCOUNTS', label: `Selos & Descontos (${supplierOverview.configured_discounts.length})` },
-                      { id: 'ENTRADAS', label: `Últ. Entradas (${supplierOverview.history.entradas_compra.length})` },
-                      { id: 'CONSIG', label: `Consignação (${supplierOverview.history.consignacoes_recebidas.length})` },
-                      { id: 'ACERTOS', label: `Acertos (${supplierOverview.history.acertos_consignacao.length})` },
-                      { id: 'DEVOLUCOES', label: `Devoluções (${supplierOverview.history.devolucoes.length})` },
-                      { id: 'PEDIDOS_HORUS', label: `Pedidos Horus (${supplierOverview.history.pedidos_compra_horus.length})` },
-                    ].map((tb) => (
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-slate-500">
+                  Os itens serão validados com o estoque da filial e com os descontos configurados para o fornecedor.
+                </span>
+                <button
+                  type="submit"
+                  disabled={importingSheet}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50"
+                >
+                  {importingSheet ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+                  Carregar na Grade
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* 4. CONTAINER PRINCIPAL EM LARGURA TOTAL (HERO GRID ESTILO DBM) */}
+          {supplierOverview && (
+            <div
+              className={`bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-xs overflow-hidden flex flex-col ${
+                isGridMaximized ? 'fixed inset-3 z-50 rounded-2xl shadow-2xl border-indigo-500' : 'rounded-2xl'
+              }`}
+            >
+              {/* Barra Superior de Abas do Container Principal */}
+              <div className="px-4 pt-3 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 overflow-x-auto">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {[
+                    {
+                      id: 'PEDIDO',
+                      label: 'Itens do Pedido',
+                      count: cartItems.length,
+                    },
+                    {
+                      id: 'SELOS_DESCONTOS',
+                      label: 'Selos & Descontos',
+                      count: supplierOverview.configured_discounts.length,
+                    },
+                    {
+                      id: 'ENTRADAS',
+                      label: 'Últimas Entradas Compra',
+                      count: supplierOverview.history.entradas_compra.length,
+                    },
+                    {
+                      id: 'CONSIG_ACERTOS',
+                      label: 'Consignação & Acertos',
+                      count:
+                        supplierOverview.history.consignacoes_recebidas.length +
+                        supplierOverview.history.acertos_consignacao.length,
+                    },
+                    {
+                      id: 'DEVOLUCOES_PEDIDOS',
+                      label: 'Devoluções & Pedidos Horus',
+                      count:
+                        supplierOverview.history.devolucoes.length +
+                        supplierOverview.history.pedidos_compra_horus.length,
+                    },
+                  ].map((tb) => {
+                    const active = deskHeroTab === tb.id;
+                    return (
                       <button
                         key={tb.id}
                         type="button"
-                        onClick={() => setSupplierSubTab(tb.id as any)}
-                        className={`px-3 py-1.5 rounded-t-lg font-extrabold border-t border-x whitespace-nowrap transition cursor-pointer ${
-                          supplierSubTab === tb.id
-                            ? 'bg-white dark:bg-slate-900 border-slate-300 dark:border-slate-700 text-indigo-700 dark:text-indigo-300 -mb-px'
-                            : 'bg-transparent border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        onClick={() => setDeskHeroTab(tb.id as DeskHeroSubTab)}
+                        className={`inline-flex items-center gap-2 px-4 py-2.5 text-xs font-bold rounded-t-xl border-t-2 border-x transition-all cursor-pointer ${
+                          active
+                            ? 'bg-white dark:bg-slate-900 border-indigo-600 text-slate-900 dark:text-white border-b-white dark:border-b-slate-900 -mb-px'
+                            : 'bg-transparent border-transparent text-slate-500 hover:text-slate-800 hover:bg-slate-100/70'
                         }`}
                       >
-                        {tb.label}
+                        <span>{tb.label}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-mono font-bold ${
+                            active
+                              ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300'
+                              : 'bg-slate-200/70 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                          }`}
+                        >
+                          {tb.count}
+                        </span>
                       </button>
-                    ))}
-                  </div>
-
-                  {/* Conteúdo da Subfolha Ativa */}
-                  <div className="p-3">
-                    {supplierSubTab === 'DISCOUNTS' && (
-                      <div className="space-y-2.5">
-                        {supplierOverview.configured_discounts.length > 0 ? (
-                          <div className="overflow-x-auto rounded-lg border border-slate-300/90 dark:border-slate-800">
-                            <table className="w-full text-left text-xs border-collapse">
-                              <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
-                                <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                                  <th className="py-1.5 px-2.5 w-24">Cód. Editora</th>
-                                  <th className="py-1.5 px-2.5">Editora / Selo</th>
-                                  <th className="py-1.5 px-2.5 w-40">CNPJ Fornecedor</th>
-                                  <th className="py-1.5 px-2.5 w-32 text-right">Desconto (%)</th>
-                                  <th className="py-1.5 px-2.5 w-36">Atualizado por</th>
-                                  <th className="py-1.5 px-2.5 w-16 text-center">Ação</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-semibold">
-                                {supplierOverview.configured_discounts.map((d, idx) => (
-                                  <tr
-                                    key={d.id}
-                                    className={`divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                                      idx % 2 === 0 ? 'bg-white dark:bg-slate-900' : 'bg-slate-50/50 dark:bg-slate-800/20'
-                                    }`}
-                                  >
-                                    <td className="py-1.5 px-2.5 font-mono font-bold">#{d.cod_editora}</td>
-                                    <td className="py-1.5 px-2.5 font-extrabold text-slate-900 dark:text-white">
-                                      {d.nome_editora}
-                                    </td>
-                                    <td className="py-1.5 px-2.5 font-mono text-[11px] text-slate-500">
-                                      {formatCnpj(d.cnpj_fornecedor)}
-                                    </td>
-                                    <td className="py-1.5 px-2.5 text-right">
-                                      {editingDiscountId === d.id ? (
-                                        <div className="inline-flex items-center gap-1 justify-end">
-                                          <CurrencyInput
-                                            value={editingDiscountPct}
-                                            onChangeValue={(val) => setEditingDiscountPct(val)}
-                                            suffixStr="%"
-                                            max={100}
-                                            className="w-22 text-right px-2 py-0.5 rounded border border-indigo-500 bg-white dark:bg-slate-800 font-mono text-xs font-extrabold"
-                                          />
-                                          <button
-                                            type="button"
-                                            onClick={() => handleUpdateSingleDiscount(d, editingDiscountPct)}
-                                            className="p-1 rounded bg-emerald-600 text-white cursor-pointer"
-                                          >
-                                            <Check className="w-3 h-3" />
-                                          </button>
-                                          <button
-                                            type="button"
-                                            onClick={() => setEditingDiscountId(null)}
-                                            className="p-1 rounded bg-slate-200 text-slate-700 cursor-pointer"
-                                          >
-                                            <X className="w-3 h-3" />
-                                          </button>
-                                        </div>
-                                      ) : (
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setEditingDiscountId(d.id);
-                                            setEditingDiscountPct(d.desconto_percentual);
-                                          }}
-                                          className="px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-extrabold hover:border-emerald-400 cursor-pointer"
-                                          title="Clique para editar desconto (%)"
-                                        >
-                                          {d.desconto_percentual.toFixed(2)}% ✎
-                                        </button>
-                                      )}
-                                    </td>
-                                    <td className="py-1.5 px-2.5 text-[11px] text-slate-500 truncate">
-                                      {d.updated_by_name || '—'}
-                                    </td>
-                                    <td className="py-1.5 px-2.5 text-center">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleDeleteDiscount(d.id)}
-                                        className="p-1 text-rose-500 hover:bg-rose-50 rounded cursor-pointer"
-                                        title="Remover vínculo"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <p className="text-xs text-slate-500 py-1">
-                            Nenhum selo/editora vinculado ainda para este fornecedor nesta filial.
-                          </p>
-                        )}
-
-                        {supplierOverview.horus_suggested_publishers.some((s) => !s.already_configured) && (
-                          <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
-                            <p className="text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1.5">
-                              Editoras detectadas no histórico deste fornecedor no Horus (clique para vincular rápido):
-                            </p>
-                            <div className="flex flex-wrap gap-1.5">
-                              {supplierOverview.horus_suggested_publishers
-                                .filter((s) => !s.already_configured)
-                                .slice(0, 14)
-                                .map((sug) => (
-                                  <button
-                                    key={sug.cod_editora}
-                                    type="button"
-                                    onClick={() => {
-                                      setSelectedPubsForSupplier({
-                                        [sug.cod_editora]: {
-                                          cod_editora: sug.cod_editora,
-                                          nome_editora: sug.nome_editora,
-                                        },
-                                      });
-                                      if (sug.horus_discount > 0) setBatchDiscountPct(sug.horus_discount);
-                                      setShowAddPublisherModal(true);
-                                      searchHorusPublishersForModal('');
-                                    }}
-                                    className="px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-[11px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer flex items-center gap-1"
-                                  >
-                                    <Plus className="w-3 h-3 text-indigo-600" />
-                                    #{sug.cod_editora} {sug.nome_editora}
-                                    {sug.horus_discount > 0 && (
-                                      <span className="text-emerald-600 font-mono">({sug.horus_discount}%)</span>
-                                    )}
-                                  </button>
-                                ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {(supplierSubTab === 'ENTRADAS' ||
-                      supplierSubTab === 'CONSIG' ||
-                      supplierSubTab === 'ACERTOS' ||
-                      supplierSubTab === 'DEVOLUCOES') && (
-                      <div className="overflow-x-auto rounded-lg border border-slate-300/90 dark:border-slate-800 max-h-56">
-                        {(() => {
-                          const rows =
-                            supplierSubTab === 'ENTRADAS'
-                              ? supplierOverview.history.entradas_compra
-                              : supplierSubTab === 'CONSIG'
-                              ? supplierOverview.history.consignacoes_recebidas
-                              : supplierSubTab === 'ACERTOS'
-                              ? supplierOverview.history.acertos_consignacao
-                              : supplierOverview.history.devolucoes;
-                          if (!rows.length) {
-                            return (
-                              <div className="p-5 text-center text-xs text-slate-500">
-                                Nenhum registro nos últimos 12 meses nesta filial.
-                              </div>
-                            );
-                          }
-                          return (
-                            <table className="w-full text-left text-xs border-collapse">
-                              <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 sticky top-0 border-b border-slate-300">
-                                <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                                  <th className="py-1.5 px-2.5">Nº NF</th>
-                                  <th className="py-1.5 px-2.5">Emissão / Recepção</th>
-                                  <th className="py-1.5 px-2.5">CFOP</th>
-                                  <th className="py-1.5 px-2.5 text-right">Títulos</th>
-                                  <th className="py-1.5 px-2.5 text-right">Exemplares</th>
-                                  <th className="py-1.5 px-2.5 text-right">Valor Líquido</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-mono font-bold">
-                                {rows.map((nf) => (
-                                  <tr key={`${nf.cod_nf}-${nf.nro_nf}`} className="divide-x divide-slate-200/60 dark:divide-slate-800 hover:bg-slate-50">
-                                    <td className="py-1 px-2.5">{nf.nro_nf}</td>
-                                    <td className="py-1 px-2.5">{formatDateBr(nf.data_nf)}</td>
-                                    <td className="py-1 px-2.5">
-                                      {nf.cfop} {nf.tipo ? `• ${nf.tipo}` : ''}
-                                    </td>
-                                    <td className="py-1 px-2.5 text-right">{nf.qtd_skus}</td>
-                                    <td className="py-1 px-2.5 text-right">{nf.qtd_exemplares}</td>
-                                    <td className="py-1 px-2.5 text-right text-slate-900 dark:text-white">
-                                      {formatMoney(nf.vlr_liquido)}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          );
-                        })()}
-                      </div>
-                    )}
-
-                    {supplierSubTab === 'PEDIDOS_HORUS' && (
-                      <div className="overflow-x-auto rounded-lg border border-slate-300/90 dark:border-slate-800 max-h-56">
-                        {supplierOverview.history.pedidos_compra_horus.length === 0 ? (
-                          <div className="p-5 text-center text-xs text-slate-500">
-                            Nenhum pedido anterior em PEDIDOS_COMPRA para este fornecedor nesta filial.
-                          </div>
-                        ) : (
-                          <table className="w-full text-left text-xs border-collapse">
-                            <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 sticky top-0 border-b border-slate-300">
-                              <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                                <th className="py-1.5 px-2.5">Pedido #</th>
-                                <th className="py-1.5 px-2.5">Data</th>
-                                <th className="py-1.5 px-2.5">Status Horus</th>
-                                <th className="py-1.5 px-2.5 text-right">Exemplares</th>
-                                <th className="py-1.5 px-2.5 text-right">Desc. Médio</th>
-                                <th className="py-1.5 px-2.5 text-right">Líquido</th>
-                                <th className="py-1.5 px-2.5">Comprador</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-mono font-bold">
-                              {supplierOverview.history.pedidos_compra_horus.map((pc) => (
-                                <tr key={pc.cod_pedido} className="divide-x divide-slate-200/60 dark:divide-slate-800">
-                                  <td className="py-1 px-2.5 text-indigo-700 dark:text-indigo-300">#{pc.cod_pedido}</td>
-                                  <td className="py-1 px-2.5">{formatDateBr(pc.dat_pedido)}</td>
-                                  <td className="py-1 px-2.5 font-sans">{pc.status_label}</td>
-                                  <td className="py-1 px-2.5 text-right">{pc.qtd_itens}</td>
-                                  <td className="py-1 px-2.5 text-right">{pc.per_desconto.toFixed(1)}%</td>
-                                  <td className="py-1 px-2.5 text-right">{formatMoney(pc.vlr_liquido)}</td>
-                                  <td className="py-1 px-2.5 font-sans text-slate-500">{pc.nom_usuario}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                    );
+                  })}
                 </div>
 
-                {/* SUBFORMULÁRIO DE DIGITAÇÃO & FOLHA DE DADOS DO PEDIDO DE COMPRA */}
-                {supplierOverview.is_ready_for_purchase && (
-                  <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 overflow-hidden shadow-2xs">
-                    <div className="px-3.5 py-2 bg-slate-100/95 dark:bg-slate-800/80 border-b border-slate-300/80 dark:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-600 text-white font-mono text-[10px] font-black">
-                          SUBFORMULÁRIO
-                        </span>
-                        <h3 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                          Itens do Pedido de Compra ({selectedBranch?.nome})
-                        </h3>
-                      </div>
+                <button
+                  type="button"
+                  onClick={() => setIsGridMaximized(!isGridMaximized)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 mb-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 shrink-0 cursor-pointer"
+                >
+                  {isGridMaximized ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
+                  <span className="hidden sm:inline">{isGridMaximized ? 'Sair Tela Cheia' : 'Tela Cheia'}</span>
+                </button>
+              </div>
 
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        {Object.values(checkedCartCods).some(Boolean) && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const targets = cartItems.filter((c) => checkedCartCods[c.cod_item]);
-                              openCartReconcileModal(targets);
-                            }}
-                            className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-extrabold flex items-center gap-1 cursor-pointer"
-                          >
-                            <DatabaseZap className="w-3.5 h-3.5" />
-                            Conciliar Editora ({Object.values(checkedCartCods).filter(Boolean).length})
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setShowSheetModal(true)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-900 dark:bg-slate-700 hover:bg-slate-800 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          Importar Planilha (ISBN + Qtd)
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Linha Rápida de Inserção por ISBN / Título */}
-                    <form
-                      onSubmit={handleLookupItems}
-                      className="p-2.5 bg-slate-50/80 dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-12 gap-2"
-                    >
-                      <div className="sm:col-span-8">
+              {/* ABA HERO 1: GRADE AMPLA DE ITENS DO PEDIDO */}
+              {deskHeroTab === 'PEDIDO' && (
+                <div className="flex-1 flex flex-col">
+                  {/* Toolbar de Inserção Rápida de Item + Filtro da Grade + Colunas */}
+                  <div className="p-4 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                    {/* Inserir Item por ISBN / Título */}
+                    <form onSubmit={handleLookupItems} className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 max-w-2xl">
+                      <div className="relative flex-1 min-w-[220px]">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                         <input
                           type="text"
                           value={itemSearchTerm}
                           onChange={(e) => setItemSearchTerm(e.target.value)}
-                          placeholder="Bipe o ISBN, digite o Cód. Horus ou Título do Livro e pressione Enter..."
-                          className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                          placeholder="Adicionar item: digite ou bipe ISBN, código Horus ou título..."
+                          className="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-medium focus:bg-white focus:border-indigo-500 focus:outline-none"
                         />
                       </div>
-                      <div className="sm:col-span-2">
-                        <input
-                          type="number"
-                          min={1}
-                          value={itemSearchDefaultQty}
-                          onChange={(e) => setItemSearchDefaultQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                          title="Quantidade padrão ao inserir"
-                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-extrabold text-right"
-                        />
-                      </div>
-                      <div className="sm:col-span-2">
-                        <button
-                          type="submit"
-                          disabled={searchingItems}
-                          className="w-full py-1.5 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          {searchingItems ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
-                          Inserir
-                        </button>
-                      </div>
+                      <input
+                        type="number"
+                        min={1}
+                        value={itemSearchDefaultQty}
+                        onChange={(e) => setItemSearchDefaultQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                        title="Quantidade ao adicionar"
+                        className="w-20 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 text-xs font-mono font-bold text-right"
+                      />
+                      <button
+                        type="submit"
+                        disabled={searchingItems}
+                        className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        {searchingItems ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-4 h-4" />}
+                        Adicionar
+                      </button>
                     </form>
 
-                    {/* Seletor de Múltiplos Resultados da Busca */}
-                    {itemLookupResults.length > 0 && (
-                      <div className="m-2.5 border border-indigo-300 dark:border-indigo-900 rounded-lg bg-indigo-50/40 dark:bg-indigo-950/20 overflow-hidden">
-                        <div className="px-3 py-1.5 bg-indigo-100/80 dark:bg-indigo-950/60 flex items-center justify-between text-xs font-extrabold text-indigo-900 dark:text-indigo-200">
-                          <span>Resultados no Acervo Horus ({itemLookupResults.length}) — Clique para lançar na folha:</span>
-                          <button
-                            type="button"
-                            onClick={() => setItemLookupResults([])}
-                            className="text-slate-600 hover:text-slate-900 cursor-pointer"
-                          >
-                            ✕ Fechar
-                          </button>
-                        </div>
-                        <div className="max-h-52 overflow-y-auto divide-y divide-indigo-100 dark:divide-indigo-900/50 text-xs">
-                          {itemLookupResults.map((resIt) => (
-                            <div
-                              key={resIt.cod_item}
-                              className="px-3 py-1.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-white dark:hover:bg-slate-900"
-                            >
-                              <div className="min-w-0">
-                                <div className="font-extrabold text-slate-900 dark:text-white truncate">
-                                  <span className="font-mono text-[11px] text-slate-500 mr-1.5">
-                                    [{resIt.isbn || resIt.cod_item}]
-                                  </span>
-                                  {resIt.nome_item}
-                                </div>
-                                <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-600 dark:text-slate-400">
-                                  <span>
-                                    Selo:{' '}
-                                    <strong className={resIt.publisher_configured ? 'text-emerald-700' : 'text-amber-700'}>
-                                      {resIt.nome_editora}
-                                    </strong>
-                                  </span>
-                                  <span>Saldo Filial: <strong className="font-mono">{resIt.stock_available}</strong></span>
-                                  <span>Consig.: <strong className="font-mono">{resIt.consigned_received}</strong></span>
-                                  <span>VDS 90d: <strong className="font-mono">{resIt.sales_90}</strong></span>
-                                  <span>Capa: <strong className="font-mono">{formatMoney(resIt.vlr_capa)}</strong></span>
-                                  <span>
-                                    Desc.:{' '}
-                                    <strong className={resIt.publisher_configured ? 'text-emerald-700 font-mono' : 'text-rose-600'}>
-                                      {resIt.publisher_configured ? `${resIt.discount_pct.toFixed(2)}%` : 'Sem vínculo'}
-                                    </strong>
-                                  </span>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  addOrMergeItemToCart(resIt, Math.max(1, itemSearchDefaultQty));
-                                  toast.success(`'${resIt.nome_item}' lançado na folha.`);
-                                }}
-                                className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold text-xs shrink-0 cursor-pointer"
-                              >
-                                + Lançar ({itemSearchDefaultQty})
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
+                    {/* Direita: Filtrar itens já lançados + Conciliar Editora em Lote + Colunas */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {Object.values(checkedCartCods).some(Boolean) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const targets = cartItems.filter((c) => checkedCartCods[c.cod_item]);
+                            openCartReconcileModal(targets);
+                          }}
+                          className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <DatabaseZap className="w-3.5 h-3.5" />
+                          Conciliar Editora ({Object.values(checkedCartCods).filter(Boolean).length})
+                        </button>
+                      )}
 
-                    {lastNotFoundIsbns.length > 0 && (
-                      <div className="mx-2.5 my-2 p-2 rounded-lg bg-rose-50 border border-rose-300 text-xs text-rose-900 flex items-start justify-between gap-2">
-                        <div>
-                          <strong>ISBNs ausentes em ITENS_ESTOQUE_GERAL no Horus ({lastNotFoundIsbns.length}):</strong>{' '}
-                          <span className="font-mono">{lastNotFoundIsbns.slice(0, 12).join(', ')}</span>
-                          {lastNotFoundIsbns.length > 12 && '...'}
-                        </div>
-                        <button type="button" onClick={() => setLastNotFoundIsbns([])} className="font-bold cursor-pointer">
-                          ✕
+                      <div className="relative">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={gridFilterTerm}
+                          onChange={(e) => setGridFilterTerm(e.target.value)}
+                          placeholder="Filtrar na grade..."
+                          className="w-44 pl-8 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
+                        />
+                      </div>
+
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs">
+                        <Columns3 className="w-3.5 h-3.5 text-slate-400" />
+                        <button
+                          type="button"
+                          onClick={() => setShowColIsbn(!showColIsbn)}
+                          className={`px-2 py-0.5 rounded-lg font-semibold cursor-pointer ${
+                            showColIsbn ? 'bg-slate-900 text-white dark:bg-indigo-600' : 'text-slate-400 line-through'
+                          }`}
+                        >
+                          ISBN
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowColSaldos(!showColSaldos)}
+                          className={`px-2 py-0.5 rounded-lg font-semibold cursor-pointer ${
+                            showColSaldos ? 'bg-slate-900 text-white dark:bg-indigo-600' : 'text-slate-400 line-through'
+                          }`}
+                        >
+                          Saldos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowColPrices(!showColPrices)}
+                          className={`px-2 py-0.5 rounded-lg font-semibold cursor-pointer ${
+                            showColPrices ? 'bg-slate-900 text-white dark:bg-indigo-600' : 'text-slate-400 line-through'
+                          }`}
+                        >
+                          Desconto
                         </button>
                       </div>
-                    )}
+                    </div>
+                  </div>
 
-                    {/* Folha de Dados dos Itens do Pedido */}
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left text-xs min-w-[980px] border-collapse">
-                        <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 border-y border-slate-300 dark:border-slate-700">
-                          <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                            <th className="w-6 py-2 text-center">▶</th>
-                            <th className="py-2 px-2 w-8 text-center">
-                              <input
-                                type="checkbox"
-                                checked={
-                                  cartItems.length > 0 &&
-                                  cartItems.every((c) => Boolean(checkedCartCods[c.cod_item]))
+                  {/* Resultados de Pesquisa Múltipla no Acervo */}
+                  {itemLookupResults.length > 0 && (
+                    <div className="mx-4 mt-3 border border-indigo-200 dark:border-indigo-900 rounded-2xl bg-indigo-50/40 dark:bg-indigo-950/20 overflow-hidden">
+                      <div className="px-4 py-2.5 bg-indigo-100/70 dark:bg-indigo-950/60 flex items-center justify-between text-xs font-bold text-indigo-950 dark:text-indigo-200">
+                        <span>Itens encontrados no Horus ({itemLookupResults.length}) — Clique para incluir:</span>
+                        <button
+                          type="button"
+                          onClick={() => setItemLookupResults([])}
+                          className="text-slate-500 hover:text-slate-800 cursor-pointer"
+                        >
+                          ✕ Fechar
+                        </button>
+                      </div>
+                      <div className="max-h-60 overflow-y-auto divide-y divide-indigo-100 dark:divide-indigo-900/40 text-xs">
+                        {itemLookupResults.map((resIt) => (
+                          <div
+                            key={resIt.cod_item}
+                            className="px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-white dark:hover:bg-slate-900"
+                          >
+                            <div className="min-w-0 space-y-0.5">
+                              <div className="font-bold text-slate-900 dark:text-white truncate">
+                                <span className="font-mono text-slate-500 mr-2">[{resIt.isbn || resIt.cod_item}]</span>
+                                {resIt.nome_item}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-600 dark:text-slate-400">
+                                <span>
+                                  Editora:{' '}
+                                  <strong className={resIt.publisher_configured ? 'text-emerald-700' : 'text-amber-700'}>
+                                    {resIt.nome_editora}
+                                  </strong>
+                                </span>
+                                <span>Saldo Filial: <strong className="font-mono">{resIt.stock_available}</strong></span>
+                                <span>Consig. Rec.: <strong className="font-mono">{resIt.consigned_received}</strong></span>
+                                <span>Vendas 90d: <strong className="font-mono">{resIt.sales_90}</strong></span>
+                                <span>Capa: <strong className="font-mono">{formatMoney(resIt.vlr_capa)}</strong></span>
+                                <span>
+                                  Desconto:{' '}
+                                  <strong className={resIt.publisher_configured ? 'text-emerald-700 font-mono' : 'text-rose-600'}>
+                                    {resIt.publisher_configured ? `${resIt.discount_pct.toFixed(2)}%` : 'Não vinculado'}
+                                  </strong>
+                                </span>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                addOrMergeItemToCart(resIt, Math.max(1, itemSearchDefaultQty));
+                                toast.success(`'${resIt.nome_item}' adicionado.`);
+                              }}
+                              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shrink-0 cursor-pointer"
+                            >
+                              + Incluir ({itemSearchDefaultQty})
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {lastNotFoundIsbns.length > 0 && (
+                    <div className="mx-4 mt-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-900 flex items-center justify-between gap-2">
+                      <div>
+                        <strong>ISBNs não localizados no Horus ({lastNotFoundIsbns.length}):</strong>{' '}
+                        <span className="font-mono">{lastNotFoundIsbns.slice(0, 12).join(', ')}</span>
+                      </div>
+                      <button type="button" onClick={() => setLastNotFoundIsbns([])} className="font-bold cursor-pointer">
+                        ✕
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Tabela Principal Espaçada em 100% da Largura */}
+                  <div className="overflow-x-auto flex-1">
+                    <table className="w-full text-left text-xs min-w-[1020px]">
+                      <thead className="bg-slate-50 dark:bg-slate-800/70 text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="py-3 px-3 w-10 text-center">
+                            <input
+                              type="checkbox"
+                              checked={
+                                visibleCartItems.length > 0 &&
+                                visibleCartItems.every((c) => Boolean(checkedCartCods[c.cod_item]))
+                              }
+                              onChange={(e) => {
+                                const next: Record<number, boolean> = {};
+                                if (e.target.checked) {
+                                  visibleCartItems.forEach((c) => {
+                                    next[c.cod_item] = true;
+                                  });
                                 }
-                                onChange={(e) => {
-                                  const next: Record<number, boolean> = {};
-                                  if (e.target.checked) {
-                                    cartItems.forEach((c) => {
-                                      next[c.cod_item] = true;
-                                    });
-                                  }
-                                  setCheckedCartCods(next);
-                                }}
-                                className="rounded border-slate-300 text-indigo-600 cursor-pointer"
-                              />
-                            </th>
-                            <th className="py-2 px-2">ISBN / Cód.</th>
-                            <th className="py-2 px-2">Título do Item</th>
-                            <th className="py-2 px-2">Editora / Selo (Horus)</th>
-                            <th className="py-2 px-2 text-right">Saldo / Mín</th>
-                            <th className="py-2 px-2 text-right">Consig / V90d</th>
-                            <th className="py-2 px-2 text-right w-22">Qtd.</th>
-                            <th className="py-2 px-2 text-right">Capa</th>
-                            <th className="py-2 px-2 text-right">Desc.</th>
-                            <th className="py-2 px-2 text-right">Líq. Unit.</th>
-                            <th className="py-2 px-2 text-right">Subtotal Líq.</th>
-                            <th className="py-2 px-2 text-center w-10">Exc.</th>
+                                setCheckedCartCods(next);
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 cursor-pointer"
+                            />
+                          </th>
+                          {showColIsbn && <th className="py-3 px-3.5 w-36">ISBN / Cód.</th>}
+                          <th className="py-3 px-3.5">Título do Livro</th>
+                          <th className="py-3 px-3.5 w-60">Editora / Selo (Horus)</th>
+                          {showColSaldos && (
+                            <>
+                              <th className="py-3 px-3.5 w-28 text-right">Saldo / Mín</th>
+                              <th className="py-3 px-3.5 w-32 text-right">Consig / Vds 90d</th>
+                            </>
+                          )}
+                          <th className="py-3 px-3.5 w-28 text-right">Quantidade</th>
+                          {showColPrices && (
+                            <>
+                              <th className="py-3 px-3.5 w-28 text-right">Capa</th>
+                              <th className="py-3 px-3.5 w-28 text-right">Desc. (%)</th>
+                              <th className="py-3 px-3.5 w-28 text-right">Líq. Unit.</th>
+                            </>
+                          )}
+                          <th className="py-3 px-3.5 w-32 text-right">Subtotal Líq.</th>
+                          <th className="py-3 px-3 w-12 text-center"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                        {visibleCartItems.length === 0 ? (
+                          <tr>
+                            <td colSpan={12} className="py-16 text-center text-slate-400 space-y-2">
+                              <Package className="w-8 h-8 mx-auto opacity-30" />
+                              <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                                Nenhum item na grade do pedido ainda.
+                              </div>
+                              <div className="text-xs text-slate-400">
+                                Pesquise por ISBN/título na barra acima ou clique em <strong>Importar Planilha / Lista</strong>.
+                              </div>
+                            </td>
+                          </tr>
+                        ) : (
+                          visibleCartItems.map((it, idx) => {
+                            const hasWarning = !it.publisher_configured || it.vlr_capa <= 0;
+                            return (
+                              <tr
+                                key={it.cod_item}
+                                onClick={() => setSelectedCartIndex(idx)}
+                                className={`transition-colors ${
+                                  hasWarning
+                                    ? 'bg-amber-50/70 dark:bg-amber-950/25'
+                                    : selectedCartIndex === idx
+                                    ? 'bg-indigo-50/50 dark:bg-indigo-950/30'
+                                    : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                                }`}
+                              >
+                                <td className="py-3 px-3 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={Boolean(checkedCartCods[it.cod_item])}
+                                    onChange={(e) =>
+                                      setCheckedCartCods((prev) => ({
+                                        ...prev,
+                                        [it.cod_item]: e.target.checked,
+                                      }))
+                                    }
+                                    className="rounded border-slate-300 text-indigo-600 cursor-pointer"
+                                  />
+                                </td>
+                                {showColIsbn && (
+                                  <td className="py-3 px-3.5 font-mono">
+                                    <div className="font-bold text-slate-900 dark:text-white">{it.isbn || '—'}</div>
+                                    <div className="text-[11px] text-slate-400">#{it.cod_item}</div>
+                                  </td>
+                                )}
+                                <td className="py-3 px-3.5">
+                                  <div className="font-bold text-slate-900 dark:text-white">{it.nome_item}</div>
+                                  {it.last_entry_date && (
+                                    <div className="text-[11px] text-slate-500 mt-0.5">
+                                      Últ. {it.last_entry_type}: {formatDateBr(it.last_entry_date)} ({it.last_entry_qty} un)
+                                    </div>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3.5">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span
+                                      className={`font-semibold truncate ${
+                                        it.publisher_configured
+                                          ? 'text-slate-700 dark:text-slate-200'
+                                          : 'text-amber-800 dark:text-amber-300 font-bold'
+                                      }`}
+                                    >
+                                      {it.nome_editora}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => openCartReconcileModal([it])}
+                                      className="px-2 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-indigo-600 hover:text-white text-[11px] font-semibold shrink-0 cursor-pointer transition"
+                                      title="Alterar Editora/Selo no Horus e no Cronuz"
+                                    >
+                                      Ajustar Selo
+                                    </button>
+                                  </div>
+                                  {!it.publisher_configured && it.cod_editora && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedPubsForSupplier({
+                                          [it.cod_editora!]: {
+                                            cod_editora: it.cod_editora!,
+                                            nome_editora: it.nome_editora,
+                                          },
+                                        });
+                                        setShowAddPublisherModal(true);
+                                        searchHorusPublishersForModal(it.nome_editora);
+                                      }}
+                                      className="mt-1.5 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-600 text-white text-[10px] font-bold cursor-pointer"
+                                    >
+                                      + Vincular Desconto desta Editora
+                                    </button>
+                                  )}
+                                </td>
+                                {showColSaldos && (
+                                  <>
+                                    <td className="py-3 px-3.5 text-right font-mono">
+                                      <span
+                                        className={
+                                          it.stock_available <= 0
+                                            ? 'text-rose-600 font-bold'
+                                            : 'text-emerald-700 dark:text-emerald-400 font-bold'
+                                        }
+                                      >
+                                        {it.stock_available}
+                                      </span>
+                                      <span className="text-slate-400"> / {it.min_stock || '—'}</span>
+                                    </td>
+                                    <td className="py-3 px-3.5 text-right font-mono">
+                                      <span className="text-indigo-700 dark:text-indigo-300 font-semibold">
+                                        {it.consigned_received}
+                                      </span>
+                                      <span className="text-slate-400"> / {it.sales_90}</span>
+                                    </td>
+                                  </>
+                                )}
+                                <td className="py-3 px-3.5 text-right">
+                                  <input
+                                    id={`compras-qty-${idx}`}
+                                    type="number"
+                                    min={1}
+                                    value={it.quantity}
+                                    onKeyDown={(ev) => handleQtyKeyDown(ev, idx, visibleCartItems.length)}
+                                    onChange={(e) =>
+                                      updateCartItemQty(it.cod_item, parseInt(e.target.value, 10) || 1)
+                                    }
+                                    className="w-20 px-2.5 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-right font-mono font-bold focus:border-indigo-500 focus:outline-none"
+                                  />
+                                </td>
+                                {showColPrices && (
+                                  <>
+                                    <td className="py-3 px-3.5 text-right font-mono">{formatMoney(it.vlr_capa)}</td>
+                                    <td className="py-3 px-3.5 text-right font-mono">
+                                      {it.publisher_configured ? (
+                                        <span className="text-emerald-700 dark:text-emerald-400 font-bold">
+                                          {it.discount_pct.toFixed(2)}%
+                                        </span>
+                                      ) : (
+                                        <span className="text-rose-600 font-bold">Pendente</span>
+                                      )}
+                                    </td>
+                                    <td className="py-3 px-3.5 text-right font-mono">
+                                      {formatMoney(it.unit_net_price)}
+                                    </td>
+                                  </>
+                                )}
+                                <td className="py-3 px-3.5 text-right font-mono font-bold text-slate-900 dark:text-white">
+                                  {formatMoney(it.subtotal_net)}
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setCartItems((prev) => prev.filter((x) => x.cod_item !== it.cod_item))
+                                    }
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Rodapé Espaçado de Fechamento & Modalidade do Pedido */}
+                  <div className="p-4 bg-slate-50/90 dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-center">
+                      <div className="lg:col-span-3">
+                        <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                          Modalidade no Horus
+                        </label>
+                        <select
+                          value={compraConsig}
+                          onChange={(e) => setCompraConsig(e.target.value === 'S' ? 'S' : 'N')}
+                          className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
+                        >
+                          <option value="N">Compra Firme (N)</option>
+                          <option value="S">Consignação (S)</option>
+                        </select>
+                      </div>
+                      <div className="lg:col-span-9">
+                        <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                          Observações do Pedido (enviadas em CAIXA ALTA para OBS_PEDIDO_COMPRA no Horus)
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={250}
+                          value={orderObservations}
+                          onChange={(e) => setOrderObservations(e.target.value)}
+                          placeholder="Ex: REPOSIÇÃO LOJA - VALIDAR XML ANTES DA ENTREGA..."
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-medium uppercase"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-200/80 dark:border-slate-800 flex flex-wrap items-center justify-between gap-4 text-xs">
+                      <div className="flex items-center gap-2 font-mono text-slate-500">
+                        <span>
+                          Itens na grade: <strong className="text-slate-900 dark:text-white">{cartSummary.skus}</strong>
+                        </span>
+                        <span>•</span>
+                        <span>
+                          Exemplares: <strong className="text-slate-900 dark:text-white">{cartSummary.totalQty}</strong>
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-6">
+                        <div>
+                          <span className="text-slate-500 mr-1.5">Total Bruto:</span>
+                          <strong className="font-mono text-slate-800 dark:text-slate-200">
+                            {formatMoney(cartSummary.gross)}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 mr-1.5">Desconto Médio:</span>
+                          <strong className="font-mono text-emerald-700 dark:text-emerald-400">
+                            {cartSummary.avgDisc.toFixed(2)}%
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 mr-1.5">Total Líquido:</span>
+                          <strong className="font-mono text-base font-black text-indigo-700 dark:text-indigo-300">
+                            {formatMoney(cartSummary.net)}
+                          </strong>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ABA HERO 2: SELOS & DESCONTOS DO FORNECEDOR EM LARGURA TOTAL */}
+              {deskHeroTab === 'SELOS_DESCONTOS' && (
+                <div className="p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                        Selos (Editoras) &amp; Descontos Comerciais na Filial {selectedBranch?.nome}
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Clique no percentual para editar rapidamente ou vincule novos selos do cadastro oficial do Horus.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedPubsForSupplier({});
+                        setPubSearchTerm('');
+                        setShowAddPublisherModal(true);
+                        searchHorusPublishersForModal('');
+                      }}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Vincular Selos em Lote
+                    </button>
+                  </div>
+
+                  {supplierOverview.configured_discounts.length > 0 ? (
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800/70 text-[11px] font-bold uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                          <tr>
+                            <th className="py-3 px-4 w-28">Cód. Horus</th>
+                            <th className="py-3 px-4">Editora / Selo</th>
+                            <th className="py-3 px-4 w-48">CNPJ Fornecedor</th>
+                            <th className="py-3 px-4 w-40 text-right">Desconto (%)</th>
+                            <th className="py-3 px-4 w-48">Atualizado por</th>
+                            <th className="py-3 px-4 w-20 text-right">Remover</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-semibold">
-                          {cartItems.length === 0 ? (
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {supplierOverview.configured_discounts.map((d) => (
+                            <tr key={d.id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40">
+                              <td className="py-3 px-4 font-mono font-bold text-slate-600">#{d.cod_editora}</td>
+                              <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{d.nome_editora}</td>
+                              <td className="py-3 px-4 font-mono text-slate-500">{formatCnpj(d.cnpj_fornecedor)}</td>
+                              <td className="py-3 px-4 text-right">
+                                {editingDiscountId === d.id ? (
+                                  <div className="inline-flex items-center gap-1.5 justify-end">
+                                    <CurrencyInput
+                                      value={editingDiscountPct}
+                                      onChangeValue={(val) => setEditingDiscountPct(val)}
+                                      suffixStr="%"
+                                      max={100}
+                                      className="w-24 text-right px-2.5 py-1 rounded-xl border border-indigo-500 bg-white dark:bg-slate-800 font-mono text-xs font-bold"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateSingleDiscount(d, editingDiscountPct)}
+                                      className="p-1.5 rounded-lg bg-emerald-600 text-white cursor-pointer"
+                                    >
+                                      <Check className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingDiscountId(null)}
+                                      className="p-1.5 rounded-lg bg-slate-200 text-slate-700 cursor-pointer"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingDiscountId(d.id);
+                                      setEditingDiscountPct(d.desconto_percentual);
+                                    }}
+                                    className="px-3 py-1 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono font-bold hover:border-emerald-400 cursor-pointer"
+                                  >
+                                    {d.desconto_percentual.toFixed(2)}% ✎
+                                  </button>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-slate-500">{d.updated_by_name || '—'}</td>
+                              <td className="py-3 px-4 text-right">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteDiscount(d.id)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="p-8 text-center rounded-2xl border border-dashed border-slate-200 text-xs text-slate-500">
+                      Nenhuma editora configurada ainda para este fornecedor nesta filial.
+                    </div>
+                  )}
+
+                  {supplierOverview.horus_suggested_publishers.some((s) => !s.already_configured) && (
+                    <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800 space-y-2.5">
+                      <p className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                        Sugestões detectadas nas notas e cadastros deste fornecedor no Horus (clique para vincular):
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {supplierOverview.horus_suggested_publishers
+                          .filter((s) => !s.already_configured)
+                          .slice(0, 18)
+                          .map((sug) => (
+                            <button
+                              key={sug.cod_editora}
+                              type="button"
+                              onClick={() => {
+                                setSelectedPubsForSupplier({
+                                  [sug.cod_editora]: {
+                                    cod_editora: sug.cod_editora,
+                                    nome_editora: sug.nome_editora,
+                                  },
+                                });
+                                if (sug.horus_discount > 0) setBatchDiscountPct(sug.horus_discount);
+                                setShowAddPublisherModal(true);
+                                searchHorusPublishersForModal('');
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:border-indigo-400 text-xs font-semibold text-slate-700 dark:text-slate-200 inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                            >
+                              <Plus className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>
+                                #{sug.cod_editora} {sug.nome_editora}
+                              </span>
+                              {sug.horus_discount > 0 && (
+                                <span className="text-emerald-600 font-mono font-bold">({sug.horus_discount}%)</span>
+                              )}
+                            </button>
+                          ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ABA HERO 3: ÚLTIMAS ENTRADAS DE COMPRA */}
+              {deskHeroTab === 'ENTRADAS' && (
+                <div className="p-5">
+                  <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 dark:bg-slate-800/70 text-[11px] font-bold uppercase text-slate-500 border-b border-slate-200">
+                        <tr>
+                          <th className="py-3 px-4">Nº NF Entrada</th>
+                          <th className="py-3 px-4">Data Recepção</th>
+                          <th className="py-3 px-4">CFOP</th>
+                          <th className="py-3 px-4 text-right">Títulos</th>
+                          <th className="py-3 px-4 text-right">Exemplares</th>
+                          <th className="py-3 px-4 text-right">Valor Bruto</th>
+                          <th className="py-3 px-4 text-right">Valor Líquido</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono">
+                        {supplierOverview.history.entradas_compra.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="py-12 text-center font-sans text-slate-400">
+                              Nenhuma nota de compra localizada nos últimos 12 meses nesta filial.
+                            </td>
+                          </tr>
+                        ) : (
+                          supplierOverview.history.entradas_compra.map((nf) => (
+                            <tr key={`${nf.cod_nf}-${nf.nro_nf}`} className="hover:bg-slate-50">
+                              <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">{nf.nro_nf}</td>
+                              <td className="py-3 px-4">{formatDateBr(nf.data_nf)}</td>
+                              <td className="py-3 px-4">{nf.cfop}</td>
+                              <td className="py-3 px-4 text-right">{nf.qtd_skus}</td>
+                              <td className="py-3 px-4 text-right font-bold">{nf.qtd_exemplares}</td>
+                              <td className="py-3 px-4 text-right text-slate-500">{formatMoney(nf.vlr_bruto)}</td>
+                              <td className="py-3 px-4 text-right font-bold text-emerald-700">
+                                {formatMoney(nf.vlr_liquido)}
+                              </td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ABA HERO 4: CONSIGNAÇÃO RECEBIDA & ACERTOS */}
+              {deskHeroTab === 'CONSIG_ACERTOS' && (
+                <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase text-indigo-700 dark:text-indigo-400">
+                      Remessas de Consignação Recebidas ({supplierOverview.history.consignacoes_recebidas.length})
+                    </h4>
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 border-b">
+                          <tr>
+                            <th className="py-2.5 px-3.5">NF</th>
+                            <th className="py-2.5 px-3.5">Data</th>
+                            <th className="py-2.5 px-3.5 text-right">Exemp.</th>
+                            <th className="py-2.5 px-3.5 text-right">Líquido</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono">
+                          {supplierOverview.history.consignacoes_recebidas.length === 0 ? (
                             <tr>
-                              <td colSpan={13} className="py-10 text-center text-slate-400">
-                                Folha vazia — bipe um ISBN acima ou importe uma planilha ISBN + Quantidade.
+                              <td colSpan={4} className="py-8 text-center font-sans text-slate-400">
+                                Sem remessas recentes.
                               </td>
                             </tr>
                           ) : (
-                            cartItems.map((it, idx) => {
-                              const hasWarning = !it.publisher_configured || it.vlr_capa <= 0;
-                              const isSel = selectedCartIndex === idx;
-                              return (
-                                <tr
-                                  key={it.cod_item}
-                                  onClick={() => setSelectedCartIndex(idx)}
-                                  className={`divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                                    hasWarning
-                                      ? 'bg-amber-50/90 dark:bg-amber-950/30'
-                                      : isSel
-                                      ? 'bg-indigo-50/70 dark:bg-indigo-950/40'
-                                      : idx % 2 === 0
-                                      ? 'bg-white dark:bg-slate-900'
-                                      : 'bg-slate-50/50 dark:bg-slate-800/20'
-                                  }`}
-                                >
-                                  <td className="py-1.5 text-center font-mono text-[10px] text-indigo-600 font-black">
-                                    {isSel ? '▶' : ''}
-                                  </td>
-                                  <td className="py-1.5 px-2 text-center">
-                                    <input
-                                      type="checkbox"
-                                      checked={Boolean(checkedCartCods[it.cod_item])}
-                                      onChange={(e) =>
-                                        setCheckedCartCods((prev) => ({
-                                          ...prev,
-                                          [it.cod_item]: e.target.checked,
-                                        }))
-                                      }
-                                      className="rounded border-slate-300 text-indigo-600 cursor-pointer"
-                                    />
-                                  </td>
-                                  <td className="py-1.5 px-2 font-mono text-[11px]">
-                                    <div className="font-bold text-slate-900 dark:text-white">{it.isbn || '—'}</div>
-                                    <div className="text-[10px] text-slate-400">#{it.cod_item}</div>
-                                  </td>
-                                  <td className="py-1.5 px-2 max-w-[230px]">
-                                    <div className="font-extrabold text-slate-900 dark:text-white truncate" title={it.nome_item}>
-                                      {it.nome_item}
-                                    </div>
-                                    {it.last_entry_date && (
-                                      <div className="text-[10px] text-slate-500">
-                                        Últ. {it.last_entry_type}: {formatDateBr(it.last_entry_date)} ({it.last_entry_qty} un)
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="py-1.5 px-2">
-                                    <div className="flex items-center justify-between gap-1">
-                                      <span
-                                        className={`font-bold truncate ${
-                                          it.publisher_configured
-                                            ? 'text-slate-800 dark:text-slate-200'
-                                            : 'text-amber-800 dark:text-amber-300'
-                                        }`}
-                                      >
-                                        {it.nome_editora}
-                                      </span>
-                                      <button
-                                        type="button"
-                                        onClick={() => openCartReconcileModal([it])}
-                                        className="px-1.5 py-0.5 rounded bg-slate-200/80 dark:bg-slate-700 hover:bg-indigo-600 hover:text-white text-[10px] font-extrabold shrink-0 cursor-pointer"
-                                        title="Alterar Editora/Selo deste item no Horus + Cronuz"
-                                      >
-                                        Selo
-                                      </button>
-                                    </div>
-                                    {!it.publisher_configured && it.cod_editora && (
-                                      <div className="mt-0.5 flex items-center gap-1">
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            setSelectedPubsForSupplier({
-                                              [it.cod_editora!]: {
-                                                cod_editora: it.cod_editora!,
-                                                nome_editora: it.nome_editora,
-                                              },
-                                            });
-                                            setShowAddPublisherModal(true);
-                                            searchHorusPublishersForModal(it.nome_editora);
-                                          }}
-                                          className="px-1.5 py-0.5 rounded bg-emerald-600 text-white text-[10px] font-extrabold cursor-pointer"
-                                        >
-                                          + Vincular Desconto
-                                        </button>
-                                      </div>
-                                    )}
-                                  </td>
-                                  <td className="py-1.5 px-2 text-right font-mono">
-                                    <span className={it.stock_available <= 0 ? 'text-rose-600 font-extrabold' : 'text-emerald-700 font-extrabold'}>
-                                      {it.stock_available}
-                                    </span>
-                                    <span className="text-slate-400">/{it.min_stock || '—'}</span>
-                                  </td>
-                                  <td className="py-1.5 px-2 text-right font-mono text-[11px]">
-                                    <span className="text-purple-700 dark:text-purple-300">{it.consigned_received}</span>
-                                    <span className="text-slate-400">/{it.sales_90}</span>
-                                  </td>
-                                  <td className="py-1.5 px-2 text-right">
-                                    <input
-                                      type="number"
-                                      min={1}
-                                      value={it.quantity}
-                                      onChange={(e) => updateCartItemQty(it.cod_item, parseInt(e.target.value, 10) || 1)}
-                                      className="w-16 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-right font-mono font-extrabold"
-                                    />
-                                  </td>
-                                  <td className="py-1.5 px-2 text-right font-mono">{formatMoney(it.vlr_capa)}</td>
-                                  <td className="py-1.5 px-2 text-right font-mono">
-                                    {it.publisher_configured ? (
-                                      <span className="text-emerald-700 dark:text-emerald-400 font-extrabold">
-                                        {it.discount_pct.toFixed(2)}%
-                                      </span>
-                                    ) : (
-                                      <span className="text-rose-600 font-extrabold">Pend.</span>
-                                    )}
-                                  </td>
-                                  <td className="py-1.5 px-2 text-right font-mono">{formatMoney(it.unit_net_price)}</td>
-                                  <td className="py-1.5 px-2 text-right font-mono font-extrabold text-slate-900 dark:text-white">
-                                    {formatMoney(it.subtotal_net)}
-                                  </td>
-                                  <td className="py-1.5 px-2 text-center">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setCartItems((prev) => prev.filter((x) => x.cod_item !== it.cod_item))
-                                      }
-                                      className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })
+                            supplierOverview.history.consignacoes_recebidas.map((nf) => (
+                              <tr key={`${nf.cod_nf}-${nf.nro_nf}`}>
+                                <td className="py-2.5 px-3.5 font-bold">{nf.nro_nf}</td>
+                                <td className="py-2.5 px-3.5">{formatDateBr(nf.data_nf)}</td>
+                                <td className="py-2.5 px-3.5 text-right">{nf.qtd_exemplares}</td>
+                                <td className="py-2.5 px-3.5 text-right font-bold">{formatMoney(nf.vlr_liquido)}</td>
+                              </tr>
+                            ))
                           )}
                         </tbody>
                       </table>
                     </div>
-
-                    {/* Barra Inferior de Navegação de Registros + Fechamento AP no Horus */}
-                    <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800/90 border-t border-slate-300 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-                      <div className="flex items-center gap-1">
-                        <button
-                          type="button"
-                          disabled={cartItems.length === 0}
-                          onClick={() => setSelectedCartIndex(0)}
-                          className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                        >
-                          <ChevronsLeft className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={cartItems.length === 0}
-                          onClick={() => setSelectedCartIndex((p) => Math.max(0, p - 1))}
-                          className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                        >
-                          <ChevronLeft className="w-3 h-3" />
-                        </button>
-                        <span className="px-2 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 rounded font-bold text-slate-700 dark:text-slate-200">
-                          Registro {cartItems.length === 0 ? 0 : selectedCartIndex + 1} de {cartItems.length}
-                        </span>
-                        <button
-                          type="button"
-                          disabled={cartItems.length === 0}
-                          onClick={() => setSelectedCartIndex((p) => Math.min(cartItems.length - 1, p + 1))}
-                          className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                        >
-                          <ChevronRight className="w-3 h-3" />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={cartItems.length === 0}
-                          onClick={() => setSelectedCartIndex(Math.max(0, cartItems.length - 1))}
-                          className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                        >
-                          <ChevronsRight className="w-3 h-3" />
-                        </button>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-3 font-sans text-xs">
-                        <span>
-                          Tít./Ex.: <strong className="font-mono">{cartSummary.skus}/{cartSummary.totalQty}</strong>
-                        </span>
-                        <span>
-                          Bruto: <strong className="font-mono">{formatMoney(cartSummary.gross)}</strong>
-                        </span>
-                        <span>
-                          Desc. Médio: <strong className="font-mono text-emerald-700">{cartSummary.avgDisc.toFixed(2)}%</strong>
-                        </span>
-                        <span>
-                          Líquido: <strong className="font-mono text-sm text-indigo-700 dark:text-indigo-300">{formatMoney(cartSummary.net)}</strong>
-                        </span>
-                      </div>
-                    </div>
-
-                    {cartItems.length > 0 && (
-                      <div className="p-3 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 flex flex-col md:flex-row md:items-end justify-between gap-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 flex-1">
-                          <div className="sm:col-span-3">
-                            <label className="block text-[10px] font-black uppercase text-slate-500 mb-0.5">
-                              Modalidade Horus
-                            </label>
-                            <select
-                              value={compraConsig}
-                              onChange={(e) => setCompraConsig(e.target.value === 'S' ? 'S' : 'N')}
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
-                            >
-                              <option value="N">Compra Firme (N)</option>
-                              <option value="S">Consignação (S)</option>
-                            </select>
-                          </div>
-                          <div className="sm:col-span-9">
-                            <label className="block text-[10px] font-black uppercase text-slate-500 mb-0.5">
-                              Observações (OBS_PEDIDO_COMPRA em CAIXA ALTA)
-                            </label>
-                            <input
-                              type="text"
-                              maxLength={250}
-                              value={orderObservations}
-                              onChange={(e) => setOrderObservations(e.target.value)}
-                              placeholder="Ex: REPOSIÇÃO PROGRAMADA - CONFERIR XML ANTES DA ENTREGA"
-                              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold uppercase"
-                            />
-                          </div>
-                        </div>
-
-                        <button
-                          type="button"
-                          disabled={creatingOrder || cartSummary.invalidCount > 0}
-                          onClick={handleCreatePurchaseOrder}
-                          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-400 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer shrink-0 disabled:cursor-not-allowed"
-                        >
-                          {creatingOrder ? (
-                            <RefreshCw className="w-4 h-4 animate-spin" />
-                          ) : (
-                            <CheckCircle2 className="w-4 h-4" />
-                          )}
-                          {cartSummary.invalidCount > 0
-                            ? `Corrija ${cartSummary.invalidCount} item(ns)`
-                            : 'Gerar Pedido no Horus (Status AP)'}
-                        </button>
-                      </div>
-                    )}
                   </div>
-                )}
-              </>
-            )}
-          </div>
+
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase text-sky-700 dark:text-sky-400">
+                      Acertos de Consignação ({supplierOverview.history.acertos_consignacao.length})
+                    </h4>
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 border-b">
+                          <tr>
+                            <th className="py-2.5 px-3.5">NF</th>
+                            <th className="py-2.5 px-3.5">Data</th>
+                            <th className="py-2.5 px-3.5 text-right">Exemp.</th>
+                            <th className="py-2.5 px-3.5 text-right">Líquido</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono">
+                          {supplierOverview.history.acertos_consignacao.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-8 text-center font-sans text-slate-400">
+                                Sem acertos recentes.
+                              </td>
+                            </tr>
+                          ) : (
+                            supplierOverview.history.acertos_consignacao.map((nf) => (
+                              <tr key={`${nf.cod_nf}-${nf.nro_nf}`}>
+                                <td className="py-2.5 px-3.5 font-bold">{nf.nro_nf}</td>
+                                <td className="py-2.5 px-3.5">{formatDateBr(nf.data_nf)}</td>
+                                <td className="py-2.5 px-3.5 text-right">{nf.qtd_exemplares}</td>
+                                <td className="py-2.5 px-3.5 text-right font-bold">{formatMoney(nf.vlr_liquido)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ABA HERO 5: DEVOLUÇÕES & PEDIDOS ANTERIORES NO HORUS */}
+              {deskHeroTab === 'DEVOLUCOES_PEDIDOS' && (
+                <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase text-amber-700 dark:text-amber-400">
+                      Devoluções Emitidas ao Fornecedor ({supplierOverview.history.devolucoes.length})
+                    </h4>
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 border-b">
+                          <tr>
+                            <th className="py-2.5 px-3.5">NF</th>
+                            <th className="py-2.5 px-3.5">Data</th>
+                            <th className="py-2.5 px-3.5">Tipo</th>
+                            <th className="py-2.5 px-3.5 text-right">Líquido</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono">
+                          {supplierOverview.history.devolucoes.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-8 text-center font-sans text-slate-400">
+                                Sem devoluções nos últimos 12 meses.
+                              </td>
+                            </tr>
+                          ) : (
+                            supplierOverview.history.devolucoes.map((nf) => (
+                              <tr key={`${nf.cod_nf}-${nf.nro_nf}`}>
+                                <td className="py-2.5 px-3.5 font-bold">{nf.nro_nf}</td>
+                                <td className="py-2.5 px-3.5">{formatDateBr(nf.data_nf)}</td>
+                                <td className="py-2.5 px-3.5 font-sans">{nf.tipo || nf.cfop}</td>
+                                <td className="py-2.5 px-3.5 text-right font-bold">{formatMoney(nf.vlr_liquido)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold uppercase text-indigo-700 dark:text-indigo-400">
+                      Últimos Pedidos em PEDIDOS_COMPRA no Horus ({supplierOverview.history.pedidos_compra_horus.length})
+                    </h4>
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 border-b">
+                          <tr>
+                            <th className="py-2.5 px-3.5">Pedido #</th>
+                            <th className="py-2.5 px-3.5">Data</th>
+                            <th className="py-2.5 px-3.5">Status</th>
+                            <th className="py-2.5 px-3.5 text-right">Líquido</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono">
+                          {supplierOverview.history.pedidos_compra_horus.length === 0 ? (
+                            <tr>
+                              <td colSpan={4} className="py-8 text-center font-sans text-slate-400">
+                                Nenhum pedido anterior neste fornecedor.
+                              </td>
+                            </tr>
+                          ) : (
+                            supplierOverview.history.pedidos_compra_horus.map((pc) => (
+                              <tr key={pc.cod_pedido}>
+                                <td className="py-2.5 px-3.5 font-bold text-indigo-700">#{pc.cod_pedido}</td>
+                                <td className="py-2.5 px-3.5">{formatDateBr(pc.dat_pedido)}</td>
+                                <td className="py-2.5 px-3.5 font-sans">{pc.status_label}</td>
+                                <td className="py-2.5 px-3.5 text-right font-bold">{formatMoney(pc.vlr_liquido)}</td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* OBJETO 2: FOLHA DE DADOS DE PEDIDOS (AP / AE / XML OK / DIVERGÊNCIAS)  */}
+      {/* ABA 2: PEDIDOS DE COMPRA (LAYOUT MODERNO E ESPAÇADO ESTILO DBM)        */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeMainTab === 'ORDERS' && (
-        <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 overflow-hidden shadow-2xs">
-          {/* Barra de Filtro da Folha de Dados */}
-          <div className="p-3 bg-slate-50/90 dark:bg-slate-900 border-b border-slate-300/80 dark:border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-            <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
-              {[
-                { key: 'ALL', label: 'Todos' },
-                { key: 'AP', label: 'Aprovados (AP)' },
-                { key: 'AE', label: 'Aguard. Entrega (AE)' },
-                { key: 'XML_OK', label: 'XML OK' },
-                { key: 'PENDING_REVIEW', label: 'XML em Análise' },
-                { key: 'ACCEPTED_WITH_DIVERGENCE', label: 'XML Aceito c/ Div.' },
-                { key: 'REJECTED', label: 'XML Recusado' },
-                { key: 'EE', label: 'Recebidos (EE)' },
-              ].map((st) => (
+        <div className="space-y-4">
+          {/* Painel Superior de Filtro + Filial */}
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h1 className="text-lg font-black text-slate-900 dark:text-white">
+                  Pedidos de Compra &amp; Status XML
+                </h1>
+                <p className="text-xs text-slate-500">
+                  Acompanhe os pedidos gerados no Horus (AP / AE / EE), exporte planilhas e confira a validação do XML da NF-e.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <Building2 className="w-4 h-4 text-indigo-600" />
+                  <select
+                    value={selectedBranchId ?? ''}
+                    onChange={(e) => setSelectedBranchId(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                  >
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id} className="text-slate-900">
+                        {b.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <button
-                  key={st.key}
                   type="button"
-                  onClick={() => setOrderStatusFilter(st.key)}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-extrabold whitespace-nowrap transition cursor-pointer border ${
-                    orderStatusFilter === st.key
-                      ? 'bg-slate-900 dark:bg-indigo-600 text-white border-slate-900 dark:border-indigo-500'
-                      : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
-                  }`}
+                  onClick={() => fetchOrdersList(false)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
                 >
-                  {st.label}
+                  <RefreshCw className={`w-3.5 h-3.5 ${loadingOrders ? 'animate-spin text-indigo-600' : ''}`} />
+                  Sincronizar Horus
                 </button>
-              ))}
+
+                <button
+                  type="button"
+                  onClick={() => setActiveMainTab('DESK')}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  Novo Pedido
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1 sm:w-64">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="relative flex-1 max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
                   value={orderSearchFilter}
                   onChange={(e) => setOrderSearchFilter(e.target.value)}
-                  placeholder="Nº Pedido, NF-e ou Fornecedor..."
-                  className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                  placeholder="Buscar por nº pedido Horus, fornecedor, CNPJ ou nº NF..."
+                  className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50/70 dark:bg-slate-800 text-xs focus:bg-white focus:border-indigo-500 focus:outline-none"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => fetchOrdersList(false)}
-                className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-xs font-extrabold flex items-center gap-1.5 cursor-pointer shrink-0"
-              >
-                <RefreshCw className={`w-3.5 h-3.5 ${loadingOrders ? 'animate-spin text-indigo-600' : ''}`} />
-                Sincronizar
-              </button>
+
+              <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
+                {[
+                  { key: 'ALL', label: 'Todos' },
+                  { key: 'AP', label: 'Aprovados (AP)' },
+                  { key: 'AE', label: 'Aguard. Entrega (AE)' },
+                  { key: 'XML_OK', label: 'XML OK' },
+                  { key: 'PENDING_REVIEW', label: 'XML em Análise' },
+                  { key: 'ACCEPTED_WITH_DIVERGENCE', label: 'Aceitos c/ Div.' },
+                  { key: 'REJECTED', label: 'XML Recusados' },
+                  { key: 'EE', label: 'Recebidos (EE)' },
+                ].map((st) => (
+                  <button
+                    key={st.key}
+                    type="button"
+                    onClick={() => setOrderStatusFilter(st.key)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition cursor-pointer ${
+                      orderStatusFilter === st.key
+                        ? 'bg-slate-900 dark:bg-indigo-600 text-white shadow-2xs'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
-          {/* Grade Estilo Folha de Dados Access Moderno */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs min-w-[1060px] border-collapse">
-              <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
-                <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                  <th className="w-6 py-2 text-center">▶</th>
-                  <th className="py-2 px-2.5 w-24">Pedido #</th>
-                  <th className="py-2 px-2.5 w-36">Data / Comprador</th>
-                  <th className="py-2 px-2.5 w-36">Filial</th>
-                  <th className="py-2 px-2.5">Fornecedor / CNPJ</th>
-                  <th className="py-2 px-2.5 w-24 text-right">Tít / Exemp</th>
-                  <th className="py-2 px-2.5 w-28 text-right">Total Líquido</th>
-                  <th className="py-2 px-2.5 w-40 text-center">Status Horus</th>
-                  <th className="py-2 px-2.5 w-48 text-center">Conferência XML (NF-e)</th>
-                  <th className="py-2 px-2.5 w-60 text-right">Operações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-semibold">
-                {loadingOrders ? (
+          {/* Tabela Espaçada de Pedidos */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs min-w-[1060px]">
+                <thead className="bg-slate-50 dark:bg-slate-800/70 text-[11px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200 dark:border-slate-800">
                   <tr>
-                    <td colSpan={10} className="py-12 text-center text-slate-500">
-                      <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1.5 text-indigo-600" />
-                      Sincronizando folha de pedidos com PEDIDOS_COMPRA no Horus...
-                    </td>
+                    <th className="py-3.5 px-4 w-28">Pedido #</th>
+                    <th className="py-3.5 px-4 w-40">Data / Comprador</th>
+                    <th className="py-3.5 px-4 w-40">Filial</th>
+                    <th className="py-3.5 px-4">Fornecedor</th>
+                    <th className="py-3.5 px-4 w-28 text-right">Itens / Peças</th>
+                    <th className="py-3.5 px-4 w-32 text-right">Total Líquido</th>
+                    <th className="py-3.5 px-4 w-44 text-center">Status Horus</th>
+                    <th className="py-3.5 px-4 w-48 text-center">Auditoria XML</th>
+                    <th className="py-3.5 px-4 w-64 text-right">Ações</th>
                   </tr>
-                ) : ordersList.length === 0 ? (
-                  <tr>
-                    <td colSpan={10} className="py-12 text-center text-slate-500">
-                      Nenhum pedido de compra encontrado para este filtro.
-                    </td>
-                  </tr>
-                ) : (
-                  ordersList.map((ord, idx) => {
-                    const isSel = selectedOrderIndex === idx;
-                    return (
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
+                  {loadingOrders ? (
+                    <tr>
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
+                        <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
+                        Sincronizando pedidos com o Horus...
+                      </td>
+                    </tr>
+                  ) : ordersList.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
+                        Nenhum pedido de compra encontrado para este filtro.
+                      </td>
+                    </tr>
+                  ) : (
+                    ordersList.map((ord, idx) => (
                       <tr
                         key={ord.id}
                         onClick={() => setSelectedOrderIndex(idx)}
                         onDoubleClick={() => openOrderDetailModal(ord.id)}
-                        className={`cursor-pointer transition-colors divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                          isSel
-                            ? 'bg-indigo-50/80 dark:bg-indigo-950/50'
-                            : idx % 2 === 0
-                            ? 'bg-white dark:bg-slate-900 hover:bg-slate-50'
-                            : 'bg-slate-50/50 dark:bg-slate-800/20 hover:bg-slate-100/60'
+                        className={`cursor-pointer transition-colors ${
+                          selectedOrderIndex === idx
+                            ? 'bg-indigo-50/60 dark:bg-indigo-950/35'
+                            : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
                         }`}
                       >
-                        <td className="py-2 text-center font-mono text-[10px] text-indigo-600 font-black">
-                          {isSel ? '▶' : ''}
-                        </td>
-                        <td className="py-2 px-2.5 font-mono font-black text-indigo-700 dark:text-indigo-300">
+                        <td className="py-3.5 px-4 font-mono font-bold text-indigo-700 dark:text-indigo-300">
                           #{ord.horus_cod_pedido || ord.id}
                         </td>
-                        <td className="py-2 px-2.5 text-[11px]">
-                          <div className="font-mono">{formatDateTimeBr(ord.created_at)}</div>
-                          <div className="text-slate-400 truncate">por {ord.created_by_name || '—'}</div>
-                        </td>
-                        <td className="py-2 px-2.5 truncate">{ord.branch_name}</td>
-                        <td className="py-2 px-2.5">
-                          <div className="font-extrabold text-slate-900 dark:text-white truncate">
-                            {ord.nome_fornecedor}
+                        <td className="py-3.5 px-4">
+                          <div className="font-medium text-slate-800 dark:text-slate-200">
+                            {formatDateTimeBr(ord.created_at)}
                           </div>
-                          <div className="text-[10px] font-mono text-slate-400">{formatCnpj(ord.cnpj_fornecedor)}</div>
+                          <div className="text-[11px] text-slate-400">por {ord.created_by_name || '—'}</div>
                         </td>
-                        <td className="py-2 px-2.5 text-right font-mono">
+                        <td className="py-3.5 px-4 font-medium">{ord.branch_name}</td>
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-slate-900 dark:text-white">{ord.nome_fornecedor}</div>
+                          <div className="text-[11px] font-mono text-slate-400">{formatCnpj(ord.cnpj_fornecedor)}</div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono">
                           {ord.total_skus} / <strong>{ord.total_quantity}</strong>
                         </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-extrabold text-slate-900 dark:text-white">
+                        <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 dark:text-white">
                           {formatMoney(ord.total_net)}
                         </td>
-                        <td className="py-2 px-2.5 text-center">
+                        <td className="py-3.5 px-4 text-center">
                           <span
-                            className={`inline-block px-2 py-0.5 rounded text-[11px] font-extrabold border ${
+                            className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold border ${
                               ord.horus_status === 'AP'
-                                ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
                                 : ord.horus_status === 'AE'
-                                ? 'bg-sky-50 text-sky-800 border-sky-300'
+                                ? 'bg-sky-50 text-sky-800 border-sky-200'
                                 : ord.horus_status === 'EE'
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                                : 'bg-slate-100 text-slate-700 border-slate-300'
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                : 'bg-slate-100 text-slate-700 border-slate-200'
                             }`}
                           >
                             {ord.status_label}
                           </span>
                         </td>
-                        <td className="py-2 px-2.5 text-center">
-                          <div className="flex flex-col items-center gap-0.5">
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded text-[10px] font-extrabold border ${getXmlDecisionBadgeClass(
-                                ord.xml_status
-                              )}`}
-                            >
-                              {ord.xml_status_label || 'Sem XML'}
-                            </span>
-                            {ord.last_nfe_number && (
-                              <span className="font-mono text-[10px] text-slate-500">
-                                NF {ord.last_nfe_number}
-                              </span>
-                            )}
-                          </div>
+                        <td className="py-3.5 px-4 text-center">
+                          <span
+                            className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold border ${getXmlDecisionBadgeClass(
+                              ord.xml_status
+                            )}`}
+                          >
+                            {ord.xml_status_label || 'Sem XML'}
+                          </span>
+                          {ord.last_nfe_number && (
+                            <div className="font-mono text-[10px] text-slate-400 mt-0.5">
+                              NF {ord.last_nfe_number}
+                            </div>
+                          )}
                         </td>
-                        <td className="py-2 px-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                          <div className="inline-flex items-center gap-1 justify-end">
+                        <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="inline-flex items-center gap-1.5 justify-end">
                             {ord.last_xml_audit_id ? (
                               <button
                                 type="button"
                                 onClick={() => openXmlAuditDetailModal(ord.last_xml_audit_id!)}
-                                className="px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
-                                title="Abrir análise e pontuação do XML desta NF-e"
+                                className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold cursor-pointer"
                               >
-                                <FileCheck2 className="w-3 h-3" />
                                 Ver XML
                               </button>
                             ) : (
@@ -2801,10 +3446,8 @@ export default function HorusDirectComprasPage() {
                                   setActiveMainTab('XML_AUDIT');
                                   setTimeout(() => xmlFileInputRef.current?.focus(), 120);
                                 }}
-                                className="px-2 py-1 rounded bg-slate-900 dark:bg-slate-700 hover:bg-indigo-600 text-white text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
-                                title="Subir e validar XML da NF-e contra este pedido"
+                                className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-indigo-600 hover:text-white text-slate-700 text-xs font-bold cursor-pointer transition"
                               >
-                                <Upload className="w-3 h-3" />
                                 Validar XML
                               </button>
                             )}
@@ -2819,10 +3462,9 @@ export default function HorusDirectComprasPage() {
                                   nome_fornecedor: ord.nome_fornecedor,
                                 })
                               }
-                              className="px-2 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
-                              title="Exportar planilha Excel do pedido (com opção AP -> AE)"
+                              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
                             >
-                              <FileSpreadsheet className="w-3 h-3" />
+                              <FileSpreadsheet className="w-3.5 h-3.5" />
                               Excel
                             </button>
 
@@ -2830,8 +3472,8 @@ export default function HorusDirectComprasPage() {
                               <button
                                 type="button"
                                 onClick={() => handleManualStatusTransition(ord.id, 'AE')}
-                                className="px-2 py-1 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-extrabold cursor-pointer"
-                                title="Mudar para AE (Aguardando Entrega) no Horus"
+                                className="px-2.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold cursor-pointer"
+                                title="Mudar para AE (Aguardando Entrega)"
                               >
                                 AE
                               </button>
@@ -2840,105 +3482,115 @@ export default function HorusDirectComprasPage() {
                             <button
                               type="button"
                               onClick={() => openOrderDetailModal(ord.id)}
-                              className="p-1 rounded border border-slate-300 dark:border-slate-700 hover:bg-slate-100 text-slate-600 dark:text-slate-300 cursor-pointer"
-                              title="Ficha e trilha de auditoria do pedido"
+                              className="p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 text-slate-500 cursor-pointer"
+                              title="Histórico e itens do pedido"
                             >
-                              <History className="w-3.5 h-3.5" />
+                              <History className="w-4 h-4" />
                             </button>
                           </div>
                         </td>
                       </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Barra Inferior de Navegação de Registros Estilo Access Moderno */}
-          <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800/90 border-t border-slate-300 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                disabled={ordersList.length === 0}
-                onClick={() => setSelectedOrderIndex(0)}
-                className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronsLeft className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                disabled={ordersList.length === 0}
-                onClick={() => setSelectedOrderIndex((p) => Math.max(0, p - 1))}
-                className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronLeft className="w-3 h-3" />
-              </button>
-              <span className="px-2.5 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 rounded font-bold text-slate-800 dark:text-slate-200">
-                Registro {ordersList.length === 0 ? 0 : selectedOrderIndex + 1} de {ordersList.length}
-              </span>
-              <button
-                type="button"
-                disabled={ordersList.length === 0}
-                onClick={() => setSelectedOrderIndex((p) => Math.min(ordersList.length - 1, p + 1))}
-                className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronRight className="w-3 h-3" />
-              </button>
-              <button
-                type="button"
-                disabled={ordersList.length === 0}
-                onClick={() => setSelectedOrderIndex(Math.max(0, ordersList.length - 1))}
-                className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-              >
-                <ChevronsRight className="w-3 h-3" />
-              </button>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
 
-            <div className="flex items-center gap-4 font-sans text-xs">
-              <span className="text-slate-500">Duplo clique ou Enter abre o histórico completo</span>
-              <span>
-                Soma Líquida Filtrada:{' '}
-                <strong className="font-mono text-indigo-700 dark:text-indigo-300">
+            <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/60 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-1.5 font-mono">
+                <button
+                  type="button"
+                  disabled={ordersList.length === 0}
+                  onClick={() => setSelectedOrderIndex(0)}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronsLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={ordersList.length === 0}
+                  onClick={() => setSelectedOrderIndex((p) => Math.max(0, p - 1))}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <span className="px-3 py-1 bg-white dark:bg-slate-900 border border-slate-200 rounded-lg font-bold">
+                  Registro {ordersList.length === 0 ? 0 : selectedOrderIndex + 1} de {ordersList.length}
+                </span>
+                <button
+                  type="button"
+                  disabled={ordersList.length === 0}
+                  onClick={() => setSelectedOrderIndex((p) => Math.min(ordersList.length - 1, p + 1))}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  disabled={ordersList.length === 0}
+                  onClick={() => setSelectedOrderIndex(Math.max(0, ordersList.length - 1))}
+                  className="p-1.5 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer"
+                >
+                  <ChevronsRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div>
+                <span className="text-slate-500 mr-2">Soma Líquida Filtrada:</span>
+                <strong className="font-mono text-sm text-indigo-700 dark:text-indigo-300">
                   {formatMoney(ordersTotalNetSum)}
                 </strong>
-              </span>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* OBJETO 3: CENTRAL DE AUDITORIA & ANÁLISE POSTERIOR DE XML (NF-e)       */}
+      {/* ABA 3: CENTRAL DE AUDITORIA & ANÁLISE POSTERIOR DE XML (ESPAÇADA)      */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeMainTab === 'XML_AUDIT' && (
-        <div className="space-y-2.5">
-          {/* 3.1 Formulário Superior de Recepção e Cruzamento Preventivo do XML */}
+        <div className="space-y-4">
+          {/* Card Amplo de Upload e Validação Preventiva de XML */}
           <form
             onSubmit={handleUploadAndAnalyzeXml}
-            className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 overflow-hidden shadow-2xs"
+            className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs space-y-4"
           >
-            <div className="px-3.5 py-2 bg-slate-100/95 dark:bg-slate-800/80 border-b border-slate-300/80 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="px-1.5 py-0.5 rounded bg-indigo-600 text-white font-mono text-[10px] font-black">
-                  CONFERÊNCIA PREVENTIVA
-                </span>
-                <h2 className="text-xs sm:text-sm font-black text-slate-900 dark:text-white">
-                  Cruzar XML da NF-e do Fornecedor com Pedido de Compra (Capa • Desconto % • Quantidade)
-                </h2>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <h1 className="text-lg font-black text-slate-900 dark:text-white">
+                  Conferência Preventiva de XML da NF-e vs. Pedido
+                </h1>
+                <p className="text-xs text-slate-500">
+                  Valide Preço de Capa, Desconto (%) e Quantidade antes da mercadoria chegar. Se bater 100%, o pedido muda para <strong>XML OK</strong>.
+                </p>
               </div>
-              <span className="text-[11px] text-slate-500 font-mono">Limite máx.: 10 MB (.xml NF-e mod. 55)</span>
+
+              <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shrink-0">
+                <Building2 className="w-4 h-4 text-indigo-600" />
+                <select
+                  value={selectedBranchId ?? ''}
+                  onChange={(e) => setSelectedBranchId(Number(e.target.value))}
+                  className="bg-transparent text-xs font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                >
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id} className="text-slate-900">
+                      {b.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="p-3 grid grid-cols-1 lg:grid-cols-12 gap-3 items-end">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
               <div className="lg:col-span-4">
-                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">
-                  Pedido de Compra Alvo ({selectedBranch?.nome || 'Filial'})
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Pedido de Compra Correspondente
                 </label>
                 <select
                   value={xmlTargetOrderId}
                   onChange={(e) => setXmlTargetOrderId(e.target.value)}
-                  className="w-full px-2.5 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
                 >
                   <option value="">✨ Auto-identificar Pedido (via xPed / CNPJ + ISBNs)</option>
                   {ordersList.map((o) => (
@@ -2951,8 +3603,8 @@ export default function HorusDirectComprasPage() {
               </div>
 
               <div className="lg:col-span-4">
-                <label className="block text-[10px] font-black uppercase text-slate-500 mb-1">
-                  Arquivo XML da NF-e (.xml)
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Arquivo XML da Nota Fiscal (.xml até 10 MB)
                 </label>
                 <input
                   ref={xmlFileInputRef}
@@ -2967,36 +3619,36 @@ export default function HorusDirectComprasPage() {
                     }
                     setXmlUploadFile(f);
                   }}
-                  className="w-full text-xs file:mr-2.5 file:px-2.5 file:py-1 file:rounded file:border-0 file:bg-indigo-600 file:text-white file:font-extrabold border border-slate-300 dark:border-slate-700 rounded-lg p-1 bg-white dark:bg-slate-800"
+                  className="w-full text-xs file:mr-3 file:px-3.5 file:py-1.5 file:rounded-lg file:border-0 file:bg-indigo-600 file:text-white file:font-bold border border-slate-200 dark:border-slate-700 rounded-xl p-1.5 bg-slate-50 dark:bg-slate-800"
                 />
               </div>
 
-              <div className="lg:col-span-4 flex flex-col sm:flex-row lg:flex-col xl:flex-row items-stretch sm:items-center justify-between gap-2">
-                <div className="space-y-1 text-[11px]">
-                  <label className="flex items-center gap-1.5 font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+              <div className="lg:col-span-4 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="space-y-1.5 text-xs">
+                  <label className="flex items-center gap-2 font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={xmlAutoAcceptIfOk}
                       onChange={(e) => setXmlAutoAcceptIfOk(e.target.checked)}
                       className="rounded border-slate-300 text-emerald-600"
                     />
-                    Mudar p/ <strong>XML OK</strong> automaticamente se 100% batendo
+                    Aceitar automático p/ <strong>XML OK</strong> se 100% batendo
                   </label>
-                  <label className="flex items-center gap-1.5 font-semibold text-slate-500 dark:text-slate-400 cursor-pointer">
+                  <label className="flex items-center gap-2 text-slate-500 cursor-pointer">
                     <input
                       type="checkbox"
                       checked={xmlAdvanceHorusToAe}
                       onChange={(e) => setXmlAdvanceHorusToAe(e.target.checked)}
                       className="rounded border-slate-300 text-indigo-600"
                     />
-                    Se aprovar e estiver AP, avançar p/ AE no Horus
+                    Avançar AP → AE no Horus ao aprovar
                   </label>
                 </div>
 
                 <button
                   type="submit"
                   disabled={analyzingXml || !xmlUploadFile}
-                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-400 text-white text-xs font-extrabold flex items-center justify-center gap-1.5 shadow-2xs cursor-pointer shrink-0 disabled:cursor-not-allowed"
+                  className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-300 text-white text-xs font-bold inline-flex items-center justify-center gap-2 shadow-sm shrink-0 cursor-pointer disabled:cursor-not-allowed"
                 >
                   {analyzingXml ? (
                     <RefreshCw className="w-4 h-4 animate-spin" />
@@ -3009,96 +3661,88 @@ export default function HorusDirectComprasPage() {
             </div>
           </form>
 
-          {/* 3.2 Indicadores Rápidos de Situação (OK vs Divergências / Análise Posterior) */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+          {/* 4 Cards Espaçados de Situação das Notas Analisadas */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
             <button
               type="button"
               onClick={() => setXmlDecisionFilter('PENDING_REVIEW')}
-              className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                 xmlDecisionFilter === 'PENDING_REVIEW'
-                  ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400/30 dark:bg-amber-950/40'
-                  : 'bg-white dark:bg-slate-900 border-slate-300/80 dark:border-slate-800 hover:border-amber-300'
+                  ? 'bg-amber-50 border-amber-400 shadow-xs dark:bg-amber-950/40'
+                  : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-amber-300'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-amber-700 dark:text-amber-300">
-                  Em Análise (Divergência)
-                </span>
+                <span className="text-xs font-bold text-amber-700 dark:text-amber-300">Em Análise (Divergência)</span>
                 <FileWarning className="w-4 h-4 text-amber-600" />
               </div>
-              <div className="text-xl font-black font-mono text-amber-800 dark:text-amber-200 mt-0.5">
+              <div className="text-2xl font-black font-mono text-amber-800 dark:text-amber-200 mt-1">
                 {xmlKpis.pending_review}
               </div>
-              <div className="text-[10px] text-slate-500">Aguardando decisão posterior</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Aguardando decisão posterior</div>
             </button>
 
             <button
               type="button"
               onClick={() => setXmlDecisionFilter('XML_OK')}
-              className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                 xmlDecisionFilter === 'XML_OK'
-                  ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-400/30 dark:bg-emerald-950/40'
-                  : 'bg-white dark:bg-slate-900 border-slate-300/80 dark:border-slate-800 hover:border-emerald-300'
+                  ? 'bg-emerald-50 border-emerald-400 shadow-xs dark:bg-emerald-950/40'
+                  : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-emerald-300'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-emerald-700 dark:text-emerald-300">
-                  XML OK (Liberadas)
-                </span>
+                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300">XML OK (Liberadas)</span>
                 <ShieldCheck className="w-4 h-4 text-emerald-600" />
               </div>
-              <div className="text-xl font-black font-mono text-emerald-800 dark:text-emerald-200 mt-0.5">
+              <div className="text-2xl font-black font-mono text-emerald-800 dark:text-emerald-200 mt-1">
                 {xmlKpis.xml_ok}
               </div>
-              <div className="text-[10px] text-slate-500">Prontas p/ chegada física da NF</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Prontas para recepção física</div>
             </button>
 
             <button
               type="button"
               onClick={() => setXmlDecisionFilter('ACCEPTED_WITH_DIVERGENCE')}
-              className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                 xmlDecisionFilter === 'ACCEPTED_WITH_DIVERGENCE'
-                  ? 'bg-indigo-50 border-indigo-400 ring-2 ring-indigo-400/30 dark:bg-indigo-950/40'
-                  : 'bg-white dark:bg-slate-900 border-slate-300/80 dark:border-slate-800 hover:border-indigo-300'
+                  ? 'bg-indigo-50 border-indigo-400 shadow-xs dark:bg-indigo-950/40'
+                  : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-indigo-300'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-indigo-700 dark:text-indigo-300">
-                  Aceitas c/ Divergência
-                </span>
+                <span className="text-xs font-bold text-indigo-700 dark:text-indigo-300">Aceitas c/ Divergência</span>
                 <CheckCircle2 className="w-4 h-4 text-indigo-600" />
               </div>
-              <div className="text-xl font-black font-mono text-indigo-800 dark:text-indigo-200 mt-0.5">
+              <div className="text-2xl font-black font-mono text-indigo-800 dark:text-indigo-200 mt-1">
                 {xmlKpis.accepted_with_divergence}
               </div>
-              <div className="text-[10px] text-slate-500">Autorizadas e pontuadas</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Autorizadas e pontuadas</div>
             </button>
 
             <button
               type="button"
               onClick={() => setXmlDecisionFilter('REJECTED')}
-              className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+              className={`p-4 rounded-2xl border text-left transition cursor-pointer ${
                 xmlDecisionFilter === 'REJECTED'
-                  ? 'bg-rose-50 border-rose-400 ring-2 ring-rose-400/30 dark:bg-rose-950/40'
-                  : 'bg-white dark:bg-slate-900 border-slate-300/80 dark:border-slate-800 hover:border-rose-300'
+                  ? 'bg-rose-50 border-rose-400 shadow-xs dark:bg-rose-950/40'
+                  : 'bg-white dark:bg-slate-900 border-slate-200/90 dark:border-slate-800 hover:border-rose-300'
               }`}
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase text-rose-700 dark:text-rose-300">
-                  XML Recusadas
-                </span>
+                <span className="text-xs font-bold text-rose-700 dark:text-rose-300">XML Recusadas</span>
                 <ShieldAlert className="w-4 h-4 text-rose-600" />
               </div>
-              <div className="text-xl font-black font-mono text-rose-800 dark:text-rose-200 mt-0.5">
+              <div className="text-2xl font-black font-mono text-rose-800 dark:text-rose-200 mt-1">
                 {xmlKpis.rejected}
               </div>
-              <div className="text-[10px] text-slate-500">Bloqueadas p/ correção do fornecedor</div>
+              <div className="text-[11px] text-slate-500 mt-0.5">Bloqueadas para ajuste</div>
             </button>
           </div>
 
-          {/* 3.3 Folha de Dados das Notas Analisadas (Divergências Identificadas & Situações OK) */}
-          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 overflow-hidden shadow-2xs">
-            <div className="p-3 bg-slate-50/90 dark:bg-slate-900 border-b border-slate-300/80 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-2.5">
+          {/* Tabela Espaçada de Notas Fiscais Auditadas */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-1.5">
                 {[
                   { key: 'ALL', label: `Todas (${xmlKpis.total})` },
@@ -3111,49 +3755,45 @@ export default function HorusDirectComprasPage() {
                     key={st.key}
                     type="button"
                     onClick={() => setXmlDecisionFilter(st.key)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-extrabold transition cursor-pointer border ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
                       xmlDecisionFilter === st.key
-                        ? 'bg-slate-900 dark:bg-indigo-600 text-white border-slate-900'
-                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                        ? 'bg-slate-900 dark:bg-indigo-600 text-white'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
                     }`}
                   >
                     {st.label}
                   </button>
                 ))}
 
-                <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-1 hidden sm:block" />
-
-                {/* Filtro por Eixo Específico de Divergência */}
                 <select
                   value={xmlDivergenceAxisFilter}
                   onChange={(e) => setXmlDivergenceAxisFilter(e.target.value)}
-                  className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold"
-                  title="Filtrar notas pelo tipo exato de divergência identificada"
+                  className="ml-1 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
                 >
-                  <option value="ALL">Filtro de Divergência: Todos os Tipos</option>
-                  <option value="DISCOUNT">Com Divergência de Desconto (%)</option>
-                  <option value="COVER">Com Divergência de Preço de Capa</option>
-                  <option value="QTY">Com Divergência de Quantidade</option>
-                  <option value="EXTRA">Com Item Extra (Não Pedido)</option>
-                  <option value="MISSING">Com Item Faltante no XML</option>
+                  <option value="ALL">Divergência: Todos os Eixos</option>
+                  <option value="DISCOUNT">Desconto (%)</option>
+                  <option value="COVER">Preço de Capa</option>
+                  <option value="QTY">Quantidade</option>
+                  <option value="EXTRA">Item Extra na NF</option>
+                  <option value="MISSING">Item Faltante no XML</option>
                 </select>
               </div>
 
               <div className="flex items-center gap-2">
                 <div className="relative flex-1 sm:w-64">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
                     value={xmlSearchFilter}
                     onChange={(e) => setXmlSearchFilter(e.target.value)}
-                    placeholder="Nº NF-e, Chave, Pedido ou Fornecedor..."
-                    className="w-full pl-8 pr-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-semibold"
+                    placeholder="Nº NF, Chave, Pedido ou Fornecedor..."
+                    className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                   />
                 </div>
                 <button
                   type="button"
                   onClick={() => fetchXmlAuditsList(false)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-100 text-xs font-extrabold flex items-center gap-1 cursor-pointer shrink-0"
+                  className="px-3.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${loadingXmlAudits ? 'animate-spin text-indigo-600' : ''}`} />
                   Atualizar
@@ -3162,256 +3802,209 @@ export default function HorusDirectComprasPage() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs min-w-[1120px] border-collapse">
-                <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
-                  <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                    <th className="w-6 py-2 text-center">▶</th>
-                    <th className="py-2 px-2.5 w-28">NF-e / Série</th>
-                    <th className="py-2 px-2.5 w-24">Pedido #</th>
-                    <th className="py-2 px-2.5">Fornecedor / Emitente</th>
-                    <th className="py-2 px-2.5 w-28 text-right">Qtd (Ped → XML)</th>
-                    <th className="py-2 px-2.5 w-44 text-right">Líq. Prod. (Ped → XML)</th>
-                    <th className="py-2 px-2.5">Divergências Identificadas por Eixo</th>
-                    <th className="py-2 px-2.5 w-44 text-center">Situação / Decisão</th>
-                    <th className="py-2 px-2.5 w-44">Análise / Pontuação</th>
-                    <th className="py-2 px-2.5 w-40 text-right">Ações</th>
+              <table className="w-full text-left text-xs min-w-[1100px]">
+                <thead className="bg-slate-50 dark:bg-slate-800/70 text-[11px] font-bold uppercase tracking-wider text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                  <tr>
+                    <th className="py-3.5 px-4 w-32">NF-e / Série</th>
+                    <th className="py-3.5 px-4 w-28">Pedido #</th>
+                    <th className="py-3.5 px-4">Fornecedor / Emitente</th>
+                    <th className="py-3.5 px-4 w-32 text-right">Qtd (Ped → XML)</th>
+                    <th className="py-3.5 px-4 w-44 text-right">Líq. (Ped → XML)</th>
+                    <th className="py-3.5 px-4">Diagnóstico por Eixo</th>
+                    <th className="py-3.5 px-4 w-44 text-center">Decisão</th>
+                    <th className="py-3.5 px-4 w-48">Pontuação / Parecer</th>
+                    <th className="py-3.5 px-4 w-44 text-right">Ações</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 font-semibold">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800/70">
                   {loadingXmlAudits ? (
                     <tr>
-                      <td colSpan={10} className="py-12 text-center text-slate-500">
-                        <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-1.5 text-indigo-600" />
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
+                        <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
                         Carregando notas analisadas...
                       </td>
                     </tr>
                   ) : xmlAuditsList.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="py-12 text-center text-slate-500">
-                        Nenhum XML auditado encontrado para este filtro. Suba um arquivo .xml acima para iniciar a validação preventiva.
+                      <td colSpan={9} className="py-14 text-center text-slate-400">
+                        Nenhum XML analisado para este filtro. Envie um arquivo .xml acima para validar.
                       </td>
                     </tr>
                   ) : (
-                    xmlAuditsList.map((aud, idx) => {
-                      const isSel = selectedXmlIndex === idx;
-                      return (
-                        <tr
-                          key={aud.id}
-                          onClick={() => setSelectedXmlIndex(idx)}
-                          onDoubleClick={() => openXmlAuditDetailModal(aud.id)}
-                          className={`cursor-pointer transition-colors divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                            isSel
-                              ? 'bg-indigo-50/80 dark:bg-indigo-950/50'
-                              : idx % 2 === 0
-                              ? 'bg-white dark:bg-slate-900 hover:bg-slate-50'
-                              : 'bg-slate-50/50 dark:bg-slate-800/20 hover:bg-slate-100/60'
-                          }`}
-                        >
-                          <td className="py-2 text-center font-mono text-[10px] text-indigo-600 font-black">
-                            {isSel ? '▶' : ''}
-                          </td>
-                          <td className="py-2 px-2.5 font-mono">
-                            <div className="font-black text-slate-900 dark:text-white">
-                              NF {aud.numero_nf}
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              Sér. {aud.serie_nf || '1'} • {formatDateBr(aud.data_emissao)}
-                            </div>
-                          </td>
-                          <td className="py-2 px-2.5 font-mono font-black text-indigo-700 dark:text-indigo-300">
-                            #{aud.horus_cod_pedido || aud.order_id}
-                          </td>
-                          <td className="py-2 px-2.5 max-w-[220px]">
-                            <div className="font-extrabold text-slate-900 dark:text-white truncate">
-                              {aud.emit_nome || aud.nome_fornecedor}
-                            </div>
-                            <div className="text-[10px] font-mono text-slate-400">
-                              {formatCnpj(aud.emit_cnpj)} • {aud.branch_name}
-                            </div>
-                          </td>
-                          <td className="py-2 px-2.5 text-right font-mono">
-                            <span>{aud.order_total_qty}</span>
-                            <span className="text-slate-400 mx-1">→</span>
-                            <strong
-                              className={
-                                aud.xml_total_qty !== aud.order_total_qty ? 'text-amber-700' : 'text-emerald-700'
-                              }
-                            >
-                              {aud.xml_total_qty}
-                            </strong>
-                          </td>
-                          <td className="py-2 px-2.5 text-right font-mono text-[11px]">
-                            <div>{formatMoney(aud.order_total_net)}</div>
-                            <div
-                              className={`font-extrabold ${
-                                Math.abs(aud.xml_total_products_net - aud.order_total_net) > 0.05
-                                  ? 'text-rose-600'
-                                  : 'text-emerald-700'
-                              }`}
-                            >
-                              → {formatMoney(aud.xml_total_products_net)}
-                            </div>
-                          </td>
-                          <td className="py-2 px-2.5">
-                            {aud.diagnostic_status === 'MATCH_100' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 text-emerald-800 border border-emerald-300 text-[10px] font-extrabold">
-                                <Check className="w-3 h-3" />
-                                100% Compatível ({aud.matched_ok_count} itens OK)
-                              </span>
-                            ) : (
-                              <div className="flex flex-wrap gap-1">
-                                {aud.diff_discount_count > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-900 border border-rose-300 text-[10px] font-extrabold font-mono">
-                                    Desc: {aud.diff_discount_count}
-                                  </span>
-                                )}
-                                {aud.diff_cover_count > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-extrabold font-mono">
-                                    Capa: {aud.diff_cover_count}
-                                  </span>
-                                )}
-                                {aud.diff_qty_count > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-purple-100 text-purple-900 border border-purple-300 text-[10px] font-extrabold font-mono">
-                                    Qtd: {aud.diff_qty_count}
-                                  </span>
-                                )}
-                                {aud.extra_in_xml_count > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-800 border border-rose-300 text-[10px] font-extrabold font-mono">
-                                    Extra: {aud.extra_in_xml_count}
-                                  </span>
-                                )}
-                                {aud.missing_in_xml_count > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-800 border border-slate-400 text-[10px] font-extrabold font-mono">
-                                    Falta: {aud.missing_in_xml_count}
-                                  </span>
-                                )}
-                                {aud.header_warnings.length > 0 && (
-                                  <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-900 border border-amber-400 text-[10px] font-extrabold">
-                                    CNPJ Alerta
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </td>
-                          <td className="py-2 px-2.5 text-center">
-                            <span
-                              className={`inline-block px-2 py-0.5 rounded text-[11px] font-extrabold border ${getXmlDecisionBadgeClass(
-                                aud.decision_status
-                              )}`}
-                            >
-                              {aud.decision_label}
+                    xmlAuditsList.map((aud, idx) => (
+                      <tr
+                        key={aud.id}
+                        onClick={() => setSelectedXmlIndex(idx)}
+                        onDoubleClick={() => openXmlAuditDetailModal(aud.id)}
+                        className={`cursor-pointer transition-colors ${
+                          selectedXmlIndex === idx
+                            ? 'bg-indigo-50/60 dark:bg-indigo-950/35'
+                            : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+                        }`}
+                      >
+                        <td className="py-3.5 px-4 font-mono">
+                          <div className="font-bold text-slate-900 dark:text-white">NF {aud.numero_nf}</div>
+                          <div className="text-[11px] text-slate-400">
+                            Sér. {aud.serie_nf || '1'} • {formatDateBr(aud.data_emissao)}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                          #{aud.horus_cod_pedido || aud.order_id}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <div className="font-bold text-slate-900 dark:text-white">
+                            {aud.emit_nome || aud.nome_fornecedor}
+                          </div>
+                          <div className="text-[11px] font-mono text-slate-400">
+                            {formatCnpj(aud.emit_cnpj)} • {aud.branch_name}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono">
+                          <span>{aud.order_total_qty}</span>
+                          <span className="text-slate-400 mx-1">→</span>
+                          <strong
+                            className={
+                              aud.xml_total_qty !== aud.order_total_qty ? 'text-amber-700' : 'text-emerald-700'
+                            }
+                          >
+                            {aud.xml_total_qty}
+                          </strong>
+                        </td>
+                        <td className="py-3.5 px-4 text-right font-mono">
+                          <div className="text-slate-500">{formatMoney(aud.order_total_net)}</div>
+                          <div
+                            className={`font-bold ${
+                              Math.abs(aud.xml_total_products_net - aud.order_total_net) > 0.05
+                                ? 'text-rose-600'
+                                : 'text-emerald-700'
+                            }`}
+                          >
+                            → {formatMoney(aud.xml_total_products_net)}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4">
+                          {aud.diagnostic_status === 'MATCH_100' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[11px] font-bold">
+                              <Check className="w-3 h-3" />
+                              100% Compatível ({aud.matched_ok_count} itens)
                             </span>
-                          </td>
-                          <td className="py-2 px-2.5 max-w-[200px] text-[11px]">
-                            {aud.decision_notes ? (
-                              <div className="truncate text-slate-700 dark:text-slate-200" title={aud.decision_notes}>
-                                “{aud.decision_notes}”
-                              </div>
-                            ) : (
-                              <div className="text-slate-400">Sem pontuação registrada</div>
-                            )}
-                            <div className="text-[10px] text-slate-400 font-mono truncate">
-                              {aud.decided_by_name
-                                ? `${aud.decided_by_name} • ${formatDateTimeBr(aud.decided_at)}`
-                                : `Enviado por ${aud.uploaded_by_name || '—'}`}
+                          ) : (
+                            <div className="flex flex-wrap gap-1.5">
+                              {aud.diff_discount_count > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-rose-100 text-rose-900 text-[11px] font-bold font-mono">
+                                  Desc: {aud.diff_discount_count}
+                                </span>
+                              )}
+                              {aud.diff_cover_count > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-amber-100 text-amber-900 text-[11px] font-bold font-mono">
+                                  Capa: {aud.diff_cover_count}
+                                </span>
+                              )}
+                              {aud.diff_qty_count > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-purple-100 text-purple-900 text-[11px] font-bold font-mono">
+                                  Qtd: {aud.diff_qty_count}
+                                </span>
+                              )}
+                              {aud.extra_in_xml_count > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-rose-50 text-rose-800 border border-rose-200 text-[11px] font-bold font-mono">
+                                  Extra: {aud.extra_in_xml_count}
+                                </span>
+                              )}
+                              {aud.missing_in_xml_count > 0 && (
+                                <span className="px-2 py-0.5 rounded-lg bg-slate-200 text-slate-800 text-[11px] font-bold font-mono">
+                                  Falta: {aud.missing_in_xml_count}
+                                </span>
+                              )}
                             </div>
-                          </td>
-                          <td className="py-2 px-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                            <div className="inline-flex items-center gap-1 justify-end">
-                              <button
-                                type="button"
-                                onClick={() => openXmlAuditDetailModal(aud.id)}
-                                className="px-2.5 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-extrabold cursor-pointer"
-                              >
-                                Analisar / Pontuar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDownloadXmlAuditExcel(aud.id, aud.numero_nf)}
-                                className="p-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer"
-                                title="Baixar Relatório Excel de Divergências"
-                              >
-                                <FileSpreadsheet className="w-3.5 h-3.5" />
-                              </button>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-4 text-center">
+                          <span
+                            className={`inline-block px-3 py-1 rounded-full text-[11px] font-bold border ${getXmlDecisionBadgeClass(
+                              aud.decision_status
+                            )}`}
+                          >
+                            {aud.decision_label}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-4 max-w-[220px]">
+                          {aud.decision_notes ? (
+                            <div className="truncate font-medium text-slate-700 dark:text-slate-200" title={aud.decision_notes}>
+                              “{aud.decision_notes}”
                             </div>
-                          </td>
-                        </tr>
-                      );
-                    })
+                          ) : (
+                            <div className="text-slate-400">Aguardando parecer</div>
+                          )}
+                          <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                            {aud.decided_by_name
+                              ? `${aud.decided_by_name} • ${formatDateTimeBr(aud.decided_at)}`
+                              : `Por ${aud.uploaded_by_name || '—'}`}
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => openXmlAuditDetailModal(aud.id)}
+                              className="px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
+                            >
+                              Analisar / Pontuar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadXmlAuditExcel(aud.id, aud.numero_nf)}
+                              className="p-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white cursor-pointer"
+                              title="Exportar Relatório Excel"
+                            >
+                              <FileSpreadsheet className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
                   )}
                 </tbody>
               </table>
-            </div>
-
-            {/* Barra Inferior de Navegação de Registros Estilo Access Moderno */}
-            <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800/90 border-t border-slate-300 dark:border-slate-700 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  disabled={xmlAuditsList.length === 0}
-                  onClick={() => setSelectedXmlIndex(0)}
-                  className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronsLeft className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  disabled={xmlAuditsList.length === 0}
-                  onClick={() => setSelectedXmlIndex((p) => Math.max(0, p - 1))}
-                  className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronLeft className="w-3 h-3" />
-                </button>
-                <span className="px-2.5 py-0.5 bg-white dark:bg-slate-900 border border-slate-300 rounded font-bold text-slate-800 dark:text-slate-200">
-                  Registro {xmlAuditsList.length === 0 ? 0 : selectedXmlIndex + 1} de {xmlAuditsList.length}
-                </span>
-                <button
-                  type="button"
-                  disabled={xmlAuditsList.length === 0}
-                  onClick={() => setSelectedXmlIndex((p) => Math.min(xmlAuditsList.length - 1, p + 1))}
-                  className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronRight className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  disabled={xmlAuditsList.length === 0}
-                  onClick={() => setSelectedXmlIndex(Math.max(0, xmlAuditsList.length - 1))}
-                  className="p-1 rounded border border-slate-300 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
-                >
-                  <ChevronsRight className="w-3 h-3" />
-                </button>
-              </div>
-
-              <span className="font-sans text-xs text-slate-500">
-                Clique em <strong>Analisar / Pontuar</strong> (ou Enter) para Aceitar OK, Aceitar c/ Divergência ou Recusar XML
-              </span>
             </div>
           </div>
         </div>
       )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* OBJETO 4: PARAMETRIZAÇÃO OPERACIONAL & E-MAIL DA FILIAL               */}
+      {/* ABA 4: PARAMETRIZAÇÃO OPERACIONAL & E-MAIL DA FILIAL                  */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {activeMainTab === 'BRANCH_CONFIG' && selectedBranch && (
         <form
           onSubmit={handleSaveBranchSettings}
-          className="bg-white dark:bg-slate-900 rounded-xl border border-slate-300/90 dark:border-slate-800 p-4 sm:p-5 space-y-4 shadow-2xs max-w-4xl"
+          className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/90 dark:border-slate-800 p-6 space-y-5 shadow-xs max-w-4xl"
         >
-          <div className="pb-3 border-b border-slate-200 dark:border-slate-800">
-            <h2 className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
-              <Settings2 className="w-4 h-4 text-indigo-600" />
-              Parâmetros Operacionais &amp; E-mail — {selectedBranch.label}
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Configuração individual por filial para gravação em PEDIDOS_COMPRA e modelo de e-mail para fornecedores.
-            </p>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <h2 className="text-base font-black text-slate-900 dark:text-white flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-indigo-600" />
+                Parâmetros Operacionais &amp; E-mail — {selectedBranch.label}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Padrões exclusivos desta filial para gravação em PEDIDOS_COMPRA e modelo de e-mail para fornecedores.
+              </p>
+            </div>
+
+            <select
+              value={selectedBranchId ?? ''}
+              onChange={(e) => setSelectedBranchId(Number(e.target.value))}
+              className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+            >
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.label}
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Cód. Local Estoque Padrão
               </label>
               <input
@@ -3423,12 +4016,12 @@ export default function HorusDirectComprasPage() {
                     cod_local_default: e.target.value ? Number(e.target.value) : null,
                   }))
                 }
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
               />
             </div>
 
             <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Departamento (Horus)
               </label>
               <select
@@ -3439,7 +4032,7 @@ export default function HorusDirectComprasPage() {
                     cod_departamento_default: e.target.value ? Number(e.target.value) : null,
                   }))
                 }
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
               >
                 <option value="">Automático (Grupo Fornecedor)</option>
                 {branchDepartments.map((d) => (
@@ -3451,7 +4044,7 @@ export default function HorusDirectComprasPage() {
             </div>
 
             <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Centro de Custo Padrão
               </label>
               <input
@@ -3464,12 +4057,12 @@ export default function HorusDirectComprasPage() {
                   }))
                 }
                 placeholder="Automático"
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono font-bold"
               />
             </div>
 
             <div>
-              <label className="block text-[11px] font-extrabold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Modalidade Inicial
               </label>
               <select
@@ -3480,7 +4073,7 @@ export default function HorusDirectComprasPage() {
                     compra_consig_default: e.target.value === 'S' ? 'S' : 'N',
                   }))
                 }
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-bold"
               >
                 <option value="N">Compra Firme (N)</option>
                 <option value="S">Consignação (S)</option>
@@ -3488,11 +4081,11 @@ export default function HorusDirectComprasPage() {
             </div>
           </div>
 
-          <div className="pt-3 border-t border-slate-200 dark:border-slate-800 space-y-3">
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                 <Mail className="w-4 h-4 text-indigo-600" />
-                Identidade &amp; Texto de E-mail desta Filial (Envio ao Fornecedor)
+                Identidade &amp; Texto de E-mail desta Filial
               </h3>
               <label className="inline-flex items-center gap-2 text-xs font-bold cursor-pointer">
                 <input
@@ -3505,9 +4098,9 @@ export default function HorusDirectComprasPage() {
               </label>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Nome de Exibição (Filial)
                 </label>
                 <input
@@ -3515,11 +4108,11 @@ export default function HorusDirectComprasPage() {
                   value={branchConfigForm.sender_name || ''}
                   onChange={(e) => setBranchConfigForm((p) => ({ ...p, sender_name: e.target.value }))}
                   placeholder="Ex: Compras Paisagem Pompeia"
-                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   E-mail Reply-To da Filial
                 </label>
                 <input
@@ -3527,11 +4120,11 @@ export default function HorusDirectComprasPage() {
                   value={branchConfigForm.reply_to_email || ''}
                   onChange={(e) => setBranchConfigForm((p) => ({ ...p, reply_to_email: e.target.value }))}
                   placeholder="compras.pompeia@livrariapaisagem.com.br"
-                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
               </div>
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Cópias / CC da Filial
                 </label>
                 <input
@@ -3539,32 +4132,32 @@ export default function HorusDirectComprasPage() {
                   value={branchConfigForm.cc_emails || ''}
                   onChange={(e) => setBranchConfigForm((p) => ({ ...p, cc_emails: e.target.value }))}
                   placeholder="recebimento@..., fiscal@..."
-                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Assunto do E-mail
               </label>
               <input
                 type="text"
                 value={branchConfigForm.email_subject_template || ''}
                 onChange={(e) => setBranchConfigForm((p) => ({ ...p, email_subject_template: e.target.value }))}
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
               />
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-700 dark:text-slate-300 mb-1">
+              <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                 Texto Padrão ({'{fornecedor_nome}'}, {'{cod_pedido}'}, {'{filial_nome}'}, {'{filial_cnpj}'}, {'{qtd_exemplares}'}, {'{valor_liquido}'})
               </label>
               <textarea
                 rows={4}
                 value={branchConfigForm.email_body_template || ''}
                 onChange={(e) => setBranchConfigForm((p) => ({ ...p, email_body_template: e.target.value }))}
-                className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
               />
             </div>
           </div>
@@ -3573,7 +4166,7 @@ export default function HorusDirectComprasPage() {
             <button
               type="submit"
               disabled={savingBranchConfig}
-              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+              className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold inline-flex items-center gap-2 cursor-pointer"
             >
               {savingBranchConfig ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Salvar Parâmetros da Filial
@@ -3587,36 +4180,36 @@ export default function HorusDirectComprasPage() {
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showAddPublisherModal && supplierOverview && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+              className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
             >
-              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-extrabold">
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                     Vincular Editoras / Selos e Desconto (%) na Filial
                   </h3>
-                  <p className="text-[11px] text-slate-300 truncate">
-                    {supplierOverview.supplier.nom_fornecedor} • Filial: {selectedBranch?.nome}
+                  <p className="text-xs text-slate-500 truncate">
+                    {supplierOverview.supplier.nom_fornecedor} • {selectedBranch?.nome}
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowAddPublisherModal(false)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-4 space-y-3 overflow-y-auto flex-1">
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+              <div className="p-5 space-y-4 overflow-y-auto flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-3.5">
                   <div className="sm:col-span-8">
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Pesquisar Editora na tabela EDITORA do Horus (marque 1 ou mais):
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                      Pesquisar Editora na tabela EDITORA do Horus:
                     </label>
                     <input
                       type="text"
@@ -3625,30 +4218,30 @@ export default function HorusDirectComprasPage() {
                         setPubSearchTerm(e.target.value);
                         searchHorusPublishersForModal(e.target.value);
                       }}
-                      placeholder="Nome ou código da editora no Horus..."
-                      className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                      placeholder="Nome ou código da editora..."
+                      className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                     />
                   </div>
                   <div className="sm:col-span-4">
-                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                      Desconto Comercial (%)
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                      Desconto (%)
                     </label>
                     <CurrencyInput
                       value={batchDiscountPct}
                       onChangeValue={(val) => setBatchDiscountPct(val)}
                       suffixStr="%"
                       max={100}
-                      className="w-full px-3 py-1.5 rounded-lg border border-indigo-400 bg-white dark:bg-slate-800 text-right font-mono text-xs font-extrabold"
+                      className="w-full px-3.5 py-2 rounded-xl border border-indigo-400 bg-white dark:bg-slate-800 text-right font-mono text-xs font-bold"
                     />
                   </div>
                 </div>
 
                 {Object.keys(selectedPubsForSupplier).length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800">
+                  <div className="flex flex-wrap gap-1.5 p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200">
                     {Object.values(selectedPubsForSupplier).map((sp) => (
                       <span
                         key={sp.cod_editora}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-indigo-600 text-white text-[11px] font-bold"
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-semibold"
                       >
                         #{sp.cod_editora} {sp.nome_editora}
                         <button
@@ -3660,7 +4253,7 @@ export default function HorusDirectComprasPage() {
                               return next;
                             })
                           }
-                          className="ml-0.5 hover:text-rose-200 cursor-pointer"
+                          className="hover:text-rose-200 cursor-pointer"
                         >
                           ✕
                         </button>
@@ -3669,7 +4262,7 @@ export default function HorusDirectComprasPage() {
                   </div>
                 )}
 
-                <div className="border border-slate-200 dark:border-slate-700 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
                   {loadingPubSearch ? (
                     <div className="p-6 text-center text-xs text-slate-500">
                       <RefreshCw className="w-4 h-4 animate-spin mx-auto mb-1 text-indigo-600" />
@@ -3681,11 +4274,11 @@ export default function HorusDirectComprasPage() {
                       return (
                         <label
                           key={p.cod_editora}
-                          className={`px-3 py-1.5 flex items-center justify-between gap-2 text-xs cursor-pointer ${
-                            checked ? 'bg-indigo-50 dark:bg-indigo-950/50 font-extrabold' : 'hover:bg-slate-50 font-semibold'
+                          className={`px-4 py-2.5 flex items-center justify-between gap-2 text-xs cursor-pointer ${
+                            checked ? 'bg-indigo-50/80 font-bold' : 'hover:bg-slate-50'
                           }`}
                         >
-                          <div className="flex items-center gap-2 truncate">
+                          <div className="flex items-center gap-2.5 truncate">
                             <input
                               type="checkbox"
                               checked={checked}
@@ -3702,7 +4295,7 @@ export default function HorusDirectComprasPage() {
                               }
                               className="rounded border-slate-300 text-indigo-600"
                             />
-                            <span className="font-mono text-[11px] text-slate-500">#{p.cod_editora}</span>
+                            <span className="font-mono text-slate-400">#{p.cod_editora}</span>
                             <span className="truncate">{p.nome_editora}</span>
                           </div>
                           <span className="text-[11px] text-slate-400 shrink-0">{p.qtd_itens} itens</span>
@@ -3713,8 +4306,8 @@ export default function HorusDirectComprasPage() {
                 </div>
               </div>
 
-              <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-600 dark:text-slate-300">
+              <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-600">
                   {Object.keys(selectedPubsForSupplier).length} selo(s) • Desconto:{' '}
                   <strong>{batchDiscountPct.toFixed(2)}%</strong>
                 </span>
@@ -3722,7 +4315,7 @@ export default function HorusDirectComprasPage() {
                   <button
                     type="button"
                     onClick={() => setShowAddPublisherModal(false)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold cursor-pointer"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -3730,7 +4323,7 @@ export default function HorusDirectComprasPage() {
                     type="button"
                     disabled={savingSupplierDiscounts || Object.keys(selectedPubsForSupplier).length === 0}
                     onClick={handleSaveBatchSupplierDiscounts}
-                    className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-50 cursor-pointer inline-flex items-center gap-1.5"
                   >
                     {savingSupplierDiscounts ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                     Salvar Vínculos
@@ -3743,133 +4336,37 @@ export default function HorusDirectComprasPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 2: IMPORTAÇÃO DE PLANILHA ISBN + QUANTIDADE (ATÉ 10 MB)          */}
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      <AnimatePresence>
-        {showSheetModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
-            <motion.form
-              onSubmit={handleImportSheet}
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden"
-            >
-              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-extrabold">Importar Planilha de Pedido (ISBN + Quantidade)</h3>
-                  <p className="text-[11px] text-slate-300">
-                    Reconhece colunas ISBN/EAN e Quantidade (.xlsx ou .csv até 10 MB).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowSheetModal(false)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
-                    Planilha Excel (.xlsx) ou CSV (máx. 10 MB):
-                  </label>
-                  <a
-                    href={`${apiUrl}/horus-purchases/template-sheet`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs font-extrabold text-indigo-600 hover:underline flex items-center gap-1"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    Baixar Modelo .xlsx
-                  </a>
-                </div>
-
-                <input
-                  type="file"
-                  accept=".xlsx,.csv,.txt"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0] || null;
-                    if (f && f.size > MAX_SHEET_BYTES) {
-                      toast.error('O arquivo excede o limite máximo permitido de 10 MB.');
-                      e.target.value = '';
-                      return;
-                    }
-                    setSheetFile(f);
-                  }}
-                  className="w-full text-xs file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-indigo-50 file:text-indigo-700 file:font-bold border border-slate-300 rounded-lg p-1.5"
-                />
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Ou cole diretamente do Excel (ISBN + Quantidade por linha):
-                  </label>
-                  <textarea
-                    rows={5}
-                    value={sheetPastedText}
-                    onChange={(e) => setSheetPastedText(e.target.value)}
-                    placeholder={'9788535914849\t5\n9786559210886\t10'}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowSheetModal(false)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={importingSheet}
-                  className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
-                >
-                  {importingSheet ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
-                  Processar na Folha
-                </button>
-              </div>
-            </motion.form>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 3: CONCILIAÇÃO DE EDITORA/SELO NOS DOIS BANCOS (HORUS + CRONUZ)  */}
+      {/* MODAL 2: CONCILIAÇÃO DE EDITORA/SELO NOS DOIS BANCOS (HORUS + CRONUZ)  */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showReconcileModal && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
+              className="w-full max-w-xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[88vh]"
             >
-              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-extrabold flex items-center gap-2">
-                    <DatabaseZap className="w-4 h-4 text-amber-400" />
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <DatabaseZap className="w-4 h-4 text-amber-500" />
                     Conciliar Editora / Selo (Horus + Cronuz)
                   </h3>
-                  <p className="text-[11px] text-slate-300">
-                    Atualiza <code>ITENS_ESTOQUE_GERAL.COD_EDITORA</code> no Horus e <code>prd_product</code> no Cronuz ({reconcileItems.length} item(ns)).
+                  <p className="text-xs text-slate-500">
+                    Atualiza <code>ITENS_ESTOQUE_GERAL.COD_EDITORA</code> no Horus e o produto no Cronuz ({reconcileItems.length} item(ns)).
                   </p>
                 </div>
                 <button
                   type="button"
                   onClick={() => setShowReconcileModal(false)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-4 space-y-3 overflow-y-auto flex-1">
+              <div className="p-5 space-y-3.5 overflow-y-auto flex-1">
                 <input
                   type="text"
                   value={reconcileSearch}
@@ -3878,10 +4375,10 @@ export default function HorusDirectComprasPage() {
                     searchHorusPublishersForModal(e.target.value, true);
                   }}
                   placeholder="Pesquisar editora oficial cadastrada no Horus..."
-                  className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-semibold"
+                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs"
                 />
 
-                <div className="border border-slate-200 dark:border-slate-700 rounded-lg max-h-60 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
                   {reconcilePubOptions.map((pub) => {
                     const isSel = selectedReconcilePub?.cod_editora === pub.cod_editora;
                     return (
@@ -3891,12 +4388,12 @@ export default function HorusDirectComprasPage() {
                         onClick={() =>
                           setSelectedReconcilePub({ cod_editora: pub.cod_editora, nome_editora: pub.nome_editora })
                         }
-                        className={`w-full px-3 py-1.5 text-left flex items-center justify-between text-xs cursor-pointer ${
-                          isSel ? 'bg-indigo-50 font-extrabold text-indigo-800' : 'hover:bg-slate-50 font-semibold'
+                        className={`w-full px-4 py-2.5 text-left flex items-center justify-between text-xs cursor-pointer ${
+                          isSel ? 'bg-indigo-50 font-bold text-indigo-800' : 'hover:bg-slate-50'
                         }`}
                       >
                         <span>
-                          <span className="font-mono text-[11px] text-slate-500 mr-2">#{pub.cod_editora}</span>
+                          <span className="font-mono text-slate-400 mr-2">#{pub.cod_editora}</span>
                           {pub.nome_editora}
                         </span>
                         <span className="text-[11px] text-slate-400">{pub.qtd_itens} itens</span>
@@ -3906,17 +4403,17 @@ export default function HorusDirectComprasPage() {
                 </div>
               </div>
 
-              <div className="px-4 py-3 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 flex items-center justify-between">
-                <span className="text-xs font-bold truncate">
+              <div className="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/70 border-t border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-semibold truncate">
                   {selectedReconcilePub
-                    ? `Selecionada: #${selectedReconcilePub.cod_editora} - ${selectedReconcilePub.nome_editora}`
-                    : 'Escolha a editora correta acima'}
+                    ? `Nova Editora: #${selectedReconcilePub.cod_editora} - ${selectedReconcilePub.nome_editora}`
+                    : 'Selecione uma editora acima'}
                 </span>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowReconcileModal(false)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold cursor-pointer"
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs font-bold cursor-pointer"
                   >
                     Cancelar
                   </button>
@@ -3924,7 +4421,7 @@ export default function HorusDirectComprasPage() {
                     type="button"
                     disabled={!selectedReconcilePub || savingReconcile}
                     onClick={handleConfirmCartReconcile}
-                    className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-extrabold disabled:opacity-50 cursor-pointer flex items-center gap-1.5"
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-50 cursor-pointer inline-flex items-center gap-1.5"
                   >
                     {savingReconcile ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
                     Atualizar Horus + Cronuz
@@ -3937,59 +4434,55 @@ export default function HorusDirectComprasPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 4: EXPORTAÇÃO EXCEL + OPÇÃO DE MUDAR STATUS AP -> AE NO HORUS    */}
+      {/* MODAL 3: EXPORTAÇÃO EXCEL + OPÇÃO DE MUDAR STATUS AP -> AE NO HORUS    */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {exportPromptOrder && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden"
+              className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
             >
-              <div className="px-4 py-3 bg-emerald-900 text-white flex items-center justify-between">
+              <div className="px-5 py-4 bg-emerald-600 text-white flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <FileSpreadsheet className="w-5 h-5 text-emerald-300" />
-                  <h3 className="text-sm font-extrabold">
-                    Gerar Excel — Pedido #{exportPromptOrder.horus_cod_pedido || exportPromptOrder.id}
+                  <FileSpreadsheet className="w-5 h-5" />
+                  <h3 className="text-sm font-bold">
+                    Exportar Excel — Pedido #{exportPromptOrder.horus_cod_pedido || exportPromptOrder.id}
                   </h3>
                 </div>
                 <button
                   type="button"
                   onClick={() => setExportPromptOrder(null)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-emerald-100 cursor-pointer"
+                  className="p-1 rounded-lg hover:bg-white/15 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <div className="p-4 space-y-3 text-xs text-slate-600 dark:text-slate-300">
+              <div className="p-5 space-y-4 text-xs text-slate-600 dark:text-slate-300">
                 <p>
-                  Exportar planilha com <strong>ISBN, Título, Editora, Quantidade, Preço Capa, Desconto (%) e Preço Líquido</strong> para{' '}
+                  Gerar planilha com <strong>ISBN, Título, Editora, Quantidade, Preço Capa, Desconto (%) e Preço Líquido</strong> para{' '}
                   <strong>{exportPromptOrder.nome_fornecedor}</strong>.
                 </p>
 
-                {exportPromptOrder.horus_status === 'AP' ? (
-                  <div className="p-3 rounded-lg bg-sky-50 dark:bg-sky-950/40 border border-sky-200 text-sky-900 dark:text-sky-200 space-y-1">
-                    <p className="font-extrabold">Avançar também o status para AE (Aguardando Entrega)?</p>
+                {exportPromptOrder.horus_status === 'AP' && (
+                  <div className="p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 space-y-1">
+                    <p className="font-bold">Avançar também o status para AE (Aguardando Entrega)?</p>
                     <p className="text-[11px]">
-                      Atualiza <code>PEDIDOS_COMPRA</code> no Horus para <code>AE</code> e grava seu usuário/horário na auditoria.
+                      Muda o pedido para <code>AE</code> no Horus e <strong>Aguardando Entrega</strong> no Cronuz, mantendo o histórico do seu usuário.
                     </p>
                   </div>
-                ) : (
-                  <p className="text-[11px] text-slate-500">
-                    Status Horus atual: <strong>{exportPromptOrder.horus_status}</strong>.
-                  </p>
                 )}
 
-                <div className="pt-1 flex flex-col gap-2">
+                <div className="flex flex-col gap-2.5">
                   {exportPromptOrder.horus_status === 'AP' && (
                     <button
                       type="button"
                       disabled={exportingExcel}
                       onClick={() => handleExportOrderExcel(exportPromptOrder.id, true)}
-                      className="w-full py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold flex items-center justify-center gap-2 cursor-pointer"
+                      className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center justify-center gap-2 cursor-pointer"
                     >
                       {exportingExcel ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
                       Baixar Excel + Mudar para AE (Aguardando Entrega)
@@ -3999,7 +4492,7 @@ export default function HorusDirectComprasPage() {
                     type="button"
                     disabled={exportingExcel}
                     onClick={() => handleExportOrderExcel(exportPromptOrder.id, false)}
-                    className="w-full py-2 px-4 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-50 font-bold text-slate-800 dark:text-slate-200 cursor-pointer"
+                    className="w-full py-2.5 px-4 rounded-xl border border-slate-200 hover:bg-slate-50 font-bold text-slate-800 dark:text-slate-200 cursor-pointer"
                   >
                     Apenas Baixar Excel (Manter {exportPromptOrder.horus_status})
                   </button>
@@ -4011,24 +4504,24 @@ export default function HorusDirectComprasPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 5: FICHA DO PEDIDO & TRILHA DE AUDITORIA                         */}
+      {/* MODAL 4: DETALHES DO PEDIDO & HISTÓRICO DE AUDITORIA                   */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {(detailModalData || loadingOrderDetail) && (
-          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
             <motion.div
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+              className="w-full max-w-4xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
             >
-              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-extrabold">
-                    Ficha do Pedido #{detailModalData?.order.horus_cod_pedido || detailModalData?.order.id || ''}
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    Detalhes &amp; Histórico do Pedido #{detailModalData?.order.horus_cod_pedido || detailModalData?.order.id || ''}
                   </h3>
                   {detailModalData && (
-                    <p className="text-[11px] text-slate-300">
+                    <p className="text-xs text-slate-500">
                       {detailModalData.order.branch_name} • {detailModalData.order.nome_fornecedor} •{' '}
                       <strong>{detailModalData.order.status_label}</strong> • XML:{' '}
                       <strong>{detailModalData.order.xml_status_label}</strong>
@@ -4038,7 +4531,7 @@ export default function HorusDirectComprasPage() {
                 <button
                   type="button"
                   onClick={() => setDetailModalData(null)}
-                  className="p-1 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+                  className="p-1.5 rounded-xl hover:bg-slate-100 text-slate-400 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -4047,28 +4540,28 @@ export default function HorusDirectComprasPage() {
               {loadingOrderDetail || !detailModalData ? (
                 <div className="p-12 text-center text-xs text-slate-500">
                   <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-600" />
-                  Carregando itens e auditoria...
+                  Carregando detalhes...
                 </div>
               ) : (
-                <div className="p-4 space-y-4 overflow-y-auto flex-1">
+                <div className="p-5 space-y-5 overflow-y-auto flex-1">
                   <div>
-                    <h4 className="text-xs font-extrabold uppercase text-slate-500 mb-1.5 flex items-center gap-1.5">
-                      <Clock className="w-3.5 h-3.5 text-indigo-600" />
-                      Histórico Completo de Status, Exportações e Decisões XML
+                    <h4 className="text-xs font-bold uppercase text-slate-500 mb-2 flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-indigo-600" />
+                      Histórico de Alterações, Exportações e Decisões XML
                     </h4>
-                    <div className="space-y-1.5 max-h-44 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-lg p-2.5 bg-slate-50 dark:bg-slate-800/40 text-xs">
+                    <div className="space-y-2 max-h-48 overflow-y-auto border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 bg-slate-50/70 dark:bg-slate-800/40 text-xs">
                       {detailModalData.logs.map((lg) => (
                         <div
                           key={lg.id}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 py-1 border-b last:border-0 border-slate-200/70"
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 py-1.5 border-b last:border-0 border-slate-200/70"
                         >
                           <div>
-                            <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-800 font-mono text-[10px] font-extrabold mr-2">
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 font-mono text-[10px] font-bold mr-2">
                               {lg.action}
                             </span>
-                            <span className="font-semibold text-slate-800 dark:text-slate-200">{lg.details}</span>
+                            <span className="font-medium text-slate-800 dark:text-slate-200">{lg.details}</span>
                           </div>
-                          <div className="text-[11px] text-slate-500 shrink-0 font-mono">
+                          <div className="text-[11px] text-slate-400 shrink-0 font-mono">
                             {lg.user_name || 'Sistema'} • {formatDateTimeBr(lg.created_at)}
                           </div>
                         </div>
@@ -4077,34 +4570,34 @@ export default function HorusDirectComprasPage() {
                   </div>
 
                   <div>
-                    <h4 className="text-xs font-extrabold uppercase text-slate-500 mb-1.5">
-                      Itens Gravados no Pedido ({detailModalData.items.length})
+                    <h4 className="text-xs font-bold uppercase text-slate-500 mb-2">
+                      Itens do Pedido ({detailModalData.items.length})
                     </h4>
-                    <div className="overflow-x-auto rounded-lg border border-slate-300/90 max-h-72">
-                      <table className="w-full text-left text-xs border-collapse">
-                        <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 sticky top-0 border-b border-slate-300">
-                          <tr className="divide-x divide-slate-200">
-                            <th className="py-1.5 px-2.5">ISBN</th>
-                            <th className="py-1.5 px-2.5">Título</th>
-                            <th className="py-1.5 px-2.5">Editora</th>
-                            <th className="py-1.5 px-2.5 text-right">Qtd</th>
-                            <th className="py-1.5 px-2.5 text-right">Capa</th>
-                            <th className="py-1.5 px-2.5 text-right">Desc.</th>
-                            <th className="py-1.5 px-2.5 text-right">Subtotal Líq.</th>
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 max-h-72">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 sticky top-0 border-b">
+                          <tr>
+                            <th className="py-2.5 px-4">ISBN</th>
+                            <th className="py-2.5 px-4">Título</th>
+                            <th className="py-2.5 px-4">Editora</th>
+                            <th className="py-2.5 px-4 text-right">Qtd</th>
+                            <th className="py-2.5 px-4 text-right">Capa</th>
+                            <th className="py-2.5 px-4 text-right">Desc.</th>
+                            <th className="py-2.5 px-4 text-right">Subtotal Líq.</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-200/70 font-semibold">
+                        <tbody className="divide-y divide-slate-100">
                           {detailModalData.items.map((it) => (
-                            <tr key={it.id} className="divide-x divide-slate-200/60">
-                              <td className="py-1 px-2.5 font-mono">{it.isbn || `#${it.cod_item}`}</td>
-                              <td className="py-1 px-2.5 font-bold">{it.nome_item}</td>
-                              <td className="py-1 px-2.5">{it.nome_editora}</td>
-                              <td className="py-1 px-2.5 text-right font-mono">{it.quantity}</td>
-                              <td className="py-1 px-2.5 text-right font-mono">{formatMoney(it.unit_cover_price)}</td>
-                              <td className="py-1 px-2.5 text-right font-mono text-emerald-700">
+                            <tr key={it.id}>
+                              <td className="py-2.5 px-4 font-mono">{it.isbn || `#${it.cod_item}`}</td>
+                              <td className="py-2.5 px-4 font-bold">{it.nome_item}</td>
+                              <td className="py-2.5 px-4">{it.nome_editora}</td>
+                              <td className="py-2.5 px-4 text-right font-mono">{it.quantity}</td>
+                              <td className="py-2.5 px-4 text-right font-mono">{formatMoney(it.unit_cover_price)}</td>
+                              <td className="py-2.5 px-4 text-right font-mono text-emerald-700 font-bold">
                                 {Number(it.discount_pct || 0).toFixed(2)}%
                               </td>
-                              <td className="py-1 px-2.5 text-right font-mono font-extrabold">
+                              <td className="py-2.5 px-4 text-right font-mono font-bold">
                                 {formatMoney(it.subtotal_net)}
                               </td>
                             </tr>
@@ -4121,29 +4614,31 @@ export default function HorusDirectComprasPage() {
       </AnimatePresence>
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
-      {/* MODAL 6: FICHA DE ANÁLISE POSTERIOR & DECISÃO PONTUADA DO XML (NF-e)   */}
+      {/* MODAL 5: FICHA AMPLA DE ANÁLISE POSTERIOR & DECISÃO DO XML (NF-e)      */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {(xmlAuditDetailModal || loadingXmlAuditDetail) && (
-          <div className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+          <div className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5">
             <motion.div
               initial={{ opacity: 0, scale: 0.97 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.97 }}
-              className="w-full max-w-6xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-300 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[94vh]"
+              className="w-full max-w-6xl bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
             >
-              <div className="px-4 py-3 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <FileCheck2 className="w-5 h-5 text-indigo-400 shrink-0" />
+              <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                    <FileCheck2 className="w-5 h-5" />
+                  </div>
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="text-sm font-black">
-                        Auditoria de XML — NF-e nº {xmlAuditDetailModal?.audit.numero_nf || '...'}{' '}
-                        vs Pedido Horus #{xmlAuditDetailModal?.audit.horus_cod_pedido || xmlAuditDetailModal?.audit.order_id || ''}
+                      <h3 className="text-base font-black text-slate-900 dark:text-white">
+                        Análise de XML — NF-e nº {xmlAuditDetailModal?.audit.numero_nf || '...'} vs Pedido #
+                        {xmlAuditDetailModal?.audit.horus_cod_pedido || xmlAuditDetailModal?.audit.order_id || ''}
                       </h3>
                       {xmlAuditDetailModal && (
                         <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-black border ${getXmlDecisionBadgeClass(
+                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${getXmlDecisionBadgeClass(
                             xmlAuditDetailModal.audit.decision_status
                           )}`}
                         >
@@ -4152,9 +4647,9 @@ export default function HorusDirectComprasPage() {
                       )}
                     </div>
                     {xmlAuditDetailModal && (
-                      <p className="text-[11px] text-slate-300 font-mono">
-                        Chave: {xmlAuditDetailModal.audit.chave_acesso || 'Não informada'} • Emitente:{' '}
-                        {xmlAuditDetailModal.audit.emit_nome} ({formatCnpj(xmlAuditDetailModal.audit.emit_cnpj)})
+                      <p className="text-xs text-slate-500 font-mono mt-0.5">
+                        {xmlAuditDetailModal.audit.emit_nome} ({formatCnpj(xmlAuditDetailModal.audit.emit_cnpj)}) • Chave:{' '}
+                        {xmlAuditDetailModal.audit.chave_acesso || '—'}
                       </p>
                     )}
                   </div>
@@ -4170,16 +4665,16 @@ export default function HorusDirectComprasPage() {
                           xmlAuditDetailModal.audit.numero_nf
                         )
                       }
-                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
                     >
-                      <FileSpreadsheet className="w-3.5 h-3.5" />
-                      Relatório Excel
+                      <FileSpreadsheet className="w-4 h-4" />
+                      Exportar Excel
                     </button>
                   )}
                   <button
                     type="button"
                     onClick={() => setXmlAuditDetailModal(null)}
-                    className="p-1.5 rounded-lg hover:bg-white/10 text-slate-300 cursor-pointer"
+                    className="p-2 rounded-xl hover:bg-slate-100 text-slate-400 cursor-pointer"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -4189,16 +4684,15 @@ export default function HorusDirectComprasPage() {
               {loadingXmlAuditDetail || !xmlAuditDetailModal ? (
                 <div className="p-14 text-center text-xs text-slate-500">
                   <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
-                  Carregando comparativo item a item do XML contra o Pedido...
+                  Carregando comparativo do XML...
                 </div>
               ) : (
                 <>
-                  <div className="p-3.5 space-y-3 overflow-y-auto flex-1">
-                    {/* Alertas Fiscais de Cabeçalho (CNPJ Filial / CNPJ Fornecedor) */}
+                  <div className="p-5 space-y-4 overflow-y-auto flex-1">
                     {xmlAuditDetailModal.audit.header_warnings.length > 0 && (
-                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-950 space-y-1">
+                      <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950 space-y-1">
                         {xmlAuditDetailModal.audit.header_warnings.map((w, i) => (
-                          <div key={i} className="flex items-center gap-2 font-bold">
+                          <div key={i} className="flex items-center gap-2 font-semibold">
                             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
                             <span>{w}</span>
                           </div>
@@ -4206,17 +4700,17 @@ export default function HorusDirectComprasPage() {
                       </div>
                     )}
 
-                    {/* Quadro Comparativo de Totais (Pedido vs XML) */}
-                    <div className="grid grid-cols-2 sm:grid-cols-6 divide-x divide-y sm:divide-y-0 divide-slate-200 dark:divide-slate-800 border border-slate-300 dark:border-slate-800 rounded-lg bg-slate-50/70 dark:bg-slate-950/40 text-xs">
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Filial Destino</span>
-                        <span className="font-bold text-slate-900 dark:text-white truncate block">
+                    {/* Cards Resumo do Comparativo */}
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Filial Destino</span>
+                        <span className="font-bold text-slate-900 dark:text-white mt-0.5 block truncate">
                           {xmlAuditDetailModal.audit.branch_name}
                         </span>
                       </div>
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Exemplares (Ped → XML)</span>
-                        <span className="font-mono font-extrabold">
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Peças (Ped → XML)</span>
+                        <span className="font-mono font-bold text-sm mt-0.5 block">
                           {xmlAuditDetailModal.audit.order_total_qty} →{' '}
                           <span
                             className={
@@ -4229,23 +4723,16 @@ export default function HorusDirectComprasPage() {
                           </span>
                         </span>
                       </div>
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Bruto Pedido / XML</span>
-                        <span className="font-mono font-bold">
-                          {formatMoney(xmlAuditDetailModal.audit.order_total_gross)} /{' '}
-                          {formatMoney(xmlAuditDetailModal.audit.xml_total_gross)}
-                        </span>
-                      </div>
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Líquido Pedido</span>
-                        <span className="font-mono font-extrabold text-slate-900 dark:text-white">
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Líquido Pedido</span>
+                        <span className="font-mono font-bold text-sm text-slate-900 dark:text-white mt-0.5 block">
                           {formatMoney(xmlAuditDetailModal.audit.order_total_net)}
                         </span>
                       </div>
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Líquido Prod. XML</span>
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Líquido Prod. XML</span>
                         <span
-                          className={`font-mono font-extrabold ${
+                          className={`font-mono font-bold text-sm mt-0.5 block ${
                             Math.abs(
                               xmlAuditDetailModal.audit.xml_total_products_net -
                                 xmlAuditDetailModal.audit.order_total_net
@@ -4257,9 +4744,9 @@ export default function HorusDirectComprasPage() {
                           {formatMoney(xmlAuditDetailModal.audit.xml_total_products_net)}
                         </span>
                       </div>
-                      <div className="p-2">
-                        <span className="block text-[9px] font-black uppercase text-slate-400">Frete / Impostos NF</span>
-                        <span className="font-mono font-bold text-slate-600">
+                      <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 col-span-2 sm:col-span-1">
+                        <span className="block text-[10px] font-bold uppercase text-slate-400">Frete / Impostos</span>
+                        <span className="font-mono font-bold text-sm text-slate-600 mt-0.5 block">
                           {formatMoney(
                             xmlAuditDetailModal.audit.xml_frete + xmlAuditDetailModal.audit.xml_ipi_st_outros
                           )}
@@ -4267,142 +4754,115 @@ export default function HorusDirectComprasPage() {
                       </div>
                     </div>
 
-                    {/* Abas Internas de Filtro de Itens da Auditoria */}
+                    {/* Filtros Internos de Itens */}
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-2">
                         <button
                           type="button"
                           onClick={() => setXmlModalItemFilter('ALL')}
-                          className={`px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer border ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
                             xmlModalItemFilter === 'ALL'
-                              ? 'bg-slate-900 text-white border-slate-900'
-                              : 'bg-white text-slate-600 border-slate-300'
+                              ? 'bg-slate-900 text-white'
+                              : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          Todos os Itens ({xmlAuditDetailModal.items.length})
+                          Todos ({xmlAuditDetailModal.items.length})
                         </button>
                         <button
                           type="button"
                           onClick={() => setXmlModalItemFilter('DIVERGENT')}
-                          className={`px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer border ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
                             xmlModalItemFilter === 'DIVERGENT'
-                              ? 'bg-amber-600 text-white border-amber-600'
-                              : 'bg-amber-50 text-amber-800 border-amber-300'
+                              ? 'bg-amber-600 text-white'
+                              : 'bg-amber-50 text-amber-800'
                           }`}
                         >
-                          Somente Divergências ({xmlAuditDetailModal.audit.divergent_items_count})
+                          Com Divergência ({xmlAuditDetailModal.audit.divergent_items_count})
                         </button>
                         <button
                           type="button"
                           onClick={() => setXmlModalItemFilter('OK')}
-                          className={`px-3 py-1 rounded-lg text-xs font-extrabold cursor-pointer border ${
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold cursor-pointer ${
                             xmlModalItemFilter === 'OK'
-                              ? 'bg-emerald-600 text-white border-emerald-600'
-                              : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              ? 'bg-emerald-600 text-white'
+                              : 'bg-emerald-50 text-emerald-800'
                           }`}
                         >
-                          Itens 100% OK ({xmlAuditDetailModal.audit.matched_ok_count})
+                          100% OK ({xmlAuditDetailModal.audit.matched_ok_count})
                         </button>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono font-bold">
-                        <span className="text-rose-700">Desc. Div: {xmlAuditDetailModal.audit.diff_discount_count}</span>
-                        <span>•</span>
-                        <span className="text-amber-700">Capa Div: {xmlAuditDetailModal.audit.diff_cover_count}</span>
-                        <span>•</span>
-                        <span className="text-purple-700">Qtd Div: {xmlAuditDetailModal.audit.diff_qty_count}</span>
-                        <span>•</span>
-                        <span className="text-slate-600">
-                          Extras/Faltas: {xmlAuditDetailModal.audit.extra_in_xml_count}/
-                          {xmlAuditDetailModal.audit.missing_in_xml_count}
-                        </span>
                       </div>
                     </div>
 
-                    {/* Grade Comparativa Item a Item (Capa, Desconto %, Quantidade e Pontuação por Item) */}
-                    <div className="overflow-x-auto rounded-lg border border-slate-300 dark:border-slate-800 max-h-[38vh]">
-                      <table className="w-full text-left text-xs min-w-[1080px] border-collapse">
-                        <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-black uppercase text-slate-600 dark:text-slate-300 sticky top-0 z-10 border-b border-slate-300">
-                          <tr className="divide-x divide-slate-200 dark:divide-slate-700">
-                            <th className="py-2 px-2 w-32">ISBN / Cód.</th>
-                            <th className="py-2 px-2">Título / Editora</th>
-                            <th className="py-2 px-2 w-26 text-right">Qtd (Ped → XML)</th>
-                            <th className="py-2 px-2 w-36 text-right">Capa (Ped → XML)</th>
-                            <th className="py-2 px-2 w-36 text-right">Desc % (Ped → XML)</th>
-                            <th className="py-2 px-2 w-36 text-right">Líq. Unit (Ped → XML)</th>
-                            <th className="py-2 px-2 w-56">Identificação da Divergência</th>
-                            <th className="py-2 px-2 w-56">Pontuação no Item (Opcional)</th>
+                    {/* Tabela Comparativa Espaçada Item a Item */}
+                    <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 max-h-[38vh]">
+                      <table className="w-full text-left text-xs min-w-[1080px]">
+                        <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] font-bold uppercase text-slate-500 sticky top-0 z-10 border-b">
+                          <tr>
+                            <th className="py-3 px-3.5 w-36">ISBN / Cód.</th>
+                            <th className="py-3 px-3.5">Título / Editora</th>
+                            <th className="py-3 px-3.5 w-28 text-right">Qtd (Ped → XML)</th>
+                            <th className="py-3 px-3.5 w-36 text-right">Capa (Ped → XML)</th>
+                            <th className="py-3 px-3.5 w-36 text-right">Desc % (Ped → XML)</th>
+                            <th className="py-3 px-3.5 w-36 text-right">Líq. Unit (Ped → XML)</th>
+                            <th className="py-3 px-3.5 w-60">Divergências Identificadas</th>
+                            <th className="py-3 px-3.5 w-56">Pontuação no Item</th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-200/80 dark:divide-slate-800 font-semibold">
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                           {filteredXmlModalItems.map((it) => {
                             const isDiv = it.line_status === 'DIVERGENT';
                             return (
                               <tr
                                 key={it.id}
-                                className={`divide-x divide-slate-200/60 dark:divide-slate-800 ${
-                                  isDiv ? 'bg-amber-50/60 dark:bg-amber-950/20' : 'bg-white dark:bg-slate-900'
-                                }`}
+                                className={isDiv ? 'bg-amber-50/50 dark:bg-amber-950/20' : 'bg-white dark:bg-slate-900'}
                               >
-                                <td className="py-1.5 px-2 font-mono text-[11px]">
+                                <td className="py-3 px-3.5 font-mono">
                                   <div className="font-bold text-slate-900 dark:text-white">
                                     {it.isbn || it.xml_ean || 'SEM GTIN'}
                                   </div>
-                                  <div className="text-[10px] text-slate-400">
-                                    {it.cod_item ? `Horus #${it.cod_item}` : `cProd ${it.xml_cprod || '—'}`}
+                                  <div className="text-[11px] text-slate-400">
+                                    {it.cod_item ? `#${it.cod_item}` : `cProd ${it.xml_cprod || '—'}`}
                                   </div>
                                 </td>
-                                <td className="py-1.5 px-2 max-w-[230px]">
-                                  <div className="font-extrabold text-slate-900 dark:text-white truncate" title={it.title}>
+                                <td className="py-3 px-3.5 max-w-[240px]">
+                                  <div className="font-bold text-slate-900 dark:text-white truncate" title={it.title}>
                                     {it.title}
                                   </div>
-                                  <div className="text-[10px] text-slate-500">{it.nome_editora || 'Não vinculado'}</div>
+                                  <div className="text-[11px] text-slate-500">{it.nome_editora || '—'}</div>
                                 </td>
-                                <td
-                                  className={`py-1.5 px-2 text-right font-mono ${
-                                    it.has_qty_diff ? 'bg-purple-100/70 dark:bg-purple-950/40 font-black' : ''
-                                  }`}
-                                >
+                                <td className="py-3 px-3.5 text-right font-mono">
                                   <span>{it.order_qty}</span>
                                   <span className="text-slate-400 mx-1">→</span>
-                                  <span className={it.has_qty_diff ? 'text-purple-800 dark:text-purple-300' : 'text-emerald-700'}>
+                                  <strong className={it.has_qty_diff ? 'text-purple-700' : 'text-emerald-700'}>
                                     {it.xml_qty}
-                                  </span>
+                                  </strong>
                                 </td>
-                                <td
-                                  className={`py-1.5 px-2 text-right font-mono text-[11px] ${
-                                    it.has_cover_diff ? 'bg-amber-100/80 dark:bg-amber-950/40 font-black' : ''
-                                  }`}
-                                >
-                                  <div>{formatMoney(it.order_cover_price)}</div>
-                                  <div className={it.has_cover_diff ? 'text-amber-800' : 'text-emerald-700'}>
+                                <td className="py-3 px-3.5 text-right font-mono">
+                                  <div className="text-slate-500">{formatMoney(it.order_cover_price)}</div>
+                                  <div className={`font-bold ${it.has_cover_diff ? 'text-amber-700' : 'text-emerald-700'}`}>
                                     → {formatMoney(it.xml_cover_price)}
                                   </div>
                                 </td>
-                                <td
-                                  className={`py-1.5 px-2 text-right font-mono text-[11px] ${
-                                    it.has_discount_diff ? 'bg-rose-100/80 dark:bg-rose-950/40 font-black' : ''
-                                  }`}
-                                >
-                                  <div>{it.order_discount_pct.toFixed(2)}%</div>
-                                  <div className={it.has_discount_diff ? 'text-rose-700' : 'text-emerald-700'}>
+                                <td className="py-3 px-3.5 text-right font-mono">
+                                  <div className="text-slate-500">{it.order_discount_pct.toFixed(2)}%</div>
+                                  <div className={`font-bold ${it.has_discount_diff ? 'text-rose-600' : 'text-emerald-700'}`}>
                                     → {it.xml_discount_pct.toFixed(2)}%
                                   </div>
                                 </td>
-                                <td className="py-1.5 px-2 text-right font-mono text-[11px]">
-                                  <div>{formatMoney(it.order_unit_net)}</div>
-                                  <div className="font-extrabold text-slate-900 dark:text-white">
+                                <td className="py-3 px-3.5 text-right font-mono">
+                                  <div className="text-slate-500">{formatMoney(it.order_unit_net)}</div>
+                                  <div className="font-bold text-slate-900 dark:text-white">
                                     → {formatMoney(it.xml_unit_net)}
                                   </div>
                                 </td>
-                                <td className="py-1.5 px-2">
-                                  <div className="flex flex-wrap gap-1 mb-0.5">
+                                <td className="py-3 px-3.5">
+                                  <div className="flex flex-wrap gap-1 mb-1">
                                     {(it.divergence_tags || []).map((tg) => {
                                       const meta = formatTagLabel(tg);
                                       return (
                                         <span
                                           key={tg}
-                                          className={`px-1.5 py-0.2 rounded border text-[10px] font-extrabold ${meta.cls}`}
+                                          className={`px-2 py-0.5 rounded-md border text-[10px] font-bold ${meta.cls}`}
                                         >
                                           {meta.text}
                                         </span>
@@ -4410,12 +4870,10 @@ export default function HorusDirectComprasPage() {
                                     })}
                                   </div>
                                   {isDiv && it.divergence_summary && (
-                                    <div className="text-[10px] text-slate-600 dark:text-slate-300 leading-tight">
-                                      {it.divergence_summary}
-                                    </div>
+                                    <div className="text-[11px] text-slate-600 leading-snug">{it.divergence_summary}</div>
                                   )}
                                 </td>
-                                <td className="py-1.5 px-2">
+                                <td className="py-3 px-3.5">
                                   <input
                                     type="text"
                                     value={itemNotesDraft[it.id] || ''}
@@ -4426,7 +4884,7 @@ export default function HorusDirectComprasPage() {
                                       }))
                                     }
                                     placeholder="Pontuar item..."
-                                    className="w-full px-2 py-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px]"
+                                    className="w-full px-2.5 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
                                   />
                                 </td>
                               </tr>
@@ -4437,50 +4895,50 @@ export default function HorusDirectComprasPage() {
                     </div>
                   </div>
 
-                  {/* Painel Inferior de Decisão Posterior & Pontuação Obrigatória */}
-                  <div className="p-3.5 bg-slate-100 dark:bg-slate-800/90 border-t border-slate-300 dark:border-slate-700 space-y-2.5">
+                  {/* Painel Inferior Espaçado de Decisão Posterior */}
+                  <div className="p-5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 space-y-3">
                     <div>
-                      <label className="block text-[11px] font-black uppercase text-slate-700 dark:text-slate-200 mb-1">
-                        Parecer / Pontuação da Análise Posterior (Obrigatório ao Aceitar c/ Divergência ou Recusar XML)
+                      <label className="block text-xs font-bold text-slate-700 dark:text-slate-200 mb-1.5">
+                        Parecer / Pontuação da Análise Posterior (Obrigatório ao Aceitar c/ Divergência ou Recusar)
                       </label>
                       <textarea
                         rows={2}
                         value={decisionNotesDraft}
                         onChange={(e) => setDecisionNotesDraft(e.target.value)}
-                        placeholder="Ex: Autorizado recebimento parcial sem o ISBN X e diferença de R$ 2,00 na capa reajustada pela editora / Ou: XML recusado por desconto de 40% em vez de 50% acordado..."
-                        className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold"
+                        placeholder="Descreva a autorização comercial, ressalvas negociadas com a editora ou o motivo da recusa do XML..."
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs"
                       />
                     </div>
 
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-                      <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                      <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={decisionAdvanceToAe}
                           onChange={(e) => setDecisionAdvanceToAe(e.target.checked)}
                           className="rounded border-slate-300 text-indigo-600"
                         />
-                        Se aprovar XML e o pedido ainda estiver AP no Horus, mudar automaticamente p/ AE (Aguardando Entrega)
+                        Se aprovar XML e o pedido estiver AP no Horus, mudar automaticamente para AE (Aguardando Entrega)
                       </label>
 
-                      <div className="flex flex-wrap items-center gap-2 justify-end">
+                      <div className="flex flex-wrap items-center gap-2.5 justify-end">
                         <button
                           type="button"
                           disabled={savingXmlDecision}
                           onClick={() => handleSubmitXmlDecision('REJECTED')}
-                          className="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                         >
-                          <Ban className="w-3.5 h-3.5" />
-                          Recusar XML (Deixar Pontuado)
+                          <Ban className="w-4 h-4" />
+                          Recusar XML (Pontuado)
                         </button>
 
                         <button
                           type="button"
                           disabled={savingXmlDecision}
                           onClick={() => handleSubmitXmlDecision('ACCEPTED_WITH_DIVERGENCE')}
-                          className="px-3.5 py-2 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-extrabold flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          className="px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                         >
-                          <AlertTriangle className="w-3.5 h-3.5" />
+                          <AlertTriangle className="w-4 h-4" />
                           Aceitar c/ Divergência (Pontuado)
                         </button>
 
@@ -4488,7 +4946,7 @@ export default function HorusDirectComprasPage() {
                           type="button"
                           disabled={savingXmlDecision}
                           onClick={() => handleSubmitXmlDecision('XML_OK')}
-                          className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-extrabold flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+                          className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
                         >
                           <ShieldCheck className="w-4 h-4" />
                           Aceitar XML OK
