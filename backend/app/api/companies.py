@@ -54,6 +54,7 @@ class ModuleUpdate(BaseModel):
     module_horus_api_bridge: Optional[bool] = None
     module_mercadolivre: Optional[bool] = None
     module_estantevirtual: Optional[bool] = None
+    module_event_management: Optional[bool] = None
 
 
 class HorusTestRequest(BaseModel):
@@ -305,6 +306,7 @@ def update_company_modules(
         "module_services": ["services"],
         "module_mercadolivre": ["mercadolivre"],
         "module_estantevirtual": ["estantevirtual"],
+        "module_event_management": ["event_management"],
     }
     newly_enabled_perms: List[str] = []
     for mod_key, mod_val in update_data.items():

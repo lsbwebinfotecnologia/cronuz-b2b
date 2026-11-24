@@ -121,6 +121,7 @@ from app.api import b2c_storefront as b2c_storefront_api
 from app.api import horus_api_bridge as horus_api_bridge_api
 from app.api import mercadolivre as mercadolivre_api
 from app.api import estantevirtual as estantevirtual_api
+from app.api import event_management as event_management_api
 from app.models import backorder as backorder_models
 from app.models import encomenda as encomenda_models
 from app.models import product_address as product_address_models
@@ -130,6 +131,7 @@ from app.models import b2c_storefront as b2c_storefront_models
 from app.models import dbm_proposal as dbm_proposal_models
 from app.models import mercadolivre as mercadolivre_models
 from app.models import estantevirtual as estantevirtual_models
+from app.models import event_management as event_management_models
 from app.models import horus_reconciliation_closing as horus_rec_closing_models
 from app.models import horus_reconciliation_template as horus_rec_template_models
 from app.models import horus_purchase as horus_purchase_models
@@ -188,6 +190,7 @@ b2c_storefront_models.Base.metadata.create_all(bind=engine)
 dbm_proposal_models.Base.metadata.create_all(bind=engine)
 mercadolivre_models.Base.metadata.create_all(bind=engine)
 estantevirtual_models.Base.metadata.create_all(bind=engine)
+event_management_models.Base.metadata.create_all(bind=engine)
 horus_rec_closing_models.Base.metadata.create_all(bind=engine)
 horus_rec_template_models.Base.metadata.create_all(bind=engine)
 horus_purchase_models.Base.metadata.create_all(bind=engine)
@@ -204,6 +207,7 @@ try:
         _conn.execute(_sql_text("ALTER TABLE prd_product ADD COLUMN IF NOT EXISTS sales_365 INTEGER DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_mercadolivre BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_estantevirtual BOOLEAN NOT NULL DEFAULT FALSE"))
+        _conn.execute(_sql_text("ALTER TABLE cmp_company ADD COLUMN IF NOT EXISTS module_event_management BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS meli_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS meli_app_id VARCHAR(100)"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS meli_client_secret VARCHAR(255)"))
@@ -445,6 +449,7 @@ if _SERVER_ROLE != "horus_api_only":
     app.include_router(b2c_storefront_api.router)
     app.include_router(mercadolivre_api.router)
     app.include_router(estantevirtual_api.router)
+    app.include_router(event_management_api.router)
 
 # Mount static files directory using absolute path relative to backend/main.py
 from pathlib import Path as _MainPath

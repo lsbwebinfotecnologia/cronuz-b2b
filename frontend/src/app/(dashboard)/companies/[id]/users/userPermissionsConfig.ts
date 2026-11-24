@@ -30,7 +30,8 @@ import {
   Settings,
   Store,
   Send,
-  BarChart3
+  BarChart3,
+  Ticket
 } from 'lucide-react';
 
 export interface InitialPageOption {
@@ -48,6 +49,8 @@ export const INITIAL_PAGE_OPTIONS: InitialPageOption[] = [
 
   { value: '/encomendas', label: 'Encomendas de Clientes', group: 'Canais de Venda & Balcão' },
   { value: '/orders', label: 'Gestão de Pedidos', group: 'Canais de Venda & Balcão' },
+  { value: '/event-management', label: 'Gerenciamento de Eventos (Workspace)', group: 'Verticais & Operação' },
+  { value: '/event-management/mobile', label: 'Eventos — Modo Mobile (Captação & Portaria)', group: 'Verticais & Operação' },
   { value: '/orders/intake', label: 'Mesa de Pedidos (Intake B2B)', group: 'Canais de Venda & Balcão' },
   { value: '/proposals', label: 'Propostas Comerciais', group: 'Canais de Venda & Balcão' },
   { value: '/subscriptions', label: 'Assinaturas & Recorrência', group: 'Canais de Venda & Balcão' },
@@ -365,6 +368,14 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
     companyCheck: (c) => Boolean(c?.module_schools),
   },
   {
+    id: 'event_management',
+    label: 'Gerenciamento de Eventos',
+    description: 'Eventos, casas de show, CRM de convidados, ingressos PDF/ZIP, convites e disparo WhatsApp',
+    category: 'verticals',
+    icon: Ticket,
+    companyCheck: (c) => Boolean(c?.module_event_management),
+  },
+  {
     id: 'editorial',
     label: 'Editorial & Produção',
     description: 'Projetos editoriais, pipeline Kanban e contratos',
@@ -489,5 +500,13 @@ export const USER_ROLE_PRESETS: RolePreset[] = [
     initialPage: '/financial',
     fullAccess: false,
     modules: ['financial', 'services', 'sefaz_download', 'orders', 'customers'],
+  },
+  {
+    id: 'eventos_promoter_portaria',
+    label: 'Eventos, Lista VIP & Portaria Mobile',
+    description: 'Focado na operação de eventos, captação rápida de convidados no celular, ingressos e check-in.',
+    initialPage: '/event-management/mobile',
+    fullAccess: false,
+    modules: ['event_management'],
   },
 ];

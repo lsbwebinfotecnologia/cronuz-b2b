@@ -455,5 +455,19 @@ def start_scheduler():
     except Exception as _e_job_ev:
         logger.warning(f"Falha ao registrar job da Estante Virtual: {_e_job_ev}")
 
+    # Fila Segura de Disparo WhatsApp Anti-Bloqueio do Módulo Gerenciamento de Eventos (a cada 20s)
+    try:
+        from app.jobs.event_dispatch_job import run_event_whatsapp_dispatch_job
+        scheduler.add_job(
+            run_event_whatsapp_dispatch_job,
+            IntervalTrigger(seconds=20),
+            id="job_event_whatsapp_dispatch",
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=60,
+        )
+    except Exception as _e_job_evm:
+        logger.warning(f"Falha ao registrar job de disparo de Eventos: {_e_job_evm}")
+
     scheduler.start()
     logger.info("Cronuz BG Scheduler Started - Jobs: NFSe Queue, Bookinfo Purchase Orders, Dropship Stock Sync, Log Cleanup, Horus SQL Pool Cleanup, Logistics Auto Send, Logistics Auto Check, Logistics Auto Invoice, Authors SSL Sync, B2C Horus Stock Sync")

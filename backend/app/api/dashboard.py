@@ -101,6 +101,9 @@ def get_dashboard_metrics(
         (getattr(company, "module_estantevirtual", False) if company else False)
         or (getattr(settings, "ev_enabled", False) if settings else False)
     )
+    module_event_management = False if is_master_global else bool(
+        getattr(company, "module_event_management", False) if company else False
+    )
     horus_sql_feature_vindi_baixa = getattr(settings, "horus_sql_feature_vindi_baixa", False) if settings else False
     horus_sql_feature_conciliador_padrao = getattr(settings, "horus_sql_feature_conciliador_padrao", False) if settings else False
     horus_sql_feature_pedidos = getattr(settings, "horus_sql_feature_pedidos", False) if settings else False
@@ -430,6 +433,7 @@ def get_dashboard_metrics(
         "module_b2c_storefront": module_b2c_storefront,
         "module_mercadolivre": module_mercadolivre,
         "module_estantevirtual": module_estantevirtual,
+        "module_event_management": module_event_management,
         "horus_sql_feature_vindi_baixa": horus_sql_feature_vindi_baixa,
         "horus_sql_feature_conciliador_padrao": horus_sql_feature_conciliador_padrao,
         "horus_sql_feature_pedidos": horus_sql_feature_pedidos,
@@ -558,6 +562,7 @@ def get_master_overview(
         {"key": "services", "label": "Serviços (OS)", "field": "module_services", "color": "purple"},
         {"key": "editorial", "label": "Editorial", "field": "module_editorial", "color": "pink"},
         {"key": "schools", "label": "Escolas & Eventos", "field": "module_schools", "color": "amber"},
+        {"key": "event_management", "label": "Gerenciamento de Eventos", "field": "module_event_management", "color": "violet"},
         {"key": "cafeteria", "label": "Cafeteria Omnichannel", "field": "module_cafeteria", "color": "amber"},
         {"key": "horus_sql", "label": "Horus SQL Direct", "field": "module_horus_sql", "color": "cyan"},
         {"key": "horus_erp", "label": "Horus ERP REST", "field": "module_horus_erp", "color": "teal"},

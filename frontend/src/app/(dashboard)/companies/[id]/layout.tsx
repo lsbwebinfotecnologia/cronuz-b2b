@@ -100,6 +100,7 @@ export default function CompanyProfileLayout({ children }: { children: React.Rea
       module_encomendas: company.module_encomendas ?? false,
       module_order_intake: company.module_order_intake ?? false,
       module_b2c_storefront: company.module_b2c_storefront ?? false,
+      module_event_management: company.module_event_management ?? false,
       [moduleKey]: nextVal,
     };
 

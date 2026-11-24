@@ -336,6 +336,7 @@ export default function CompanyModulesPage() {
       module_b2c_storefront: company.module_b2c_storefront ?? false,
       module_mercadolivre: company.module_mercadolivre ?? false,
       module_estantevirtual: company.module_estantevirtual ?? false,
+      module_event_management: company.module_event_management ?? false,
       [moduleName]: !currentValue,
     };
 
@@ -572,6 +573,14 @@ export default function CompanyModulesPage() {
           desc: 'Salão e mesas, comandas, fila de barista (KDS) e integração ao caixa PDV.',
           icon: Coffee,
           colorClass: 'bg-amber-600',
+        },
+        {
+          key: 'module_event_management',
+          title: 'Gerenciamento de Eventos & Ingressos',
+          desc: 'Eventos, casas de show, CRM de convidados sem duplicidade, Cofre PDF/ZIP, convites e disparo seguro WhatsApp.',
+          icon: Smartphone,
+          colorClass: 'bg-violet-600',
+          badge: 'Novo',
         },
       ],
     },

@@ -33,6 +33,7 @@ export default function CompanyModulesPage() {
       module_editorial: company.module_editorial ?? false,
       module_schools: company.module_schools ?? false,
       module_cafeteria: company.module_cafeteria ?? false,
+      module_event_management: company.module_event_management ?? false,
       [moduleName]: !currentValue
     };
 

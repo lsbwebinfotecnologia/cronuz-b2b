@@ -230,6 +230,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
   const [moduleB2cStorefront, setModuleB2cStorefront] = useState(false);
   const [moduleMercadolivre, setModuleMercadolivre] = useState(false);
   const [moduleEstantevirtual, setModuleEstantevirtual] = useState(false);
+  const [moduleEventManagement, setModuleEventManagement] = useState(false);
   const [unreadLeads, setUnreadLeads] = useState(0);
   const [companyLogo, setCompanyLogo] = useState<string | null>(null);
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -394,6 +395,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
                setModuleB2cStorefront(data.module_b2c_storefront || false);
                setModuleMercadolivre(data.module_mercadolivre || false);
                setModuleEstantevirtual(data.module_estantevirtual || false);
+               setModuleEventManagement(data.module_event_management || false);
                if (data.company_logo) setCompanyLogo(data.company_logo);
             }
          } catch (e) {}
@@ -678,6 +680,20 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     });
   }
 
+  if (moduleEventManagement) {
+    const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
+    const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
+    filteredSellerNavigation.splice(targetIndex, 0, {
+      name: 'Gerenc. Eventos',
+      href: '/event-management',
+      icon: Ticket,
+      subItems: [
+        { name: 'Central de Eventos', href: '/event-management', icon: LayoutGrid },
+        { name: 'Modo Mobile & Portaria', href: '/event-management/mobile', icon: MonitorSmartphone },
+      ]
+    });
+  }
+
   if (moduleCafeteria) {
     const settingsIndex = filteredSellerNavigation.findIndex(n => n.name === 'Configurações');
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
@@ -817,6 +833,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Vendedores/Rep' || nav.href === '/agents') return userAllowedModules.includes('agents') || userAllowedModules.includes('customers');
         if (nav.name === 'Editorial' || nav.href.startsWith('/editorial')) return userAllowedModules.includes('editorial');
         if (nav.name === 'Escolas & Eventos' || nav.href.startsWith('/schools')) return userAllowedModules.includes('schools');
+        if (nav.name === 'Gerenc. Eventos' || nav.href.startsWith('/event-management')) return userAllowedModules.includes('event_management');
         if (nav.name === 'Consignação' || nav.href.includes('/consignment')) return userAllowedModules.includes('consignment');
         if (nav.name === 'Distribuidoras' || nav.href.includes('/distributors')) return userAllowedModules.includes('distributors');
         if (nav.name === 'Download SEFAZ' || nav.href.includes('/sefaz-download')) return userAllowedModules.includes('sefaz_download') || userAllowedModules.includes('settings');

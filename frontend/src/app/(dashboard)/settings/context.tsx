@@ -30,6 +30,7 @@ export interface SettingsCompany {
   module_cafeteria?: boolean;
   module_encomendas?: boolean;
   module_order_intake?: boolean;
+  module_event_management?: boolean;
   active: boolean;
 }
 

@@ -58,6 +58,7 @@ export interface Company {
   module_mercadolivre?: boolean;
   module_estantevirtual?: boolean;
   module_cafeteria?: boolean;
+  module_event_management?: boolean;
   active: boolean;
 }
 
