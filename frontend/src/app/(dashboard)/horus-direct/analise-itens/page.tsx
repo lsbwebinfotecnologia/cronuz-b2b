@@ -111,6 +111,7 @@ interface AnaliseItemRow {
   last_entry_nf?: string | null;
   last_entry_branch?: string | null;
   branches_breakdown?: BranchBreakdown[];
+  _enrichedKey?: string;
 }
 
 interface HorusEstoqueItem {
@@ -356,6 +357,8 @@ export default function HorusAnaliseItensPage() {
   const [products, setProducts] = useState<AnaliseItemRow[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [enrichingPage, setEnrichingPage] = useState<boolean>(false);
+  const [analysisSeq, setAnalysisSeq] = useState<number>(0);
+  const enrichReqIdRef = useRef<number>(0);
   const [selectedIndex, setSelectedIndex] = useState<number>(0);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(50);
@@ -593,16 +596,21 @@ export default function HorusAnaliseItensPage() {
     } catch {}
   };
 
-  const fetchProducts = async (overrideCid?: number, overridePublishers?: string[]) => {
+  const fetchProducts = async (
+    overrideCid?: number,
+    overridePublishers?: string[],
+    overrideBranchId?: string
+  ) => {
     setLoading(true);
     const cid = overrideCid || companyId;
     const pubsToUse = overridePublishers !== undefined ? overridePublishers : selectedPublishers;
+    const branchToUse = overrideBranchId !== undefined ? overrideBranchId : selectedBranchId;
     try {
       const token = getToken();
       const params = new URLSearchParams();
       params.append('limit', '5000');
       params.append('company_id', String(cid));
-      params.append('branch_id', selectedBranchId);
+      params.append('branch_id', branchToUse);
 
       const combined = [filterTitle, filterIsbn].filter(Boolean).join(' ').trim();
       if (combined) params.append('search', combined);
@@ -631,7 +639,7 @@ export default function HorusAnaliseItensPage() {
           min_stock: Number(p.min_stock || 0),
           min_stock_by_branch: p.min_stock_by_branch || {},
           consignment_stock: Number(p.consignment_stock || 0),
-          consigned_received: 0,
+          consigned_received: Number(p.consigned_received || 0),
           sales_365: Number(p.sales_365 || 0),
           sales_period: Number(p.sales_period ?? p.sales_90 ?? 0),
           units_per_box: Number(p.units_per_box || 0),
@@ -644,10 +652,12 @@ export default function HorusAnaliseItensPage() {
             String(p.name || '').toUpperCase().includes('E-BOOK'),
           is_out_of_print: Boolean(p.is_out_of_print) || p.status === 'INACTIVE',
           status: p.status,
+          _enrichedKey: undefined,
         }));
         setProducts(mapped);
         setCurrentPage(1);
         setSelectedIndex(mapped.length > 0 ? 0 : -1);
+        setAnalysisSeq((s) => s + 1);
       }
     } catch (e) {
       console.error('Erro ao carregar produtos em Análise de Itens:', e);
@@ -777,12 +787,24 @@ export default function HorusAnaliseItensPage() {
     return filteredProducts.slice(pageStartIdx, pageStartIdx + pageSize);
   }, [filteredProducts, pageStartIdx, pageSize]);
 
+  const currentEnrichKey = useMemo(
+    () =>
+      `${analysisSeq}|${selectedBranchId}|${salesFilterMode}|${salesDays}|${salesStartDate}|${salesEndDate}`,
+    [analysisSeq, selectedBranchId, salesFilterMode, salesDays, salesStartDate, salesEndDate]
+  );
+
   // Enriquecimento em tempo real dos itens visíveis na página atual (Saldos reais por Filial, Custo, Consig Env/Rec, Estoque Mínimo, Vendas & Última Entrada)
-  const enrichCurrentPageItems = async (itemsToEnrich: AnaliseItemRow[], overrideBranchId?: string) => {
+  const enrichCurrentPageItems = async (
+    itemsToEnrich: AnaliseItemRow[],
+    overrideBranchId?: string,
+    stampEnrichKey?: string,
+    includeAllBranches = false
+  ) => {
     if (!itemsToEnrich.length || !companyId) return;
     const pIds = itemsToEnrich.map((i) => i.id).filter(Boolean);
     if (!pIds.length) return;
     const branchToSend = overrideBranchId ?? selectedBranchId;
+    const reqId = ++enrichReqIdRef.current;
 
     setEnrichingPage(true);
     try {
@@ -800,68 +822,81 @@ export default function HorusAnaliseItensPage() {
           sales_days: salesDays,
           sales_start_date: salesFilterMode === 'DATES' && salesStartDate ? salesStartDate : null,
           sales_end_date: salesFilterMode === 'DATES' && salesEndDate ? salesEndDate : null,
+          include_all_branches: includeAllBranches,
         }),
       });
       if (!res.ok) return;
       const data = await res.json();
-      const metricsMap = data?.metrics || {};
-      if (Object.keys(metricsMap).length > 0) {
-        setProducts((prev) =>
-          prev.map((item) => {
-            const m = metricsMap[String(item.id)];
-            if (!m) return item;
-            return {
-              ...item,
-              horus_cod_item: m.horus_cod_item ?? item.horus_cod_item,
-              stock_quantity: Number(m.stock_quantity ?? item.stock_quantity ?? 0),
-              min_stock: Number(m.min_stock ?? item.min_stock ?? 0),
-              min_stock_by_branch: m.min_stock_by_branch ?? item.min_stock_by_branch,
-              consignment_stock: Number(m.consignment_stock ?? item.consignment_stock ?? 0),
-              consigned_received: Number(m.consigned_received ?? item.consigned_received ?? 0),
-              cost_price: Number(m.cost_price ?? item.cost_price ?? 0),
-              sold_unit_price: Number(m.sold_unit_price ?? item.sold_unit_price ?? 0),
-              sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
-              sales_period: Number(m.sales_period ?? item.sales_period ?? 0),
-              last_entry_date: m.last_entry_date ?? item.last_entry_date,
-              last_entry_qty: Number(m.last_entry_qty ?? item.last_entry_qty ?? 0),
-              last_entry_cost: Number(m.last_entry_cost ?? item.last_entry_cost ?? 0),
-              last_entry_type: m.last_entry_type ?? item.last_entry_type,
-              last_entry_cfop: m.last_entry_cfop ?? item.last_entry_cfop,
-              last_entry_nf: m.last_entry_nf ?? item.last_entry_nf,
-              last_entry_branch: m.last_entry_branch ?? item.last_entry_branch,
-              branches_breakdown: m.branches_breakdown ?? item.branches_breakdown,
-            };
-          })
-        );
+      if (!includeAllBranches && reqId < enrichReqIdRef.current) {
+        // Ignora resposta antiga se o usuário já trocou de filtro/página/filial
+        return;
       }
+      const metricsMap = data?.metrics || {};
+      const requestedSet = new Set(pIds);
+      setProducts((prev) =>
+        prev.map((item) => {
+          const m = metricsMap[String(item.id)];
+          if (!m) {
+            if (stampEnrichKey && requestedSet.has(item.id)) {
+              return { ...item, _enrichedKey: stampEnrichKey };
+            }
+            return item;
+          }
+          const hasFullBreakdown = Array.isArray(m.branches_breakdown) && m.branches_breakdown.length > 0;
+          return {
+            ...item,
+            horus_cod_item: m.horus_cod_item ?? item.horus_cod_item,
+            stock_quantity: Number(m.stock_quantity ?? item.stock_quantity ?? 0),
+            min_stock: Number(m.min_stock ?? item.min_stock ?? 0),
+            min_stock_by_branch: m.min_stock_by_branch ?? item.min_stock_by_branch,
+            consignment_stock: Number(m.consignment_stock ?? item.consignment_stock ?? 0),
+            consigned_received: Number(m.consigned_received ?? item.consigned_received ?? 0),
+            cost_price: Number(m.cost_price ?? item.cost_price ?? 0),
+            sold_unit_price: Number(m.sold_unit_price ?? item.sold_unit_price ?? 0),
+            sales_365: Number(m.sales_365 ?? item.sales_365 ?? 0),
+            sales_period: Number(m.sales_period ?? item.sales_period ?? 0),
+            last_entry_date: m.last_entry_date ?? item.last_entry_date,
+            last_entry_qty: Number(m.last_entry_qty ?? item.last_entry_qty ?? 0),
+            last_entry_cost: Number(m.last_entry_cost ?? item.last_entry_cost ?? 0),
+            last_entry_type: m.last_entry_type ?? item.last_entry_type,
+            last_entry_cfop: m.last_entry_cfop ?? item.last_entry_cfop,
+            last_entry_nf: m.last_entry_nf ?? item.last_entry_nf,
+            last_entry_branch: m.last_entry_branch ?? item.last_entry_branch,
+            branches_breakdown: hasFullBreakdown ? m.branches_breakdown : item.branches_breakdown,
+            _enrichedKey: stampEnrichKey ?? item._enrichedKey,
+          };
+        })
+      );
     } catch {
       // silencioso
     } finally {
-      setEnrichingPage(false);
+      if (reqId >= enrichReqIdRef.current) {
+        setEnrichingPage(false);
+      }
     }
   };
 
-  // Dispara enriquecimento da página sempre que mudar de página, de filial ou de período de vendas
-  useEffect(() => {
-    if (paginatedProducts.length > 0) {
-      enrichCurrentPageItems(paginatedProducts, selectedBranchId);
-    }
-  }, [
-    safeCurrentPage,
-    pageSize,
-    selectedBranchId,
-    salesFilterMode,
-    salesDays,
-    salesStartDate,
-    salesEndDate,
-    products.length,
-  ]);
+  const unenrichedPageIdsKey = useMemo(() => {
+    return paginatedProducts
+      .filter((p) => p._enrichedKey !== currentEnrichKey)
+      .map((p) => p.id)
+      .join(',');
+  }, [paginatedProducts, currentEnrichKey]);
 
-  // Se o usuário abrir o Raio-X Multi-Filial de um item cujo branches_breakdown ainda não chegou, busca imediatamente
+  // Dispara enriquecimento automático sempre que os itens visíveis mudarem (Analisar, Editoras, Filial, Ordenação, Filtros, Página ou Período)
+  useEffect(() => {
+    if (!unenrichedPageIdsKey) return;
+    const toEnrich = paginatedProducts.filter((p) => p._enrichedKey !== currentEnrichKey);
+    if (toEnrich.length > 0) {
+      enrichCurrentPageItems(toEnrich, selectedBranchId, currentEnrichKey, false);
+    }
+  }, [unenrichedPageIdsKey, currentEnrichKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Ao abrir o Raio-X Multi-Filial (botão Filial ou duplo clique), carrega todas as filiais para aquele item
   const handleOpenDetailModal = (item: AnaliseItemRow) => {
     setDetailModalProductId(item.id);
     if (!item.branches_breakdown || item.branches_breakdown.length === 0) {
-      enrichCurrentPageItems([item], selectedBranchId);
+      enrichCurrentPageItems([item], selectedBranchId, currentEnrichKey, true);
     }
   };
 
@@ -1648,6 +1683,7 @@ export default function HorusAnaliseItensPage() {
                             setSelectedBranchIds([b.id]);
                             setMinStockImportBranchId(String(b.id));
                             setBranchDropdownOpen(false);
+                            fetchProducts(companyId, selectedPublishers, String(b.id));
                           }}
                           className="px-1.5 py-0.5 rounded bg-slate-100 hover:bg-indigo-100 text-[10px] font-bold text-indigo-700 shrink-0 cursor-pointer"
                           title="Analisar somente esta filial"
@@ -1667,7 +1703,10 @@ export default function HorusAnaliseItensPage() {
                   </span>
                   <button
                     type="button"
-                    onClick={() => setBranchDropdownOpen(false)}
+                    onClick={() => {
+                      setBranchDropdownOpen(false);
+                      fetchProducts(companyId, selectedPublishers, selectedBranchId);
+                    }}
                     className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
                   >
                     Concluir

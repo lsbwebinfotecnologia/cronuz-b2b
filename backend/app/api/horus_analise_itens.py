@@ -1076,6 +1076,114 @@ def list_analise_itens_products(
     by_branch_isbn, by_branch_prod = _load_min_stock_map(db, seller_id)
     branch_ids = [int(b["id"]) for b in all_branches]
     active_bids = _parse_selected_branch_ids(branch_id, None, all_branches)
+    active_branches = [b for b in all_branches if int(b["id"]) in active_bids] or all_branches
+
+    # Pré-carrega saldos reais (Saldo Disp, Consig Env, Consig Rec e Custo Médio) das filiais selecionadas
+    # diretamente de TABELA_SALDO_ITENS_GERAL + TABELA_SALDO_ITENS para que ordenação e filtro funcionem na hora
+    live_branch_balances: Dict[int, Dict[str, Any]] = {}
+    cods_for_balance = sorted({
+        int(p.horus_cod_item)
+        for p in rows
+        if p.horus_cod_item and int(p.horus_cod_item) > 0
+    })
+    if cods_for_balance and active_branches:
+        try:
+            sql_bal_client = HorusSQLClient(db, seller_id)
+            b_by_pair: Dict[Tuple[int, int], List[Dict[str, Any]]] = {}
+            for b in active_branches:
+                b_by_pair.setdefault((int(b["cod_empresa"]), int(b["cod_filial"])), []).append(b)
+            pair_sql = " OR ".join(
+                f"(COD_EMPRESA = {emp} AND COD_FILIAL = {fil})"
+                for emp, fil in b_by_pair.keys()
+            )
+            branches_w_loc = [b for b in active_branches if b.get("locais")]
+
+            per_cod_branch: Dict[int, Dict[int, Dict[str, Any]]] = {}
+            for ch_idx in range(0, len(cods_for_balance), 1000):
+                ch_cods = cods_for_balance[ch_idx:ch_idx + 1000]
+                cods_csv = ", ".join(str(c) for c in ch_cods)
+
+                g_rows = sql_bal_client.query(
+                    f"""
+                    SELECT
+                        COD_EMPRESA AS cod_empresa,
+                        COD_FILIAL AS cod_filial,
+                        COD_ITEM AS cod_item,
+                        ISNULL(SALDO_VENDAVEL, 0) - ISNULL(SALDO_RESERVADO_VENDA, 0) AS saldo_disp,
+                        ISNULL(SALDO_CONSIGNADO_ENVIADO, 0) AS consig_enviado,
+                        ISNULL(SALDO_CONSIGNADO_RECEBIDO, 0) AS consig_recebido,
+                        CASE
+                            WHEN ISNULL(CUSTO_MEDIO_ESTOQUE, 0) > 0 THEN CUSTO_MEDIO_ESTOQUE
+                            ELSE ISNULL(CUSTO_MEDIO_ESTOQUE_REAL, 0)
+                        END AS custo_medio
+                    FROM TABELA_SALDO_ITENS_GERAL WITH (NOLOCK)
+                    WHERE COD_ITEM IN ({cods_csv})
+                      AND ({pair_sql})
+                    """,
+                    max_rows=len(ch_cods) * max(2, len(b_by_pair) + 1),
+                )
+                for gr in (g_rows or []):
+                    ci = int(gr["cod_item"])
+                    pr = (int(gr["cod_empresa"]), int(gr["cod_filial"]))
+                    if pr not in b_by_pair:
+                        continue
+                    c_map = per_cod_branch.setdefault(ci, {})
+                    for b in b_by_pair[pr]:
+                        bid_i = int(b["id"])
+                        c_map[bid_i] = {
+                            "stock": 0 if b.get("locais") else int(float(gr.get("saldo_disp") or 0)),
+                            "consig_env": int(float(gr.get("consig_enviado") or 0)),
+                            "consig_rec": int(float(gr.get("consig_recebido") or 0)),
+                            "cost": round(float(gr.get("custo_medio") or 0.0), 2),
+                        }
+
+                if branches_w_loc:
+                    loc_sql = " OR ".join(
+                        f"(COD_EMPRESA = {int(b['cod_empresa'])} AND COD_FILIAL = {int(b['cod_filial'])} AND COD_LOCAL IN ({', '.join(str(x) for x in b['locais'])}))"
+                        for b in branches_w_loc
+                    )
+                    l_rows = sql_bal_client.query(
+                        f"""
+                        SELECT
+                            COD_EMPRESA AS cod_empresa,
+                            COD_FILIAL AS cod_filial,
+                            COD_LOCAL AS cod_local,
+                            COD_ITEM AS cod_item,
+                            SUM(ISNULL(SALDO_TOTAL, 0)) AS saldo_local
+                        FROM TABELA_SALDO_ITENS WITH (NOLOCK)
+                        WHERE COD_ITEM IN ({cods_csv})
+                          AND ({loc_sql})
+                        GROUP BY COD_EMPRESA, COD_FILIAL, COD_LOCAL, COD_ITEM
+                        """,
+                        max_rows=len(ch_cods) * max(4, len(branches_w_loc) * 2),
+                    )
+                    loc_acc: Dict[Tuple[int, int], int] = {}
+                    for lr in (l_rows or []):
+                        ci = int(lr["cod_item"])
+                        emp = int(lr["cod_empresa"])
+                        fil = int(lr["cod_filial"])
+                        loc = int(lr["cod_local"])
+                        sl = int(float(lr.get("saldo_local") or 0))
+                        for b in branches_w_loc:
+                            if int(b["cod_empresa"]) == emp and int(b["cod_filial"]) == fil and loc in (b.get("locais") or []):
+                                loc_acc[(ci, int(b["id"]))] = loc_acc.get((ci, int(b["id"])), 0) + sl
+                    for (ci, bid_i), s_tot in loc_acc.items():
+                        c_map = per_cod_branch.setdefault(ci, {})
+                        entry_b = c_map.setdefault(bid_i, {"stock": 0, "consig_env": 0, "consig_rec": 0, "cost": 0.0})
+                        entry_b["stock"] = s_tot
+
+            for ci in cods_for_balance:
+                c_map = per_cod_branch.get(ci) or {}
+                b_vals = list(c_map.values())
+                costs_pos = [v["cost"] for v in b_vals if v["cost"] > 0]
+                live_branch_balances[ci] = {
+                    "stock_quantity": sum(v["stock"] for v in b_vals),
+                    "consignment_stock": sum(v["consig_env"] for v in b_vals),
+                    "consigned_received": sum(v["consig_rec"] for v in b_vals),
+                    "cost_price": round(sum(costs_pos) / len(costs_pos), 2) if costs_pos else 0.0,
+                }
+        except Exception as bal_err:
+            log.warning(f"[HorusAnaliseItens] Aviso ao pré-carregar saldos das filiais em /products: {bal_err}")
 
     items_out: List[Dict[str, Any]] = []
     for p in rows:
@@ -1092,6 +1200,7 @@ def list_analise_itens_products(
             min_by_b[str(bid)] = ms_val
 
         eff_min_stock = sum(min_by_b.get(str(bid), 0) for bid in active_bids)
+        live_bal = live_branch_balances.get(int(p.horus_cod_item)) if p.horus_cod_item else None
 
         items_out.append({
             "id": p.id,
@@ -1103,12 +1212,12 @@ def list_analise_itens_products(
             "brand": (p.brand or "").strip() or "Sem Editora",
             "subject": (p.subject or "").strip() or "Geral",
             "base_price": float(p.base_price or 0.0),
-            "cost_price": float(p.cost_price or 0.0),
-            "stock_quantity": int(p.stock_quantity or 0),
+            "cost_price": live_bal["cost_price"] if (live_bal and live_bal["cost_price"] > 0) else float(p.cost_price or 0.0),
+            "stock_quantity": live_bal["stock_quantity"] if live_bal is not None else int(p.stock_quantity or 0),
             "min_stock": eff_min_stock,
             "min_stock_by_branch": min_by_b,
-            "consignment_stock": int(p.consignment_stock or 0),
-            "consigned_received": 0,
+            "consignment_stock": live_bal["consignment_stock"] if live_bal is not None else int(p.consignment_stock or 0),
+            "consigned_received": live_bal["consigned_received"] if live_bal is not None else 0,
             "sales_365": int(p.sales_365 or 0),
             "sales_period": int(p.sales_90 or 0),
             "units_per_box": int(p.units_per_box or 0),
@@ -1692,6 +1801,7 @@ def _enrich_cod_items_multibranch(
                 log.warning(f"[HorusAnaliseItens] Aviso em TABELA_SALDO_ITENS por local: {e}")
 
         # 3. Vendas por Filial (365 dias + Período filtrado + Preço Líquido Unitário Vendido) em NF_ITENS + NF_MESTRE
+        sales_lookback_days = 740 if (sales_start_date or int(sales_days or 90) > 365) else 366
         try:
             sql_sales = f"""
                 SELECT
@@ -1716,7 +1826,7 @@ def _enrich_cod_items_multibranch(
                     AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                 WHERE NFI.COD_ITEM IN ({cods_in})
                   AND ({nfi_pair_conds})
-                  AND NF.DAT_EMISSAO_NF >= DATEADD(day, -740, GETDATE())
+                  AND NF.DAT_EMISSAO_NF >= DATEADD(day, -{sales_lookback_days}, GETDATE())
                   AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                   AND NFI.COD_NATUREZA IN ({SARGABLE_CFOP_VENDAS})
                 GROUP BY NFI.COD_EMPRESA, NFI.COD_FILIAL, NFI.COD_ITEM
@@ -1799,65 +1909,76 @@ def _enrich_cod_items_multibranch(
         except Exception as e:
             log.warning(f"[HorusAnaliseItens] Aviso ao consultar NF_ENTRADA (Última Entrada): {e}")
 
-        # 4B. Conciliação complementar com TABELA_MOVIMENTACAO + TPO_MOVIMENTACAO (Entradas de Compra ou Consignação, sem Ajustes!)
-        try:
-            sql_last_mov = f"""
-                WITH RankedMov AS (
-                    SELECT
-                        TM.COD_EMPRESA_DEST AS cod_empresa,
-                        TM.COD_FILIAL_DEST AS cod_filial,
-                        TM.COD_ITEM AS cod_item,
-                        TM.DAT_MOVTO AS dat_movto,
-                        ISNULL(TM.QTD_MOVTO, 0) AS qtd_movto,
-                        RTRIM(LTRIM(ISNULL(TPO.NOM_MOVTO, ''))) AS nom_movto,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY TM.COD_EMPRESA_DEST, TM.COD_FILIAL_DEST, TM.COD_ITEM
-                            ORDER BY TM.DAT_MOVTO DESC
-                        ) AS rn
-                    FROM TABELA_MOVIMENTACAO TM WITH (NOLOCK)
-                    INNER JOIN TPO_MOVIMENTACAO TPO WITH (NOLOCK)
-                        ON TPO.COD_MOVTO = TM.COD_MOVTO
-                    WHERE TM.COD_ITEM IN ({cods_in})
-                      AND ({tm_pair_conds})
-                      AND TM.STA_MOVTO = 'E'
-                      AND (
-                          UPPER(TPO.NOM_MOVTO) LIKE '%COMPRA%'
-                          OR UPPER(TPO.NOM_MOVTO) LIKE '%CONSIG%'
-                      )
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%AJUSTE%'
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%IMPLANT%'
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%DEVOL%'
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%RETORNO%'
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%CANCEL%'
-                      AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%SIMB%'
+        # 4B. Conciliação complementar com TABELA_MOVIMENTACAO apenas para itens sem NF_ENTRADA encontrada
+        cods_missing_nf_entry = [
+            c_i
+            for c_i in chunk
+            if any(not b_v.get("last_entry_date") for b_v in result[c_i]["by_branch"].values())
+        ]
+        if cods_missing_nf_entry:
+            mov_cods_in = ", ".join(str(c) for c in cods_missing_nf_entry)
+            try:
+                sql_last_mov = f"""
+                    WITH RankedMov AS (
+                        SELECT
+                            TM.COD_EMPRESA_DEST AS cod_empresa,
+                            TM.COD_FILIAL_DEST AS cod_filial,
+                            TM.COD_ITEM AS cod_item,
+                            TM.DAT_MOVTO AS dat_movto,
+                            ISNULL(TM.QTD_MOVTO, 0) AS qtd_movto,
+                            RTRIM(LTRIM(ISNULL(TPO.NOM_MOVTO, ''))) AS nom_movto,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY TM.COD_EMPRESA_DEST, TM.COD_FILIAL_DEST, TM.COD_ITEM
+                                ORDER BY TM.DAT_MOVTO DESC
+                            ) AS rn
+                        FROM TABELA_MOVIMENTACAO TM WITH (NOLOCK)
+                        INNER JOIN TPO_MOVIMENTACAO TPO WITH (NOLOCK)
+                            ON TPO.COD_MOVTO = TM.COD_MOVTO
+                        WHERE TM.COD_ITEM IN ({mov_cods_in})
+                          AND ({tm_pair_conds})
+                          AND TM.DAT_MOVTO >= DATEADD(day, -740, GETDATE())
+                          AND TM.STA_MOVTO = 'E'
+                          AND (
+                              UPPER(TPO.NOM_MOVTO) LIKE '%COMPRA%'
+                              OR UPPER(TPO.NOM_MOVTO) LIKE '%CONSIG%'
+                          )
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%AJUSTE%'
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%IMPLANT%'
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%DEVOL%'
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%RETORNO%'
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%CANCEL%'
+                          AND UPPER(TPO.NOM_MOVTO) NOT LIKE '%SIMB%'
+                    )
+                    SELECT cod_empresa, cod_filial, cod_item, dat_movto, qtd_movto, nom_movto
+                    FROM RankedMov
+                    WHERE rn = 1
+                """
+                mov_rows = sql_client.query(
+                    sql_last_mov,
+                    max_rows=len(cods_missing_nf_entry) * max(2, len(branch_by_pair) + 1),
                 )
-                SELECT cod_empresa, cod_filial, cod_item, dat_movto, qtd_movto, nom_movto
-                FROM RankedMov
-                WHERE rn = 1
-            """
-            mov_rows = sql_client.query(sql_last_mov, max_rows=len(chunk) * max(2, len(branch_by_pair) + 1))
-            for mr in (mov_rows or []):
-                c_int = int(mr["cod_item"])
-                pair = (int(mr["cod_empresa"]), int(mr["cod_filial"]))
-                if c_int in result and pair in branch_by_pair:
-                    dt_val = mr.get("dat_movto")
-                    dt_iso = dt_val.strftime("%Y-%m-%d") if isinstance(dt_val, datetime) else (str(dt_val)[:10] if dt_val else None)
-                    if not dt_iso:
-                        continue
-                    nom_up = str(mr.get("nom_movto") or "").upper()
-                    mov_type = "CONSIG. RECEBIDA" if "CONSIG" in nom_up else "COMPRA"
-                    qtd_m = int(float(mr.get("qtd_movto") or 0))
-                    for b in branch_by_pair[pair]:
-                        b_entry = result[c_int]["by_branch"][int(b["id"])]
-                        cur_dt = b_entry.get("last_entry_date")
-                        if not cur_dt or dt_iso > cur_dt:
-                            b_entry["last_entry_date"] = dt_iso
-                            b_entry["last_entry_qty"] = qtd_m
-                            b_entry["last_entry_type"] = mov_type
-                            if not b_entry.get("last_entry_cfop"):
-                                b_entry["last_entry_cfop"] = "1917/2917" if mov_type == "CONSIG. RECEBIDA" else "1102/2102"
-        except Exception as e:
-            log.warning(f"[HorusAnaliseItens] Aviso ao consultar TABELA_MOVIMENTACAO: {e}")
+                for mr in (mov_rows or []):
+                    c_int = int(mr["cod_item"])
+                    pair = (int(mr["cod_empresa"]), int(mr["cod_filial"]))
+                    if c_int in result and pair in branch_by_pair:
+                        dt_val = mr.get("dat_movto")
+                        dt_iso = dt_val.strftime("%Y-%m-%d") if isinstance(dt_val, datetime) else (str(dt_val)[:10] if dt_val else None)
+                        if not dt_iso:
+                            continue
+                        nom_up = str(mr.get("nom_movto") or "").upper()
+                        mov_type = "CONSIG. RECEBIDA" if "CONSIG" in nom_up else "COMPRA"
+                        qtd_m = int(float(mr.get("qtd_movto") or 0))
+                        for b in branch_by_pair[pair]:
+                            b_entry = result[c_int]["by_branch"][int(b["id"])]
+                            cur_dt = b_entry.get("last_entry_date")
+                            if not cur_dt or dt_iso > cur_dt:
+                                b_entry["last_entry_date"] = dt_iso
+                                b_entry["last_entry_qty"] = qtd_m
+                                b_entry["last_entry_type"] = mov_type
+                                if not b_entry.get("last_entry_cfop"):
+                                    b_entry["last_entry_cfop"] = "1917/2917" if mov_type == "CONSIG. RECEBIDA" else "1102/2102"
+            except Exception as e:
+                log.warning(f"[HorusAnaliseItens] Aviso ao consultar TABELA_MOVIMENTACAO: {e}")
 
     for c_int, data_c in result.items():
         b_list = list(data_c["by_branch"].values())
@@ -1909,6 +2030,7 @@ class EnrichPagePayload(BaseModel):
     sales_days: int = 90
     sales_start_date: Optional[str] = None
     sales_end_date: Optional[str] = None
+    include_all_branches: bool = False
 
 
 @router.post("/enrich-page")
@@ -1918,13 +2040,10 @@ def enrich_analise_itens_page(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Enriquece instantaneamente os itens visíveis na página atual consultando TODAS as filiais
-    configuradas em /logistics/branches para que:
-      1. O Raio-X Multi-Filial (branches_breakdown) SEMPRE tenha o saldo real e distinto de cada filial
-         (nunca repetindo o saldo consolidado).
-      2. A linha principal exiba os dados consolidados APENAS das filiais selecionadas no filtro
-         (1 filial, um subconjunto de filiais ou Todas as Filiais).
-      3. O Estoque Mínimo por Produto e por Filial (min_stock) seja conciliado junto com o saldo real.
+    Enriquece instantaneamente os itens visíveis na página atual:
+      - Na grade paginada (include_all_branches=False), consulta apenas as filiais selecionadas
+        no filtro (evitando varrer 10+ filiais desnecessariamente).
+      - No Raio-X Multi-Filial (include_all_branches=True), consulta todas as filiais configuradas.
     """
     seller_id = _resolve_seller_id(current_user, payload.company_id)
     if not payload.product_ids:
@@ -1932,6 +2051,13 @@ def enrich_analise_itens_page(
 
     all_branches = _load_configured_branches(db, seller_id)
     selected_bids = _parse_selected_branch_ids(payload.branch_id, payload.branch_ids, all_branches)
+    selected_branches = [b for b in all_branches if int(b["id"]) in selected_bids] or all_branches
+    branches_to_query = (
+        all_branches
+        if (payload.include_all_branches or len(selected_branches) == len(all_branches))
+        else selected_branches
+    )
+    full_breakdown_loaded = len(branches_to_query) == len(all_branches)
 
     prods = (
         db.query(Product)
@@ -1952,7 +2078,7 @@ def enrich_analise_itens_page(
 
     sql_client = None
     try:
-        sql_client = HorusSQLClient(db, seller_id)
+        sql_client = HorusSQLClient(db, seller_id, pool_slot="enrich")
     except Exception:
         sql_client = None
 
@@ -2000,7 +2126,7 @@ def enrich_analise_itens_page(
         enriched_by_cod = _enrich_cod_items_multibranch(
             sql_client=sql_client,
             cod_items=list(cod_to_prods.keys()),
-            target_branches=all_branches,
+            target_branches=branches_to_query,
             sales_days=payload.sales_days,
             sales_start_date=payload.sales_start_date,
             sales_end_date=payload.sales_end_date,
@@ -2015,7 +2141,6 @@ def enrich_analise_itens_page(
                 min_by_b: Dict[str, int] = {}
                 for b in all_branches:
                     bid = int(b["id"])
-                    raw_bm = dict(e_data["by_branch"].get(bid) or {})
                     ms_val = _resolve_product_branch_min_stock(
                         branch_id=bid,
                         product_id=p_obj.id,
@@ -2023,15 +2148,16 @@ def enrich_analise_itens_page(
                         by_branch_isbn=by_branch_isbn,
                         by_branch_prod=by_branch_prod,
                     )
-                    raw_bm["min_stock"] = ms_val
-                    raw_bm["min_stock_status"] = _evaluate_min_stock_status(
-                        int(raw_bm.get("stock_available") or 0),
-                        ms_val,
-                    )
                     min_by_b[str(bid)] = ms_val
-                    by_b_list.append(raw_bm)
+                    if bid in e_data["by_branch"]:
+                        raw_bm = dict(e_data["by_branch"][bid])
+                        raw_bm["min_stock"] = ms_val
+                        raw_bm["min_stock_status"] = _evaluate_min_stock_status(
+                            int(raw_bm.get("stock_available") or 0),
+                            ms_val,
+                        )
+                        by_b_list.append(raw_bm)
 
-                # Consolida apenas as filiais marcadas em selected_bids (1, algumas ou todas)
                 sel_branch_entries = [
                     e_data["by_branch"][bid]
                     for bid in selected_bids
@@ -2075,7 +2201,7 @@ def enrich_analise_itens_page(
                     "last_entry_cfop": latest_sel["last_entry_cfop"] if latest_sel else None,
                     "last_entry_nf": latest_sel["last_entry_nf"] if latest_sel else None,
                     "last_entry_branch": latest_sel["branch_name"] if latest_sel else None,
-                    "branches_breakdown": by_b_list,
+                    "branches_breakdown": by_b_list if full_breakdown_loaded else [],
                 }
 
     return {
