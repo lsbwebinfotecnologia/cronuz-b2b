@@ -312,6 +312,29 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
     bank_configured = bool(eff_forma and eff_banco and eff_agencia and eff_conta)
     col_map = dict(t.column_mapping) if isinstance(t.column_mapping, dict) else {}
     use_horus_val = bool(col_map.get("use_horus_value", False))
+    launch_fee_as_expense = bool(col_map.get("launch_fee_as_expense", False))
+    cp_fee_posting_mode = str(col_map.get("cp_fee_posting_mode") or "UNIFIED").upper().strip()
+    if cp_fee_posting_mode not in ("UNIFIED", "INDIVIDUAL"):
+        cp_fee_posting_mode = "UNIFIED"
+    cp_cod_grp_fornecedor = str(col_map.get("cp_cod_grp_fornecedor") or "").strip()
+    cp_cod_fornecedor = str(col_map.get("cp_cod_fornecedor") or "").strip()
+    cp_nom_fornecedor = str(col_map.get("cp_nom_fornecedor") or "").strip()
+    cp_cod_departamento = str(col_map.get("cp_cod_departamento") or "").strip()
+    cp_cod_centro_custo = str(col_map.get("cp_cod_centro_custo") or "").strip()
+    cp_cod_grup_desp = str(col_map.get("cp_cod_grup_desp") or "").strip()
+    cp_cod_despesa = str(col_map.get("cp_cod_despesa") or "").strip()
+    cp_cod_forma = str(col_map.get("cp_cod_forma") or eff_forma or "").strip()
+    cpagar_configured = all(
+        bool(x)
+        for x in (
+            cp_cod_grp_fornecedor,
+            cp_cod_fornecedor,
+            cp_cod_departamento,
+            cp_cod_centro_custo,
+            cp_cod_grup_desp,
+            cp_cod_despesa,
+        )
+    )
 
     return {
         "id": t.id,
@@ -338,6 +361,17 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
         "unify_installments": bool(t.unify_installments),
         "split_excess_launch": bool(t.split_excess_launch),
         "use_horus_value": use_horus_val,
+        "launch_fee_as_expense": launch_fee_as_expense,
+        "cp_fee_posting_mode": cp_fee_posting_mode,
+        "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+        "cp_cod_fornecedor": cp_cod_fornecedor,
+        "cp_nom_fornecedor": cp_nom_fornecedor,
+        "cp_cod_departamento": cp_cod_departamento,
+        "cp_cod_centro_custo": cp_cod_centro_custo,
+        "cp_cod_grup_desp": cp_cod_grup_desp,
+        "cp_cod_despesa": cp_cod_despesa,
+        "cp_cod_forma": cp_cod_forma,
+        "cpagar_configured": cpagar_configured,
         "is_active": bool(t.is_active),
         "is_system_preset": bool(t.is_system_preset),
         "display_order": t.display_order or 10,
@@ -354,6 +388,17 @@ def _serialize_template(t: HorusReconciliationTemplate, settings: CompanySetting
             "unify_installments": bool(t.unify_installments),
             "split_excess_launch": bool(t.split_excess_launch),
             "use_horus_value": use_horus_val,
+            "launch_fee_as_expense": launch_fee_as_expense,
+            "cp_fee_posting_mode": cp_fee_posting_mode,
+            "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+            "cp_cod_fornecedor": cp_cod_fornecedor,
+            "cp_nom_fornecedor": cp_nom_fornecedor,
+            "cp_cod_departamento": cp_cod_departamento,
+            "cp_cod_centro_custo": cp_cod_centro_custo,
+            "cp_cod_grup_desp": cp_cod_grup_desp,
+            "cp_cod_despesa": cp_cod_despesa,
+            "cp_cod_forma": cp_cod_forma,
+            "cpagar_configured": cpagar_configured,
             "cod_empresa": cod_emp,
             "cod_filial": cod_fil,
             "is_configured": bank_configured,
@@ -1181,7 +1226,13 @@ def _run_dynamic_reconciliation_core(
                 LR.COD_PED_VENDA,
                 LR.COD_FILIAL,
                 LR.STA_LANCTO_CRECEBER,
-                LR.VLR_LANCTO_TOTAL AS VLR_LANCTO_CRECEBER,
+                CASE
+                    WHEN LR.STA_LANCTO_CRECEBER = 'AB'
+                         AND ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0) > 0
+                         AND (ISNULL(LR.VLR_LANCTO_TOTAL, 0) + ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0)) <= ISNULL(LR.VLR_LANCTO_CRECEBER, 0) + 0.05
+                    THEN ISNULL(LR.VLR_LANCTO_TOTAL, 0) + ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0)
+                    ELSE ISNULL(LR.VLR_LANCTO_TOTAL, 0)
+                END AS VLR_LANCTO_CRECEBER,
                 LR.VLR_LANCTO_CRECEBER AS VLR_BRUTO_ORIGINAL,
                 ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0) AS VLR_LANCTO_ABATIMENTO,
                 LR.COD_BORDERO,
@@ -1740,6 +1791,16 @@ class ReconciliationTemplatePayload(BaseModel):
     unify_installments: Optional[bool] = True
     split_excess_launch: Optional[bool] = True
     use_horus_value: Optional[bool] = None
+    launch_fee_as_expense: Optional[bool] = None
+    cp_fee_posting_mode: Optional[str] = None
+    cp_cod_grp_fornecedor: Optional[str] = None
+    cp_cod_fornecedor: Optional[str] = None
+    cp_nom_fornecedor: Optional[str] = None
+    cp_cod_departamento: Optional[str] = None
+    cp_cod_centro_custo: Optional[str] = None
+    cp_cod_grup_desp: Optional[str] = None
+    cp_cod_despesa: Optional[str] = None
+    cp_cod_forma: Optional[str] = None
 
 
 # ── Endpoints REST ────────────────────────────────────────────────────────────
@@ -1829,6 +1890,22 @@ def create_dynamic_reconciliation_template(
     col_map = dict(payload.column_mapping or {"engine_preset": "DYNAMIC"})
     if payload.use_horus_value is not None:
         col_map["use_horus_value"] = bool(payload.use_horus_value)
+    if payload.launch_fee_as_expense is not None:
+        col_map["launch_fee_as_expense"] = bool(payload.launch_fee_as_expense)
+    for cp_k in (
+        "cp_fee_posting_mode",
+        "cp_cod_grp_fornecedor",
+        "cp_cod_fornecedor",
+        "cp_nom_fornecedor",
+        "cp_cod_departamento",
+        "cp_cod_centro_custo",
+        "cp_cod_grup_desp",
+        "cp_cod_despesa",
+        "cp_cod_forma",
+    ):
+        cp_v = getattr(payload, cp_k, None)
+        if cp_v is not None:
+            col_map[cp_k] = str(cp_v).strip()
 
     new_tpl = HorusReconciliationTemplate(
         company_id=company_id,
@@ -1921,15 +1998,26 @@ def update_dynamic_reconciliation_template(
 
     tpl.badge = f"{'2 Planilhas' if tpl.mode == 'DUAL_FILE' else '1 Planilha'} • {tpl.horus_match_field}"
 
-    if payload.column_mapping is not None:
-        col_map = dict(payload.column_mapping)
-        if payload.use_horus_value is not None:
-            col_map["use_horus_value"] = bool(payload.use_horus_value)
-        tpl.column_mapping = col_map
-    elif payload.use_horus_value is not None:
-        col_map = dict(tpl.column_mapping or {})
+    col_map = dict(payload.column_mapping if payload.column_mapping is not None else (tpl.column_mapping or {}))
+    if payload.use_horus_value is not None:
         col_map["use_horus_value"] = bool(payload.use_horus_value)
-        tpl.column_mapping = col_map
+    if payload.launch_fee_as_expense is not None:
+        col_map["launch_fee_as_expense"] = bool(payload.launch_fee_as_expense)
+    for cp_k in (
+        "cp_fee_posting_mode",
+        "cp_cod_grp_fornecedor",
+        "cp_cod_fornecedor",
+        "cp_nom_fornecedor",
+        "cp_cod_departamento",
+        "cp_cod_centro_custo",
+        "cp_cod_grup_desp",
+        "cp_cod_despesa",
+        "cp_cod_forma",
+    ):
+        cp_v = getattr(payload, cp_k, None)
+        if cp_v is not None:
+            col_map[cp_k] = str(cp_v).strip()
+    tpl.column_mapping = col_map
 
     if payload.forma_pagto is not None:
         tpl.forma_pagto = payload.forma_pagto.strip()
@@ -2228,6 +2316,20 @@ async def create_dynamic_template_bordero(
         "payment_date_mode": payment_date_mode,
         "unify_installments": unify_installments,
         "split_excess_launch": split_excess_launch,
+        "launch_fee_as_expense": bool(
+            payload.launch_fee_as_expense
+            if payload.launch_fee_as_expense is not None
+            else bank_cfg.get("launch_fee_as_expense", False)
+        ),
+        "cp_fee_posting_mode": str(payload.cp_fee_posting_mode or bank_cfg.get("cp_fee_posting_mode") or "UNIFIED"),
+        "cp_cod_grp_fornecedor": str(payload.cp_cod_grp_fornecedor or bank_cfg.get("cp_cod_grp_fornecedor") or ""),
+        "cp_cod_fornecedor": str(payload.cp_cod_fornecedor or bank_cfg.get("cp_cod_fornecedor") or ""),
+        "cp_nom_fornecedor": str(payload.cp_nom_fornecedor or bank_cfg.get("cp_nom_fornecedor") or ""),
+        "cp_cod_departamento": str(payload.cp_cod_departamento or bank_cfg.get("cp_cod_departamento") or ""),
+        "cp_cod_centro_custo": str(payload.cp_cod_centro_custo or bank_cfg.get("cp_cod_centro_custo") or ""),
+        "cp_cod_grup_desp": str(payload.cp_cod_grup_desp or bank_cfg.get("cp_cod_grup_desp") or ""),
+        "cp_cod_despesa": str(payload.cp_cod_despesa or bank_cfg.get("cp_cod_despesa") or ""),
+        "cp_cod_forma": str(payload.cp_cod_forma or bank_cfg.get("cp_cod_forma") or forma_pagto),
     }
     settings.horus_sql_profile_bank_configs = prof_configs
     db.commit()
@@ -2237,6 +2339,26 @@ async def create_dynamic_template_bordero(
     payload.unify_installments = unify_installments
     payload.split_excess_launch = split_excess_launch
     payload.forma_pagto_credito_maior = forma_pagto_credito_maior
+    if payload.launch_fee_as_expense is None:
+        payload.launch_fee_as_expense = bool(bank_cfg.get("launch_fee_as_expense", False))
+    if not payload.cp_fee_posting_mode:
+        payload.cp_fee_posting_mode = str(bank_cfg.get("cp_fee_posting_mode") or "UNIFIED")
+    if not payload.cp_cod_grp_fornecedor:
+        payload.cp_cod_grp_fornecedor = str(bank_cfg.get("cp_cod_grp_fornecedor") or "")
+    if not payload.cp_cod_fornecedor:
+        payload.cp_cod_fornecedor = str(bank_cfg.get("cp_cod_fornecedor") or "")
+    if not payload.cp_nom_fornecedor:
+        payload.cp_nom_fornecedor = str(bank_cfg.get("cp_nom_fornecedor") or "")
+    if not payload.cp_cod_departamento:
+        payload.cp_cod_departamento = str(bank_cfg.get("cp_cod_departamento") or "")
+    if not payload.cp_cod_centro_custo:
+        payload.cp_cod_centro_custo = str(bank_cfg.get("cp_cod_centro_custo") or "")
+    if not payload.cp_cod_grup_desp:
+        payload.cp_cod_grup_desp = str(bank_cfg.get("cp_cod_grup_desp") or "")
+    if not payload.cp_cod_despesa:
+        payload.cp_cod_despesa = str(bank_cfg.get("cp_cod_despesa") or "")
+    if not payload.cp_cod_forma:
+        payload.cp_cod_forma = str(bank_cfg.get("cp_cod_forma") or forma_pagto)
 
     return await create_vindi_bordero(
         company_id=company_id,

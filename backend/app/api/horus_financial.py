@@ -94,6 +94,16 @@ class CreateBorderoPayload(BaseModel):
     unify_installments: Optional[bool] = None
     split_excess_launch: Optional[bool] = None
     forma_pagto_credito_maior: Optional[str] = None
+    launch_fee_as_expense: Optional[bool] = None
+    cp_fee_posting_mode: Optional[str] = None  # "UNIFIED" | "INDIVIDUAL"
+    cp_cod_grp_fornecedor: Optional[str] = None
+    cp_cod_fornecedor: Optional[str] = None
+    cp_nom_fornecedor: Optional[str] = None
+    cp_cod_departamento: Optional[str] = None
+    cp_cod_centro_custo: Optional[str] = None
+    cp_cod_grup_desp: Optional[str] = None
+    cp_cod_despesa: Optional[str] = None
+    cp_cod_forma: Optional[str] = None
     channel_filename: Optional[str] = None
     tray_filename: Optional[str] = None
     notes: Optional[str] = None
@@ -110,6 +120,16 @@ class SaveProfileBankConfigPayload(BaseModel):
     payment_date_mode: Optional[str] = "CHANNEL_DATE"
     unify_installments: Optional[bool] = None
     split_excess_launch: Optional[bool] = None
+    launch_fee_as_expense: Optional[bool] = None
+    cp_fee_posting_mode: Optional[str] = "UNIFIED"
+    cp_cod_grp_fornecedor: Optional[str] = ""
+    cp_cod_fornecedor: Optional[str] = ""
+    cp_nom_fornecedor: Optional[str] = ""
+    cp_cod_departamento: Optional[str] = ""
+    cp_cod_centro_custo: Optional[str] = ""
+    cp_cod_grup_desp: Optional[str] = ""
+    cp_cod_despesa: Optional[str] = ""
+    cp_cod_forma: Optional[str] = ""
 
 
 def _parse_payment_date_to_sql(raw_str: Optional[str], fallback_dt: Optional[datetime] = None) -> datetime:
@@ -173,6 +193,25 @@ def _resolve_bank_config_for_profile(settings, sql_client_or_none, profile_code:
         or eff.get("forma_pagto_credito_maior")
         or ""
     ).strip()
+    launch_fee_as_expense = bool(
+        (matched or {}).get("launch_fee_as_expense", eff.get("launch_fee_as_expense", False))
+    )
+    cp_fee_posting_mode = str(
+        (matched or {}).get("cp_fee_posting_mode")
+        or eff.get("cp_fee_posting_mode")
+        or "UNIFIED"
+    ).upper().strip()
+    if cp_fee_posting_mode not in ("UNIFIED", "INDIVIDUAL"):
+        cp_fee_posting_mode = "UNIFIED"
+
+    cp_cod_grp_fornecedor = str(eff.get("cp_cod_grp_fornecedor") or "").strip()
+    cp_cod_fornecedor = str(eff.get("cp_cod_fornecedor") or "").strip()
+    cp_nom_fornecedor = str(eff.get("cp_nom_fornecedor") or "").strip()
+    cp_cod_departamento = str(eff.get("cp_cod_departamento") or "").strip()
+    cp_cod_centro_custo = str(eff.get("cp_cod_centro_custo") or "").strip()
+    cp_cod_grup_desp = str(eff.get("cp_cod_grup_desp") or "").strip()
+    cp_cod_despesa = str(eff.get("cp_cod_despesa") or "").strip()
+    cp_cod_forma = str(eff.get("cp_cod_forma") or eff.get("forma_pagto") or "").strip()
 
     return {
         "profile_code": code_norm,
@@ -186,6 +225,27 @@ def _resolve_bank_config_for_profile(settings, sql_client_or_none, profile_code:
         "payment_date_mode": payment_date_mode,
         "unify_installments": unify_installments,
         "split_excess_launch": split_excess_launch,
+        "launch_fee_as_expense": launch_fee_as_expense,
+        "cp_fee_posting_mode": cp_fee_posting_mode,
+        "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+        "cp_cod_fornecedor": cp_cod_fornecedor,
+        "cp_nom_fornecedor": cp_nom_fornecedor,
+        "cp_cod_departamento": cp_cod_departamento,
+        "cp_cod_centro_custo": cp_cod_centro_custo,
+        "cp_cod_grup_desp": cp_cod_grup_desp,
+        "cp_cod_despesa": cp_cod_despesa,
+        "cp_cod_forma": cp_cod_forma,
+        "cpagar_configured": all(
+            bool(x)
+            for x in (
+                cp_cod_grp_fornecedor,
+                cp_cod_fornecedor,
+                cp_cod_departamento,
+                cp_cod_centro_custo,
+                cp_cod_grup_desp,
+                cp_cod_despesa,
+            )
+        ),
         "cod_empresa": str(cod_emp),
         "cod_filial": str(cod_fil),
         "is_configured": bool(
@@ -277,7 +337,73 @@ def save_reconciliation_profile_bank_config(
         if payload.split_excess_launch is not None
         else bool(existing.get("split_excess_launch", True))
     )
-    has_any = any(bool(x) for x in (forma_pagto, forma_pagto_credito_maior, banco, agencia, conta, carteira))
+    launch_fee_as_expense = (
+        bool(payload.launch_fee_as_expense)
+        if payload.launch_fee_as_expense is not None
+        else bool(existing.get("launch_fee_as_expense", False))
+    )
+    cp_fee_posting_mode = str(
+        payload.cp_fee_posting_mode
+        if payload.cp_fee_posting_mode is not None
+        else existing.get("cp_fee_posting_mode") or "UNIFIED"
+    ).upper().strip()
+    if cp_fee_posting_mode not in ("UNIFIED", "INDIVIDUAL"):
+        cp_fee_posting_mode = "UNIFIED"
+
+    cp_cod_grp_fornecedor = str(
+        payload.cp_cod_grp_fornecedor
+        if payload.cp_cod_grp_fornecedor is not None
+        else existing.get("cp_cod_grp_fornecedor") or ""
+    ).strip()
+    cp_cod_fornecedor = str(
+        payload.cp_cod_fornecedor
+        if payload.cp_cod_fornecedor is not None
+        else existing.get("cp_cod_fornecedor") or ""
+    ).strip()
+    cp_nom_fornecedor = str(
+        payload.cp_nom_fornecedor
+        if payload.cp_nom_fornecedor is not None
+        else existing.get("cp_nom_fornecedor") or ""
+    ).strip()
+    cp_cod_departamento = str(
+        payload.cp_cod_departamento
+        if payload.cp_cod_departamento is not None
+        else existing.get("cp_cod_departamento") or ""
+    ).strip()
+    cp_cod_centro_custo = str(
+        payload.cp_cod_centro_custo
+        if payload.cp_cod_centro_custo is not None
+        else existing.get("cp_cod_centro_custo") or ""
+    ).strip()
+    cp_cod_grup_desp = str(
+        payload.cp_cod_grup_desp
+        if payload.cp_cod_grup_desp is not None
+        else existing.get("cp_cod_grup_desp") or ""
+    ).strip()
+    cp_cod_despesa = str(
+        payload.cp_cod_despesa
+        if payload.cp_cod_despesa is not None
+        else existing.get("cp_cod_despesa") or ""
+    ).strip()
+    cp_cod_forma = str(
+        payload.cp_cod_forma
+        if payload.cp_cod_forma is not None
+        else existing.get("cp_cod_forma") or ""
+    ).strip()
+
+    has_any = any(
+        bool(x)
+        for x in (
+            forma_pagto,
+            forma_pagto_credito_maior,
+            banco,
+            agencia,
+            conta,
+            carteira,
+            cp_cod_fornecedor,
+            cp_cod_despesa,
+        )
+    )
 
     existing.update({
         "use_custom_bank": has_any,
@@ -290,6 +416,16 @@ def save_reconciliation_profile_bank_config(
         "payment_date_mode": payment_date_mode,
         "unify_installments": unify_installments,
         "split_excess_launch": split_excess_launch,
+        "launch_fee_as_expense": launch_fee_as_expense,
+        "cp_fee_posting_mode": cp_fee_posting_mode,
+        "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+        "cp_cod_fornecedor": cp_cod_fornecedor,
+        "cp_nom_fornecedor": cp_nom_fornecedor,
+        "cp_cod_departamento": cp_cod_departamento,
+        "cp_cod_centro_custo": cp_cod_centro_custo,
+        "cp_cod_grup_desp": cp_cod_grup_desp,
+        "cp_cod_despesa": cp_cod_despesa,
+        "cp_cod_forma": cp_cod_forma,
     })
     bank_reconciliations[code_norm] = existing
     raw_cfg["bank_reconciliations"] = bank_reconciliations
@@ -305,10 +441,267 @@ def save_reconciliation_profile_bank_config(
 
     return {
         "success": True,
-        "message": f"Códigos Horus (Banco, Agência, Conta e Forma de Pagamento) salvos para {code_norm}!",
+        "message": f"Códigos Horus (Contas a Receber e Contas a Pagar/Despesas) salvos para {code_norm}!",
         "bank_config": resolved_bank,
         "profiles": all_profiles,
         "enabled_profiles": enabled_profiles,
+    }
+
+
+@router.get("/companies/{company_id}/horus-sql/reconciliation/horus-options")
+def get_horus_reconciliation_options(
+    company_id: int,
+    q_fornecedor: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Coleta em tempo real direto no SQL Server do Horus ERP todas as opções para configurar
+    o Borderô de Contas a Receber e o Lançamento de Taxa como Despesa no Contas a Pagar:
+      - Contas Bancárias (`BCONTAC_GERAL` + `BBANCOS` + `BAGENCIAS` + `BCONTAC_CARTEIRA`)
+      - Formas de Pagamento (`FORMA_PAGTO`)
+      - Grupos de Fornecedor (`GRUPO_FORNECEDORES`) e Fornecedores (`FORNECEDORES_GERAL`, com busca em tempo real `q_fornecedor`)
+      - Departamentos (`DEPARTAMENTOS_GERAL`) e Centros de Custo (`CENTRO_CUSTOS_GERAL`)
+      - Grupos de Despesa (`DESPESAGRP_GERAL`) e Despesas (`DESPESAS_GERAL`)
+      - Presets recentes já utilizados em `LANCTOS_CPAGAR_GERAL`
+    """
+    _assert_ownership(current_user, company_id)
+    _get_settings_or_404(db, company_id)
+    try:
+        sql = HorusSQLClient(db, company_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    bank_accounts = []
+    payment_forms = []
+    cpagar_options = {
+        "departamentos": [],
+        "centros_custo": [],
+        "grupos_despesa": [],
+        "despesas": [],
+        "grupos_fornecedor": [],
+        "fornecedores": [],
+        "recent_tariff_presets": [],
+    }
+
+    try:
+        for r in sql.query("""
+            SELECT
+                cg.COD_EMPRESA,
+                cg.COD_FILIAL,
+                cg.COD_BANCO,
+                b.NOM_BANCO AS NOME_BANCO,
+                cg.COD_AGENCIA,
+                ag.NOM_AGENCIA AS NOME_AGENCIA,
+                cg.COD_CONTAC,
+                cg.NUM_CONTAC AS NUM_CC,
+                cg.DESC_CONTAC AS NOME_CONTAC,
+                cart.NRO_CARTEIRA
+            FROM BCONTAC_GERAL cg WITH (NOLOCK)
+            LEFT JOIN BBANCOS b WITH (NOLOCK) ON b.COD_BANCO = cg.COD_BANCO
+            LEFT JOIN BAGENCIAS ag WITH (NOLOCK) ON ag.COD_BANCO = cg.COD_BANCO AND ag.COD_AGENCIA = cg.COD_AGENCIA
+            LEFT JOIN BCONTAC_CARTEIRA cart WITH (NOLOCK)
+                ON cart.COD_BANCO = cg.COD_BANCO
+               AND cart.COD_AGENCIA = cg.COD_AGENCIA
+               AND cart.COD_CONTAC = cg.COD_CONTAC
+            ORDER BY cg.COD_BANCO, cg.COD_AGENCIA, cg.COD_CONTAC
+        """):
+            bank_accounts.append({
+                "cod_empresa": str(r.get("COD_EMPRESA") or "").strip(),
+                "cod_filial": str(r.get("COD_FILIAL") or "").strip(),
+                "cod_banco": str(r.get("COD_BANCO") or "").strip(),
+                "nome_banco": str(r.get("NOME_BANCO") or "").strip(),
+                "cod_agencia": str(r.get("COD_AGENCIA") or "").strip(),
+                "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
+                "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
+                "num_cc": str(r.get("NUM_CC") or "").strip(),
+                "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
+                "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
+            })
+    except Exception as e:
+        logger.warning("[HorusOptions] Aviso ao ler BCONTAC_GERAL company=%s: %s", company_id, e)
+
+    try:
+        for f in sql.query("SELECT COD_FORMA, NOM_FORMA, TIPO_FORMA FROM FORMA_PAGTO WITH (NOLOCK) ORDER BY COD_FORMA"):
+            payment_forms.append({
+                "cod_forma": str(f.get("COD_FORMA") or "").strip(),
+                "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
+                "tipo_forma_pagto": str(f.get("TIPO_FORMA") or "").strip(),
+            })
+    except Exception as e:
+        logger.warning("[HorusOptions] Aviso ao ler FORMA_PAGTO company=%s: %s", company_id, e)
+
+    try:
+        for d in sql.query("SELECT COD_DEPARTAMENTO, NOM_DEPARTAMENTO FROM DEPARTAMENTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO"):
+            cpagar_options["departamentos"].append({
+                "cod_departamento": str(d.get("COD_DEPARTAMENTO") or "").strip(),
+                "nom_departamento": str(d.get("NOM_DEPARTAMENTO") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        for cc in sql.query("SELECT COD_DEPARTAMENTO, COD_CENTRO_CUSTO, NOM_CENTRO_CUSTO FROM CENTRO_CUSTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO, COD_CENTRO_CUSTO"):
+            cpagar_options["centros_custo"].append({
+                "cod_departamento": str(cc.get("COD_DEPARTAMENTO") or "").strip(),
+                "cod_centro_custo": str(cc.get("COD_CENTRO_CUSTO") or "").strip(),
+                "nom_centro_custo": str(cc.get("NOM_CENTRO_CUSTO") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        for gd in sql.query("SELECT COD_GRUP_DESP, NOM_GRUP_DESP FROM DESPESAGRP_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP"):
+            cpagar_options["grupos_despesa"].append({
+                "cod_grup_desp": str(gd.get("COD_GRUP_DESP") or "").strip(),
+                "nom_grup_desp": str(gd.get("NOM_GRUP_DESP") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        for dp in sql.query("SELECT COD_DESPESA, NOM_DESPESA, COD_GRUP_DESP FROM DESPESAS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP, COD_DESPESA"):
+            cpagar_options["despesas"].append({
+                "cod_despesa": str(dp.get("COD_DESPESA") or "").strip(),
+                "nom_despesa": str(dp.get("NOM_DESPESA") or "").strip(),
+                "cod_grup_desp": str(dp.get("COD_GRUP_DESP") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        for gf in sql.query("SELECT COD_GRP_FORNECEDOR, NOM_GRP_FORNECEDOR FROM GRUPO_FORNECEDORES WITH (NOLOCK) ORDER BY COD_GRP_FORNECEDOR"):
+            cpagar_options["grupos_fornecedor"].append({
+                "cod_grp_fornecedor": str(gf.get("COD_GRP_FORNECEDOR") or "").strip(),
+                "nom_grp_fornecedor": str(gf.get("NOM_GRP_FORNECEDOR") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        q_clean = (q_fornecedor or "").strip()
+        if q_clean:
+            like_pat = f"%{q_clean}%"
+            if q_clean.isdigit():
+                forn_rows = sql.query(
+                    """
+                    SELECT TOP 80 COD_GRP_FORNECEDOR, COD_FORNECEDOR, NOM_FORNECEDOR, NOM_FANTASIA
+                    FROM FORNECEDORES_GERAL WITH (NOLOCK)
+                    WHERE COD_FORNECEDOR = %s
+                       OR NOM_FORNECEDOR LIKE %s
+                       OR NOM_FANTASIA LIKE %s
+                    ORDER BY CASE WHEN COD_FORNECEDOR = %s THEN 0 ELSE 1 END, NOM_FORNECEDOR
+                    """,
+                    (int(q_clean), like_pat, like_pat, int(q_clean)),
+                )
+            else:
+                forn_rows = sql.query(
+                    """
+                    SELECT TOP 80 COD_GRP_FORNECEDOR, COD_FORNECEDOR, NOM_FORNECEDOR, NOM_FANTASIA
+                    FROM FORNECEDORES_GERAL WITH (NOLOCK)
+                    WHERE NOM_FORNECEDOR LIKE %s
+                       OR NOM_FANTASIA LIKE %s
+                    ORDER BY NOM_FORNECEDOR
+                    """,
+                    (like_pat, like_pat),
+                )
+        else:
+            forn_rows = sql.query(
+                """
+                SELECT TOP 100 COD_GRP_FORNECEDOR, COD_FORNECEDOR, NOM_FORNECEDOR, NOM_FANTASIA
+                FROM FORNECEDORES_GERAL WITH (NOLOCK)
+                WHERE NOM_FORNECEDOR LIKE '%TARIFA%'
+                   OR NOM_FORNECEDOR LIKE '%TAXA%'
+                   OR NOM_FORNECEDOR LIKE '%COMISS%'
+                   OR NOM_FORNECEDOR LIKE '%BANCO%'
+                   OR NOM_FORNECEDOR LIKE '%SHOPEE%'
+                   OR NOM_FORNECEDOR LIKE '%VINDI%'
+                   OR NOM_FORNECEDOR LIKE '%TIKTOK%'
+                   OR NOM_FORNECEDOR LIKE '%TRAY%'
+                   OR NOM_FORNECEDOR LIKE '%MARKET%'
+                   OR NOM_FANTASIA LIKE '%TARIFA%'
+                   OR NOM_FANTASIA LIKE '%BANCO%'
+                   OR NOM_FANTASIA LIKE '%SHOPEE%'
+                   OR NOM_FANTASIA LIKE '%VINDI%'
+                   OR NOM_FANTASIA LIKE '%TIKTOK%'
+                ORDER BY NOM_FORNECEDOR
+                """
+            )
+            if not forn_rows:
+                forn_rows = sql.query(
+                    """
+                    SELECT TOP 100 COD_GRP_FORNECEDOR, COD_FORNECEDOR, NOM_FORNECEDOR, NOM_FANTASIA
+                    FROM FORNECEDORES_GERAL WITH (NOLOCK)
+                    ORDER BY COD_FORNECEDOR DESC
+                    """
+                )
+        for fn in forn_rows or []:
+            cpagar_options["fornecedores"].append({
+                "cod_grp_fornecedor": str(fn.get("COD_GRP_FORNECEDOR") or "").strip(),
+                "cod_fornecedor": str(fn.get("COD_FORNECEDOR") or "").strip(),
+                "nom_fornecedor": str(fn.get("NOM_FORNECEDOR") or "").strip(),
+                "nom_fantasia": str(fn.get("NOM_FANTASIA") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    try:
+        for pr in sql.query("""
+            SELECT TOP 8
+                cp.COD_GRP_FORNECEDOR,
+                cp.COD_FORNECEDOR,
+                fg.NOM_FORNECEDOR,
+                cp.COD_DEPARTAMENTO,
+                cp.COD_CENTRO_CUSTO,
+                cp.COD_GRUP_DESP,
+                cp.COD_DESPESA,
+                dg.NOM_DESPESA,
+                ISNULL(cp.COD_FORMA_BAIXA, cp.COD_FORMA) AS COD_FORMA_USADA,
+                MAX(cp.NRO_LANCTO_CPAGAR) AS ULT_LANCTO
+            FROM LANCTOS_CPAGAR_GERAL cp WITH (NOLOCK)
+            LEFT JOIN FORNECEDORES_GERAL fg WITH (NOLOCK)
+                ON fg.COD_EMPRESA = cp.COD_EMPRESA
+               AND fg.COD_FILIAL = cp.COD_FILIAL
+               AND fg.COD_FORNECEDOR = cp.COD_FORNECEDOR
+            LEFT JOIN DESPESAS_GERAL dg WITH (NOLOCK)
+                ON dg.COD_DESPESA = cp.COD_DESPESA
+            WHERE cp.OBS_CPAGAR LIKE '%TARIFA%'
+               OR cp.OBS_CPAGAR LIKE '%TAXA%'
+               OR cp.OBS_CPAGAR LIKE '%COMISS%'
+               OR dg.NOM_DESPESA LIKE '%TARIFA%'
+               OR dg.NOM_DESPESA LIKE '%TAXA%'
+               OR dg.NOM_DESPESA LIKE '%COMISS%'
+               OR dg.NOM_DESPESA LIKE '%BANC%'
+            GROUP BY
+                cp.COD_GRP_FORNECEDOR,
+                cp.COD_FORNECEDOR,
+                fg.NOM_FORNECEDOR,
+                cp.COD_DEPARTAMENTO,
+                cp.COD_CENTRO_CUSTO,
+                cp.COD_GRUP_DESP,
+                cp.COD_DESPESA,
+                dg.NOM_DESPESA,
+                ISNULL(cp.COD_FORMA_BAIXA, cp.COD_FORMA)
+            ORDER BY ULT_LANCTO DESC
+        """):
+            cpagar_options["recent_tariff_presets"].append({
+                "cod_grp_fornecedor": str(pr.get("COD_GRP_FORNECEDOR") or "").strip(),
+                "cod_fornecedor": str(pr.get("COD_FORNECEDOR") or "").strip(),
+                "nom_fornecedor": str(pr.get("NOM_FORNECEDOR") or "").strip(),
+                "cod_departamento": str(pr.get("COD_DEPARTAMENTO") or "").strip(),
+                "cod_centro_custo": str(pr.get("COD_CENTRO_CUSTO") or "").strip(),
+                "cod_grup_desp": str(pr.get("COD_GRUP_DESP") or "").strip(),
+                "cod_despesa": str(pr.get("COD_DESPESA") or "").strip(),
+                "nom_despesa": str(pr.get("NOM_DESPESA") or "").strip(),
+                "cod_forma": str(pr.get("COD_FORMA_USADA") or "").strip(),
+            })
+    except Exception:
+        pass
+
+    return {
+        "bank_accounts": bank_accounts,
+        "payment_forms": payment_forms,
+        "cpagar_options": cpagar_options,
     }
 
 
@@ -672,7 +1065,13 @@ def _run_reconciliation_core(
                 LR.COD_PED_VENDA,
                 LR.COD_FILIAL,
                 LR.STA_LANCTO_CRECEBER,
-                LR.VLR_LANCTO_TOTAL AS VLR_LANCTO_CRECEBER,
+                CASE
+                    WHEN LR.STA_LANCTO_CRECEBER = 'AB'
+                         AND ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0) > 0
+                         AND (ISNULL(LR.VLR_LANCTO_TOTAL, 0) + ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0)) <= ISNULL(LR.VLR_LANCTO_CRECEBER, 0) + 0.05
+                    THEN ISNULL(LR.VLR_LANCTO_TOTAL, 0) + ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0)
+                    ELSE ISNULL(LR.VLR_LANCTO_TOTAL, 0)
+                END AS VLR_LANCTO_CRECEBER,
                 LR.VLR_LANCTO_CRECEBER AS VLR_BRUTO_ORIGINAL,
                 ISNULL(LR.VLR_LANCTO_ABATIMENTO, 0) AS VLR_LANCTO_ABATIMENTO,
                 LR.COD_BORDERO,
@@ -1521,6 +1920,75 @@ async def create_vindi_bordero(
         else bank_cfg.get("forma_pagto_credito_maior") or ""
     ).strip()
 
+    eff_launch_fee_as_expense = (
+        bool(payload.launch_fee_as_expense)
+        if payload.launch_fee_as_expense is not None
+        else bool(bank_cfg.get("launch_fee_as_expense", False))
+    )
+    eff_cp_fee_posting_mode = str(
+        payload.cp_fee_posting_mode
+        or bank_cfg.get("cp_fee_posting_mode")
+        or "UNIFIED"
+    ).upper().strip()
+    if eff_cp_fee_posting_mode not in ("UNIFIED", "INDIVIDUAL"):
+        eff_cp_fee_posting_mode = "UNIFIED"
+
+    cp_grp_forn = str(
+        payload.cp_cod_grp_fornecedor
+        if payload.cp_cod_grp_fornecedor is not None
+        else bank_cfg.get("cp_cod_grp_fornecedor") or ""
+    ).strip()
+    cp_forn = str(
+        payload.cp_cod_fornecedor
+        if payload.cp_cod_fornecedor is not None
+        else bank_cfg.get("cp_cod_fornecedor") or ""
+    ).strip()
+    cp_depto = str(
+        payload.cp_cod_departamento
+        if payload.cp_cod_departamento is not None
+        else bank_cfg.get("cp_cod_departamento") or ""
+    ).strip()
+    cp_ccusto = str(
+        payload.cp_cod_centro_custo
+        if payload.cp_cod_centro_custo is not None
+        else bank_cfg.get("cp_cod_centro_custo") or ""
+    ).strip()
+    cp_grp_desp = str(
+        payload.cp_cod_grup_desp
+        if payload.cp_cod_grup_desp is not None
+        else bank_cfg.get("cp_cod_grup_desp") or ""
+    ).strip()
+    cp_desp = str(
+        payload.cp_cod_despesa
+        if payload.cp_cod_despesa is not None
+        else bank_cfg.get("cp_cod_despesa") or ""
+    ).strip()
+    cp_forma_raw = str(
+        payload.cp_cod_forma
+        if payload.cp_cod_forma is not None
+        else bank_cfg.get("cp_cod_forma") or bank_cfg.get("forma_pagto") or ""
+    ).strip() or str(bank_cfg.get("forma_pagto") or "").strip()
+
+    if eff_launch_fee_as_expense and total_taxa_bordero > 0.005:
+        required_cp_fields = [
+            ("Grupo de Fornecedor (COD_GRP_FORNECEDOR)", cp_grp_forn),
+            ("Fornecedor (COD_FORNECEDOR)", cp_forn),
+            ("Departamento (COD_DEPARTAMENTO)", cp_depto),
+            ("Centro de Custo (COD_CENTRO_CUSTO)", cp_ccusto),
+            ("Grupo de Despesa (COD_GRUP_DESP)", cp_grp_desp),
+            ("Despesa (COD_DESPESA)", cp_desp),
+            ("Forma de Pagto Contas a Pagar (COD_FORMA)", cp_forma_raw),
+        ]
+        missing_cp = [label for label, val in required_cp_fields if not val or not str(val).strip().isdigit()]
+        if missing_cp:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Para utilizar a 4ª Opção (Baixar Valor Total da Venda + Lançar Taxa como Despesa no Contas a Pagar), "
+                    f"selecione os parâmetros do Contas a Pagar Horus nas configurações: {', '.join(missing_cp)}."
+                ),
+            )
+
     if eff_mode == "SPECIFIC_DATE" and not (payload.specific_payment_date and str(payload.specific_payment_date).strip()):
         raise HTTPException(
             status_code=400,
@@ -1546,9 +2014,12 @@ async def create_vindi_bordero(
             percent=8,
             processed_orders=0,
             total_orders=len(releases_validos),
-            message=f"Conectando ao Horus ERP e validando integridade dos {len(releases_validos)} títulos selecionados...",
+            message=f"Abrindo sessão SQL transacional isolada no Horus ERP e validando {len(releases_validos)} títulos...",
         )
-        conn = sql_client._get_connection()
+        # Conexão 100% dedicada e isolada (autocommit=False):
+        # Impede que crons em background rodem 'SELECT 1' na mesma sessão TDS ('Cursor is closed')
+        # e garante ROLLBACK atômico real se qualquer etapa falhar.
+        conn = sql_client.create_dedicated_connection(autocommit=False, timeout=300)
         today_str = datetime.now().strftime("%d-%m-%y")
         prof_tag = (payload.profile_code or "vindi").lower().replace("tray_", "")[:4]
         nom_arquivo = f"cz_{prof_tag}_{today_str}"[:20]
@@ -1558,7 +2029,8 @@ async def create_vindi_bordero(
         credito_maior_valor_total_tx = 0.0
         new_credito_lancto_map: Dict[int, int] = {}
 
-        with conn.cursor() as cur:
+        try:
+          with conn.cursor() as cur:
             # 4.0.0. Trava de Segurança: Confere se os lançamentos principais continuam em aberto ('AB') antes de criar o Borderô
             sample_check_ids = lancto_ids[:200]
             if sample_check_ids:
@@ -1892,9 +2364,17 @@ async def create_vindi_bordero(
             )
 
             # 4.2. INSERT na tabela BORDERO e UPDATE nos Lançamentos conforme o modo de data de pagamento
+            # Quando eff_launch_fee_as_expense=True (4ª Opção), o Contas a Receber baixa o VALOR BRUTO DA VENDA (total_bordero, sem abatimento de taxa no CR)
+            # e a taxa (total_taxa_bordero) é lançada separadamente como Despesa em LANCTOS_CPAGAR_GERAL!
             batch_size = 50
             total_title_batches = max(1, (len(releases_validos) + batch_size - 1) // batch_size)
-            vlr_bordero_efetivo = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
+            if eff_launch_fee_as_expense:
+                vlr_bordero_efetivo = total_bordero
+            else:
+                vlr_bordero_efetivo = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
+            cpagar_lancamentos_criados_tx = 0
+            cpagar_valor_total_tx = 0.0
+            cpagar_ids_list: List[int] = []
 
             _update_job_progress(
                 b_job_id,
@@ -1908,8 +2388,21 @@ async def create_vindi_bordero(
                 message=f"Criando cabeçalho do Borderô #{id_bordero} no Horus ERP (R$ {vlr_bordero_efetivo:.2f})...",
             )
 
+            # Resolve dinamicamente os códigos de situação válidos em LANCTOS_SITUACAO do cliente
+            has_situacao_8 = False
+            has_situacao_2 = False
+            try:
+                cur.execute("SELECT COD_SITUACAO FROM LANCTOS_SITUACAO WHERE COD_SITUACAO IN (2, 8)")
+                sit_rows = cur.fetchall() or []
+                sit_codes = {int(sr["COD_SITUACAO"] if isinstance(sr, dict) else sr[0]) for sr in sit_rows}
+                has_situacao_8 = 8 in sit_codes
+                has_situacao_2 = 2 in sit_codes
+            except Exception:
+                has_situacao_8 = False
+                has_situacao_2 = False
+
             if eff_mode == "BORDERO_OPEN":
-                # Modo 3: Apenas gera o Borderô em aberto ('AP') sem liquidar os lançamentos
+                # Modo 3: Apenas gera o Borderô em aberto ('AP') SEM BAIXAR os lançamentos (permanecem STA_LANCTO_CRECEBER = 'AB')
                 insert_sql = """
                     INSERT INTO BORDERO (
                         COD_EMPRESA, COD_FILIAL, COD_FORMA, COD_BORDERO,
@@ -1939,74 +2432,163 @@ async def create_vindi_bordero(
                 )
                 cur.execute(insert_sql, insert_params)
 
-                for t_idx, r_item in enumerate(releases_validos, start=1):
-                    lid = int(r_item.nro_lancamento)
-                    taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
-                    if eff_unify:
-                        liq_val = round(
-                            float(r_item.valor_liquido)
-                            if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
-                            else max(0.0, float(r_item.valor) - taxa_val),
-                            2,
-                        )
+                sit_ap_expr = "2" if has_situacao_2 else "ISNULL(LRA.COD_SITUACAO, 1)"
+
+                for b_i in range(0, len(releases_validos), batch_size):
+                    chunk = releases_validos[b_i : b_i + batch_size]
+                    cur_b = (b_i // batch_size) + 1
+                    done_cnt = min(b_i + len(chunk), len(releases_validos))
+
+                    if eff_unify or eff_launch_fee_as_expense:
+                        val_clauses = []
+                        val_params: List[Any] = []
+                        for r_item in chunk:
+                            lid = int(r_item.nro_lancamento)
+                            if eff_launch_fee_as_expense:
+                                # 4ª Opção: Mantém fiel ao valor bruto real da venda na planilha (ex: R$ 125,00) e taxa_val = 0 no CR (taxa vai para Contas a Pagar)
+                                taxa_val = 0.0
+                                liq_val = round(float(r_item.valor), 2)
+                            else:
+                                taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2)
+                                liq_val = round(
+                                    float(r_item.valor_liquido)
+                                    if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
+                                    else max(0.0, float(r_item.valor) - taxa_val),
+                                    2,
+                                )
+                            val_clauses.append("(%s, %s, %s)")
+                            val_params.extend([lid, liq_val, taxa_val])
+
+                        values_sql = ", ".join(val_clauses)
+
                         cur.execute(
-                            """
+                            f"""
+                            UPDATE LR
+                            SET LR.COD_BORDERO = %s,
+                                LR.STA_LANCTO_CRECEBER = 'AB',
+                                LR.DAT_PAGTO_CRECEBER = NULL,
+                                LR.DAT_PAGTO_CONTA = NULL,
+                                LR.VLR_LANCTO_PAGO = 0,
+                                LR.VLR_LANCTO_RECEBIDO = 0,
+                                LR.VLR_LANCTO_CRECEBER = CASE WHEN LR.VLR_LANCTO_CRECEBER < V.liq_val THEN V.liq_val ELSE LR.VLR_LANCTO_CRECEBER END,
+                                LR.VLR_LANCTO_ABATIMENTO = V.taxa_val,
+                                LR.VLR_LANCTO_TOTAL = V.liq_val,
+                                LR.DAT_ULT_ATL = GETDATE()
+                            FROM LANCTOS_CRECEBER LR
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, liq_val, taxa_val)
+                                ON LR.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LR.COD_FILIAL = %s
+                            """,
+                            tuple([id_bordero] + val_params + [cod_filial]),
+                        )
+
+                        sql_ap_a = f"""
+                            UPDATE LRA
+                            SET LRA.COD_BORDERO = %s,
+                                LRA.STA_LANCTO_CRECEBER = 'AB',
+                                LRA.COD_SITUACAO = {sit_ap_expr},
+                                LRA.DAT_PAGTO_CRECEBER = NULL,
+                                LRA.DAT_PAGTO_CONTA = NULL,
+                                LRA.VLR_LANCTO_PAGO = 0,
+                                LRA.VLR_LANCTO_RECEBIDO = 0,
+                                LRA.VLR_LANCTO_CRECEBER = CASE WHEN LRA.VLR_LANCTO_CRECEBER < V.liq_val THEN V.liq_val ELSE LRA.VLR_LANCTO_CRECEBER END,
+                                LRA.VLR_LANCTO_ABATIMENTO = V.taxa_val,
+                                LRA.VLR_LANCTO_TOTAL = V.liq_val,
+                                LRA.COD_BANCO = %s,
+                                LRA.COD_AGENCIA = %s,
+                                LRA.COD_CONTAC = %s,
+                                LRA.COD_FORMA = %s,
+                                LRA.NRO_CARTEIRA = %s,
+                                LRA.DAT_ULT_ATL = GETDATE()
+                            FROM LANCTOS_CRECEBERA LRA
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, liq_val, taxa_val)
+                                ON LRA.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LRA.COD_FILIAL = %s
+                        """
+                        params_ap_a = tuple(
+                            [
+                                id_bordero,
+                                cod_banco_val,
+                                cod_agencia_val,
+                                cod_contac_val,
+                                cod_forma_val,
+                                carteira_val or None,
+                            ]
+                            + val_params
+                            + [cod_filial]
+                        )
+                        try:
+                            cur.execute(sql_ap_a, params_ap_a)
+                        except Exception as ex_ap_a:
+                            logger.warning("[HorusBordero] Retry lote AP LANCTOS_CRECEBERA com IGNORARTRIGGER: %s", ex_ap_a)
+                            cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
+                            cur.execute(sql_ap_a, params_ap_a)
+                            cur.execute("SET CONTEXT_INFO 0x;")
+                    else:
+                        chunk_ids = [int(r_item.nro_lancamento) for r_item in chunk]
+                        ph_chunk = ", ".join(["%s"] * len(chunk_ids))
+                        cur.execute(
+                            f"""
                             UPDATE LANCTOS_CRECEBER
                             SET COD_BORDERO = %s,
-                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
-                                VLR_LANCTO_ABATIMENTO = %s,
-                                VLR_LANCTO_TOTAL = %s,
+                                STA_LANCTO_CRECEBER = 'AB',
                                 DAT_ULT_ATL = GETDATE()
-                            WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s
+                            WHERE COD_FILIAL = %s
+                              AND NRO_LANCTO_CRECEBER IN ({ph_chunk})
                             """,
-                            (id_bordero, liq_val, liq_val, taxa_val, liq_val, cod_filial, lid),
+                            tuple([id_bordero, cod_filial] + chunk_ids),
+                        )
+                        sql_ap_a_simple = f"""
+                            UPDATE LRA
+                            SET LRA.COD_BORDERO = %s,
+                                LRA.STA_LANCTO_CRECEBER = 'AB',
+                                LRA.COD_SITUACAO = {sit_ap_expr},
+                                LRA.COD_BANCO = %s,
+                                LRA.COD_AGENCIA = %s,
+                                LRA.COD_CONTAC = %s,
+                                LRA.COD_FORMA = %s,
+                                LRA.NRO_CARTEIRA = %s,
+                                LRA.DAT_ULT_ATL = GETDATE()
+                            FROM LANCTOS_CRECEBERA LRA
+                            WHERE LRA.COD_FILIAL = %s
+                              AND LRA.NRO_LANCTO_CRECEBER IN ({ph_chunk})
+                        """
+                        params_ap_a_simple = tuple(
+                            [
+                                id_bordero,
+                                cod_banco_val,
+                                cod_agencia_val,
+                                cod_contac_val,
+                                cod_forma_val,
+                                carteira_val or None,
+                                cod_filial,
+                            ]
+                            + chunk_ids
                         )
                         try:
-                            cur.execute(
-                                """
-                                UPDATE LANCTOS_CRECEBERA
-                                SET COD_BORDERO = %s,
-                                    VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
-                                    VLR_LANCTO_ABATIMENTO = %s,
-                                    VLR_LANCTO_TOTAL = %s,
-                                    DAT_ULT_ATL = GETDATE()
-                                WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s
-                                """,
-                                (id_bordero, liq_val, liq_val, taxa_val, liq_val, cod_filial, lid),
-                            )
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA (AP/taxa): %s", ex_a)
-                    else:
-                        cur.execute(
-                            "UPDATE LANCTOS_CRECEBER SET COD_BORDERO = %s WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s",
-                            (id_bordero, cod_filial, lid),
-                        )
-                        try:
-                            cur.execute(
-                                "UPDATE LANCTOS_CRECEBERA SET COD_BORDERO = %s WHERE COD_FILIAL = %s AND NRO_LANCTO_CRECEBER = %s",
-                                (id_bordero, cod_filial, lid),
-                            )
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Aviso ao atualizar LANCTOS_CRECEBERA: %s", ex_a)
+                            cur.execute(sql_ap_a_simple, params_ap_a_simple)
+                        except Exception as ex_ap_s:
+                            logger.warning("[HorusBordero] Retry lote AP simples LANCTOS_CRECEBERA com IGNORARTRIGGER: %s", ex_ap_s)
+                            cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
+                            cur.execute(sql_ap_a_simple, params_ap_a_simple)
+                            cur.execute("SET CONTEXT_INFO 0x;")
 
-                    if t_idx == 1 or t_idx % batch_size == 0 or t_idx == len(releases_validos):
-                        cur_b = (t_idx + batch_size - 1) // batch_size
-                        pct_t = 42 + int((t_idx / max(1, len(releases_validos))) * 48)
-                        _update_job_progress(
-                            b_job_id,
-                            phase="BAIXANDO_TITULOS",
-                            percent=min(90, pct_t),
-                            current_batch=cur_b,
-                            total_batches=total_title_batches,
-                            processed_orders=t_idx,
-                            total_orders=len(releases_validos),
-                            horus_found_count=id_bordero,
-                            message=f"Vinculando títulos ao Borderô #{id_bordero}: {t_idx}/{len(releases_validos)} lançamentos (lote {cur_b}/{total_title_batches})...",
-                        )
+                    pct_t = 42 + int((done_cnt / max(1, len(releases_validos))) * 48)
+                    _update_job_progress(
+                        b_job_id,
+                        phase="BAIXANDO_TITULOS",
+                        percent=min(90, pct_t),
+                        current_batch=cur_b,
+                        total_batches=total_title_batches,
+                        processed_orders=done_cnt,
+                        total_orders=len(releases_validos),
+                        horus_found_count=id_bordero,
+                        message=f"Vinculando títulos em aberto (AB) ao Borderô #{id_bordero}: {done_cnt}/{len(releases_validos)} lançamentos (lote {cur_b}/{total_title_batches})...",
+                    )
 
             else:
                 # Modo 1 (CHANNEL_DATE) ou Modo 2 (SPECIFIC_DATE):
-                # Baixa os títulos no Horus ('PG') marcando DAT_PAGTO_CRECEBER, DAT_PAGTO_CONTA e VLR_LANCTO_ABATIMENTO (taxa)
+                # Baixa os títulos no Horus ('PG') nas duas tabelas (LANCTOS_CRECEBERA e LANCTOS_CRECEBER) marcando DAT_PAGTO_CRECEBER, DAT_PAGTO_CONTA e VLR_LANCTO_ABATIMENTO (taxa)
                 today_midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
                 item_pay_dates: Dict[int, datetime] = {}
                 if eff_mode == "SPECIFIC_DATE":
@@ -2019,7 +2601,10 @@ async def create_vindi_bordero(
                         item_pay_dates[int(r_item.nro_lancamento)] = dt_item
                     bordero_pay_dt = max(item_pay_dates.values()) if item_pay_dates else today_midnight
 
-                vlr_pago_bordero = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
+                if eff_launch_fee_as_expense:
+                    vlr_pago_bordero = total_bordero
+                else:
+                    vlr_pago_bordero = total_liquido_bordero if eff_unify and total_liquido_bordero > 0 else total_bordero
 
                 insert_sql = """
                     INSERT INTO BORDERO (
@@ -2052,209 +2637,461 @@ async def create_vindi_bordero(
                 )
                 cur.execute(insert_sql, insert_params)
 
-                # Resolve dinamicamente COD_SITUACAO válido em LANCTOS_SITUACAO (evitando violação de FK_LANCTOS_CRECEBERA_LANCTOS_SITUACAO em clientes que não possuem COD_SITUACAO = 8, como Editora Olhares)
-                has_situacao_8 = False
-                try:
-                    cur.execute("SELECT 1 FROM LANCTOS_SITUACAO WHERE COD_SITUACAO = 8")
-                    has_situacao_8 = cur.fetchone() is not None
-                except Exception:
-                    has_situacao_8 = False
+                sit_pg_expr = "8" if has_situacao_8 else "ISNULL(LRA.COD_SITUACAO, 1)"
 
-                # Atualiza cada lançamento em LANCTOS_CRECEBERA (acionando TRG_IMP_LANCTO_CRECEBER para BLANCTOS) e em seguida LANCTOS_CRECEBER garantindo 100% de paridade de status e datas nas 2 tabelas
-                for t_idx, r_item in enumerate(releases_validos, start=1):
-                    lid = int(r_item.nro_lancamento)
-                    pay_dt = item_pay_dates.get(lid, bordero_pay_dt)
-                    taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
+                # Atualiza em lotes de 50 lançamentos por vez em LANCTOS_CRECEBERA (acionando TRG_IMP_LANCTO_CRECEBER em lote para BLANCTOS) e em seguida LANCTOS_CRECEBER
+                for b_i in range(0, len(releases_validos), batch_size):
+                    chunk = releases_validos[b_i : b_i + batch_size]
+                    cur_b = (b_i // batch_size) + 1
+                    done_cnt = min(b_i + len(chunk), len(releases_validos))
 
-                    if eff_unify:
-                        liq_val = round(
-                            float(r_item.valor_liquido)
-                            if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
-                            else max(0.0, float(r_item.valor) - taxa_val),
-                            2,
-                        )
-                        sql_upd_a = f"""
-                            UPDATE LANCTOS_CRECEBERA
-                            SET COD_BORDERO = %s,
-                                STA_LANCTO_CRECEBER = 'PG',
-                                COD_SITUACAO = {'8' if has_situacao_8 else 'ISNULL(COD_SITUACAO, 1)'},
-                                DAT_PAGTO_CRECEBER = %s,
-                                DAT_PAGTO_CONTA = %s,
-                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                DAT_ULT_ATL = GETDATE(),
-                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
-                                VLR_LANCTO_ABATIMENTO = %s,
-                                VLR_LANCTO_TOTAL = %s,
-                                VLR_LANCTO_PAGO = %s,
-                                VLR_LANCTO_RECEBIDO = %s,
-                                COD_BANCO = %s,
-                                COD_AGENCIA = %s,
-                                COD_CONTAC = %s,
-                                COD_FORMA = %s,
-                                NRO_CARTEIRA = %s
-                            WHERE COD_FILIAL = %s
-                              AND NRO_LANCTO_CRECEBER = %s
+                    val_clauses = []
+                    val_params_pg: List[Any] = []
+                    for r_item in chunk:
+                        lid = int(r_item.nro_lancamento)
+                        pay_dt = item_pay_dates.get(lid, bordero_pay_dt)
+                        if eff_launch_fee_as_expense:
+                            # 4ª Opção: Baixa o valor bruto da venda da planilha (ex: R$ 125,00) no CR sem abatimento (taxa_val = 0)
+                            taxa_val = 0.0
+                            liq_val = round(float(r_item.valor), 2)
+                        else:
+                            taxa_val = round(max(0.0, float(r_item.taxa or 0.0)), 2) if eff_unify else 0.0
+                            liq_val = round(
+                                float(r_item.valor_liquido)
+                                if r_item.valor_liquido is not None and float(r_item.valor_liquido) > 0
+                                else max(0.0, float(r_item.valor) - taxa_val),
+                                2,
+                            )
+                        val_clauses.append("(%s, %s, %s, %s)")
+                        val_params_pg.extend([lid, pay_dt, liq_val, taxa_val])
+
+                    values_sql = ", ".join(val_clauses)
+
+                    if eff_unify or eff_launch_fee_as_expense:
+                        sql_pg_a = f"""
+                            UPDATE LRA
+                            SET LRA.COD_BORDERO = %s,
+                                LRA.STA_LANCTO_CRECEBER = 'PG',
+                                LRA.COD_SITUACAO = {sit_pg_expr},
+                                LRA.DAT_PAGTO_CRECEBER = V.pay_dt,
+                                LRA.DAT_PAGTO_CONTA = V.pay_dt,
+                                LRA.DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                LRA.DAT_ULT_ATL = GETDATE(),
+                                LRA.VLR_LANCTO_CRECEBER = CASE WHEN LRA.VLR_LANCTO_CRECEBER < V.liq_val THEN V.liq_val ELSE LRA.VLR_LANCTO_CRECEBER END,
+                                LRA.VLR_LANCTO_ABATIMENTO = V.taxa_val,
+                                LRA.VLR_LANCTO_TOTAL = V.liq_val,
+                                LRA.VLR_LANCTO_PAGO = V.liq_val,
+                                LRA.VLR_LANCTO_RECEBIDO = V.liq_val,
+                                LRA.COD_BANCO = %s,
+                                LRA.COD_AGENCIA = %s,
+                                LRA.COD_CONTAC = %s,
+                                LRA.COD_FORMA = %s,
+                                LRA.NRO_CARTEIRA = %s
+                            FROM LANCTOS_CRECEBERA LRA
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, pay_dt, liq_val, taxa_val)
+                                ON LRA.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LRA.COD_FILIAL = %s
                         """
-                        params_upd_a = (
-                            id_bordero,
-                            pay_dt,
-                            pay_dt,
-                            liq_val,
-                            liq_val,
-                            taxa_val,
-                            liq_val,
-                            liq_val,
-                            liq_val,
-                            cod_banco_val,
-                            cod_agencia_val,
-                            cod_contac_val,
-                            cod_forma_val,
-                            carteira_val or None,
-                            cod_filial,
-                            lid,
+                        params_pg_a = tuple(
+                            [
+                                id_bordero,
+                                cod_banco_val,
+                                cod_agencia_val,
+                                cod_contac_val,
+                                cod_forma_val,
+                                carteira_val or None,
+                            ]
+                            + val_params_pg
+                            + [cod_filial]
                         )
                         try:
-                            cur.execute(sql_upd_a, params_upd_a)
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Retry LANCTOS_CRECEBERA com IGNORARTRIGGER #%s: %s", lid, ex_a)
+                            cur.execute(sql_pg_a, params_pg_a)
+                        except Exception as ex_pg_a:
+                            logger.warning("[HorusBordero] Retry lote PG+taxa LANCTOS_CRECEBERA com IGNORARTRIGGER: %s", ex_pg_a)
                             cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
-                            cur.execute(sql_upd_a, params_upd_a)
+                            cur.execute(sql_pg_a, params_pg_a)
                             cur.execute("SET CONTEXT_INFO 0x;")
 
                         cur.execute(
-                            """
-                            UPDATE LANCTOS_CRECEBER
-                            SET COD_BORDERO = %s,
-                                STA_LANCTO_CRECEBER = 'PG',
-                                DAT_PAGTO_CRECEBER = %s,
-                                DAT_PAGTO_CONTA = %s,
-                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                DAT_ULT_ATL = GETDATE(),
-                                VLR_LANCTO_CRECEBER = CASE WHEN VLR_LANCTO_CRECEBER < %s THEN %s ELSE VLR_LANCTO_CRECEBER END,
-                                VLR_LANCTO_ABATIMENTO = %s,
-                                VLR_LANCTO_TOTAL = %s,
-                                VLR_LANCTO_PAGO = %s,
-                                VLR_LANCTO_RECEBIDO = %s
-                            WHERE COD_FILIAL = %s
-                              AND NRO_LANCTO_CRECEBER = %s
+                            f"""
+                            UPDATE LR
+                            SET LR.COD_BORDERO = %s,
+                                LR.STA_LANCTO_CRECEBER = 'PG',
+                                LR.DAT_PAGTO_CRECEBER = V.pay_dt,
+                                LR.DAT_PAGTO_CONTA = V.pay_dt,
+                                LR.DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                LR.DAT_ULT_ATL = GETDATE(),
+                                LR.VLR_LANCTO_CRECEBER = CASE WHEN LR.VLR_LANCTO_CRECEBER < V.liq_val THEN V.liq_val ELSE LR.VLR_LANCTO_CRECEBER END,
+                                LR.VLR_LANCTO_ABATIMENTO = V.taxa_val,
+                                LR.VLR_LANCTO_TOTAL = V.liq_val,
+                                LR.VLR_LANCTO_PAGO = V.liq_val,
+                                LR.VLR_LANCTO_RECEBIDO = V.liq_val
+                            FROM LANCTOS_CRECEBER LR
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, pay_dt, liq_val, taxa_val)
+                                ON LR.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LR.COD_FILIAL = %s
                             """,
-                            (id_bordero, pay_dt, pay_dt, liq_val, liq_val, taxa_val, liq_val, liq_val, liq_val, cod_filial, lid),
+                            tuple([id_bordero] + val_params_pg + [cod_filial]),
                         )
                     else:
-                        sql_upd_a_no_unify = f"""
-                            UPDATE LANCTOS_CRECEBERA
-                            SET COD_BORDERO = %s,
-                                STA_LANCTO_CRECEBER = 'PG',
-                                COD_SITUACAO = {'8' if has_situacao_8 else 'ISNULL(COD_SITUACAO, 1)'},
-                                DAT_PAGTO_CRECEBER = %s,
-                                DAT_PAGTO_CONTA = %s,
-                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                DAT_ULT_ATL = GETDATE(),
-                                VLR_LANCTO_PAGO = VLR_LANCTO_TOTAL,
-                                VLR_LANCTO_RECEBIDO = VLR_LANCTO_TOTAL,
-                                COD_BANCO = %s,
-                                COD_AGENCIA = %s,
-                                COD_CONTAC = %s,
-                                COD_FORMA = %s,
-                                NRO_CARTEIRA = %s
-                            WHERE COD_FILIAL = %s
-                              AND NRO_LANCTO_CRECEBER = %s
+                        sql_pg_a_no_unify = f"""
+                            UPDATE LRA
+                            SET LRA.COD_BORDERO = %s,
+                                LRA.STA_LANCTO_CRECEBER = 'PG',
+                                LRA.COD_SITUACAO = {sit_pg_expr},
+                                LRA.DAT_PAGTO_CRECEBER = V.pay_dt,
+                                LRA.DAT_PAGTO_CONTA = V.pay_dt,
+                                LRA.DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                LRA.DAT_ULT_ATL = GETDATE(),
+                                LRA.VLR_LANCTO_PAGO = LRA.VLR_LANCTO_TOTAL,
+                                LRA.VLR_LANCTO_RECEBIDO = LRA.VLR_LANCTO_TOTAL,
+                                LRA.COD_BANCO = %s,
+                                LRA.COD_AGENCIA = %s,
+                                LRA.COD_CONTAC = %s,
+                                LRA.COD_FORMA = %s,
+                                LRA.NRO_CARTEIRA = %s
+                            FROM LANCTOS_CRECEBERA LRA
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, pay_dt, liq_val, taxa_val)
+                                ON LRA.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LRA.COD_FILIAL = %s
                         """
-                        params_upd_a_no_unify = (
-                            id_bordero,
-                            pay_dt,
-                            pay_dt,
-                            cod_banco_val,
-                            cod_agencia_val,
-                            cod_contac_val,
-                            cod_forma_val,
-                            carteira_val or None,
-                            cod_filial,
-                            lid,
+                        params_pg_a_no_unify = tuple(
+                            [
+                                id_bordero,
+                                cod_banco_val,
+                                cod_agencia_val,
+                                cod_contac_val,
+                                cod_forma_val,
+                                carteira_val or None,
+                            ]
+                            + val_params_pg
+                            + [cod_filial]
                         )
                         try:
-                            cur.execute(sql_upd_a_no_unify, params_upd_a_no_unify)
-                        except Exception as ex_a:
-                            logger.warning("[HorusBordero] Retry LANCTOS_CRECEBERA (PG) com IGNORARTRIGGER #%s: %s", lid, ex_a)
+                            cur.execute(sql_pg_a_no_unify, params_pg_a_no_unify)
+                        except Exception as ex_pg_nu:
+                            logger.warning("[HorusBordero] Retry lote PG LANCTOS_CRECEBERA com IGNORARTRIGGER: %s", ex_pg_nu)
                             cur.execute("DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;")
-                            cur.execute(sql_upd_a_no_unify, params_upd_a_no_unify)
+                            cur.execute(sql_pg_a_no_unify, params_pg_a_no_unify)
                             cur.execute("SET CONTEXT_INFO 0x;")
 
                         cur.execute(
-                            """
-                            UPDATE LANCTOS_CRECEBER
-                            SET COD_BORDERO = %s,
-                                STA_LANCTO_CRECEBER = 'PG',
-                                DAT_PAGTO_CRECEBER = %s,
-                                DAT_PAGTO_CONTA = %s,
-                                DAT_PAGTO_CRECEBER_REAL = GETDATE(),
-                                DAT_ULT_ATL = GETDATE(),
-                                VLR_LANCTO_PAGO = VLR_LANCTO_TOTAL,
-                                VLR_LANCTO_RECEBIDO = VLR_LANCTO_TOTAL
-                            WHERE COD_FILIAL = %s
-                              AND NRO_LANCTO_CRECEBER = %s
+                            f"""
+                            UPDATE LR
+                            SET LR.COD_BORDERO = %s,
+                                LR.STA_LANCTO_CRECEBER = 'PG',
+                                LR.DAT_PAGTO_CRECEBER = V.pay_dt,
+                                LR.DAT_PAGTO_CONTA = V.pay_dt,
+                                LR.DAT_PAGTO_CRECEBER_REAL = GETDATE(),
+                                LR.DAT_ULT_ATL = GETDATE(),
+                                LR.VLR_LANCTO_PAGO = LR.VLR_LANCTO_TOTAL,
+                                LR.VLR_LANCTO_RECEBIDO = LR.VLR_LANCTO_TOTAL
+                            FROM LANCTOS_CRECEBER LR
+                            INNER JOIN (VALUES {values_sql}) AS V(lid, pay_dt, liq_val, taxa_val)
+                                ON LR.NRO_LANCTO_CRECEBER = V.lid
+                            WHERE LR.COD_FILIAL = %s
                             """,
-                            (id_bordero, pay_dt, pay_dt, cod_filial, lid),
+                            tuple([id_bordero] + val_params_pg + [cod_filial]),
                         )
 
-                    if t_idx == 1 or t_idx % batch_size == 0 or t_idx == len(releases_validos):
-                        cur_b = (t_idx + batch_size - 1) // batch_size
-                        pct_t = 42 + int((t_idx / max(1, len(releases_validos))) * 48)
-                        _update_job_progress(
-                            b_job_id,
-                            phase="BAIXANDO_TITULOS",
-                            percent=min(90, pct_t),
-                            current_batch=cur_b,
-                            total_batches=total_title_batches,
-                            processed_orders=t_idx,
-                            total_orders=len(releases_validos),
-                            horus_found_count=id_bordero,
-                            message=f"Baixando títulos no Borderô #{id_bordero}: {t_idx}/{len(releases_validos)} lançamentos liquidados (lote {cur_b}/{total_title_batches})...",
-                        )
+                    pct_t = 42 + int((done_cnt / max(1, len(releases_validos))) * 48)
+                    _update_job_progress(
+                        b_job_id,
+                        phase="BAIXANDO_TITULOS",
+                        percent=min(90, pct_t),
+                        current_batch=cur_b,
+                        total_batches=total_title_batches,
+                        processed_orders=done_cnt,
+                        total_orders=len(releases_validos),
+                        horus_found_count=id_bordero,
+                        message=f"Baixando títulos no Borderô #{id_bordero}: {done_cnt}/{len(releases_validos)} lançamentos liquidados nas 2 tabelas (lote {cur_b}/{total_title_batches})...",
+                    )
 
-        _update_job_progress(
-            b_job_id,
-            phase="AUDITORIA_FINAL",
-            percent=94,
-            processed_orders=len(releases_validos),
-            total_orders=len(releases_validos),
-            horus_found_count=id_bordero,
-            message=f"Confirmando transação no SQL Server e auditando Borderô #{id_bordero}...",
-        )
+            _update_job_progress(
+                b_job_id,
+                phase="AUDITORIA_FINAL",
+                percent=94,
+                processed_orders=len(releases_validos),
+                total_orders=len(releases_validos),
+                horus_found_count=id_bordero,
+                message=f"Auditando paridade entre LANCTOS_CRECEBER e LANCTOS_CRECEBERA e confirmando Borderô #{id_bordero}...",
+            )
 
-        # Commit da transação no SQL Server
-        conn.commit()
+            # 4.3. Auditoria de Paridade Pré-Commit: Garante que 100% dos títulos do Borderô estejam idênticos em LANCTOS_CRECEBER e LANCTOS_CRECEBERA
+            expected_sta = "AP" if eff_mode == "BORDERO_OPEN" else "PG"
+            expected_lancto_sta = "AB" if eff_mode == "BORDERO_OPEN" else "PG"
+            cur.execute(
+                f"""
+                UPDATE LRA
+                SET LRA.COD_BORDERO = LR.COD_BORDERO,
+                    LRA.STA_LANCTO_CRECEBER = LR.STA_LANCTO_CRECEBER,
+                    LRA.DAT_PAGTO_CRECEBER = LR.DAT_PAGTO_CRECEBER,
+                    LRA.DAT_PAGTO_CONTA = LR.DAT_PAGTO_CONTA,
+                    LRA.DAT_PAGTO_CRECEBER_REAL = LR.DAT_PAGTO_CRECEBER_REAL,
+                    LRA.VLR_LANCTO_CRECEBER = LR.VLR_LANCTO_CRECEBER,
+                    LRA.VLR_LANCTO_ABATIMENTO = LR.VLR_LANCTO_ABATIMENTO,
+                    LRA.VLR_LANCTO_TOTAL = LR.VLR_LANCTO_TOTAL,
+                    LRA.VLR_LANCTO_PAGO = LR.VLR_LANCTO_PAGO,
+                    LRA.VLR_LANCTO_RECEBIDO = LR.VLR_LANCTO_RECEBIDO,
+                    LRA.COD_BANCO = %s,
+                    LRA.COD_AGENCIA = %s,
+                    LRA.COD_CONTAC = %s,
+                    LRA.COD_FORMA = %s,
+                    LRA.NRO_CARTEIRA = %s,
+                    LRA.DAT_ULT_ATL = GETDATE()
+                FROM LANCTOS_CRECEBERA LRA
+                INNER JOIN LANCTOS_CRECEBER LR
+                    ON LR.COD_EMPRESA = LRA.COD_EMPRESA
+                   AND LR.COD_FILIAL = LRA.COD_FILIAL
+                   AND LR.COD_CLI = LRA.COD_CLI
+                   AND LR.NRO_LANCTO_CRECEBER = LRA.NRO_LANCTO_CRECEBER
+                WHERE LR.COD_FILIAL = %s
+                  AND LR.COD_BORDERO = %s
+                  AND (
+                      ISNULL(LRA.COD_BORDERO, 0) <> LR.COD_BORDERO
+                      OR ISNULL(LRA.STA_LANCTO_CRECEBER, '') <> ISNULL(LR.STA_LANCTO_CRECEBER, '')
+                      OR ISNULL(LRA.VLR_LANCTO_TOTAL, 0) <> ISNULL(LR.VLR_LANCTO_TOTAL, 0)
+                      OR ISNULL(LRA.VLR_LANCTO_PAGO, 0) <> ISNULL(LR.VLR_LANCTO_PAGO, 0)
+                  )
+                """,
+                (
+                    cod_banco_val,
+                    cod_agencia_val,
+                    cod_contac_val,
+                    cod_forma_val,
+                    carteira_val or None,
+                    cod_filial,
+                    id_bordero,
+                ),
+            )
 
-        # 4.4. Auditoria Pós-Gravação: Confere no SQL Server quantos títulos ficaram amarrados ao Borderô
-        verified_count = len(lancto_ids)
-        verified_sum = vlr_bordero_efetivo
-        try:
-            with conn.cursor() as cur_verify:
-                cur_verify.execute(
+            # 4.3.5. 4ª Opção: Lançamento da Taxa/Comissão como Despesa no Contas a Pagar do Horus (`dbo.LANCTOS_CPAGAR_GERAL`)
+            # Como a trigger `TRG_IMP_LANCTO_CPAGAR` do Horus é `FOR UPDATE` (`IF UPDATE(STA_LANCTO_CPAGAR)`),
+            # quando o Borderô é baixado ('PG'), inserimos em LANCTOS_CPAGAR_GERAL como 'AB' e atualizamos para 'PG',
+            # gerando automaticamente o débito correspondente (`STA_LANCTO = 'S'`, `STA_RASTREIO = 'CAP'`) em `BLANCTOS`.
+            if eff_launch_fee_as_expense and total_taxa_bordero > 0.005:
+                cod_grp_forn_int = int(cp_grp_forn)
+                cod_forn_int = int(cp_forn)
+                cod_depto_int = int(cp_depto)
+                cod_ccusto_int = int(cp_ccusto)
+                cod_grp_desp_int = int(cp_grp_desp)
+                cod_desp_int = int(cp_desp)
+                cod_forma_cp_int = int(cp_forma_raw)
+                emp_int = int(cod_empresa) if str(cod_empresa).isdigit() else 1
+                fil_int = int(cod_filial) if str(cod_filial).isdigit() else 1
+                bco_int = int(cod_banco_val) if str(cod_banco_val).isdigit() else 1
+                ag_int = int(cod_agencia_val) if str(cod_agencia_val).isdigit() else 1
+                cc_int = int(cod_contac_val) if str(cod_contac_val).isdigit() else 1
+
+                today_cp = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                if eff_mode == "SPECIFIC_DATE":
+                    default_cp_dt = _parse_payment_date_to_sql(payload.specific_payment_date, today_cp)
+                else:
+                    all_dts = [
+                        _parse_payment_date_to_sql(r_it.data_pagamento, today_cp)
+                        for r_it in releases_validos
+                    ]
+                    default_cp_dt = max(all_dts) if all_dts else today_cp
+
+                cur.execute(
                     """
-                    SELECT COUNT(*) AS qtd_gravada,
-                           ISNULL(SUM(VLR_LANCTO_TOTAL), 0) AS total_gravado
-                    FROM LANCTOS_CRECEBER WITH (NOLOCK)
-                    WHERE COD_FILIAL = %s AND COD_BORDERO = %s
+                    SELECT ISNULL(MAX(NRO_LANCTO_CPAGAR), 0) + 1 AS NEXT_NRO
+                    FROM LANCTOS_CPAGAR_GERAL WITH (UPDLOCK, HOLDLOCK)
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s
                     """,
-                    (cod_filial, id_bordero),
+                    (emp_int, fil_int),
                 )
-                v_row = cur_verify.fetchone()
-                if v_row:
-                    verified_count = int(
-                        v_row["qtd_gravada"] if isinstance(v_row, dict) else v_row[0]
+                r_next_cp = cur.fetchone()
+                next_cp_nro = int((r_next_cp["NEXT_NRO"] if isinstance(r_next_cp, dict) else r_next_cp[0]) if r_next_cp else 1)
+
+                prof_label_upper = str(payload.profile_code or "CANAL").strip().upper()[:30]
+
+                if eff_cp_fee_posting_mode == "INDIVIDUAL":
+                    fee_items = [
+                        r_it for r_it in releases_validos
+                        if round(max(0.0, float(r_it.taxa or 0.0)), 2) > 0.005
+                    ]
+                    for idx_cp, r_it in enumerate(fee_items):
+                        nro_cp = next_cp_nro + idx_cp
+                        fee_val = round(max(0.0, float(r_it.taxa or 0.0)), 2)
+                        lid_cr = int(r_it.nro_lancamento)
+                        dt_cp = (
+                            default_cp_dt
+                            if eff_mode == "SPECIFIC_DATE"
+                            else _parse_payment_date_to_sql(r_it.data_pagamento, default_cp_dt)
+                        )
+                        nro_dup = str(
+                            r_it.nro_nota_fiscal
+                            if r_it.nro_nota_fiscal and r_it.nro_nota_fiscal != "-"
+                            else f"B{id_bordero}-{lid_cr}"
+                        ).strip().upper()[:12]
+                        obs_cp = (
+                            f"TAXA/COMISSAO {prof_label_upper} - BORDERO #{id_bordero} - PED {r_it.pedido_canal or r_it.pedido_web or '-'} - NF {r_it.nro_nota_fiscal or '-'} - LANCTO CR #{lid_cr}"
+                        ).strip().upper()[:500]
+
+                        cur.execute(
+                            """
+                            INSERT INTO LANCTOS_CPAGAR_GERAL (
+                                COD_EMPRESA, COD_FILIAL, NRO_LANCTO_CPAGAR,
+                                COD_GRP_FORNECEDOR, COD_FORNECEDOR, COD_DEPARTAMENTO,
+                                COD_CENTRO_CUSTO, COD_GRUP_DESP, COD_DESPESA,
+                                COD_BANCO, COD_FORMA, NRO_DUPLICATA,
+                                DAT_EMISS_CPAGAR, DAT_VENC_CPAGAR, VLR_DESP_CARTORIO,
+                                VLR_LANCTO_CPAGAR, VLR_LANCTO_DEB_CRED, VLR_LANCTO_TOTAL,
+                                OBS_CPAGAR, STA_LANCTO_CPAGAR, NOM_USUARIO, DAT_ULT_ATL,
+                                STA_APROVACAO, USU_APROVACAO, STA_GER_BORDERO,
+                                CODIGO_BARRAS, TPO_CODBARRAS, FINALIDADE_PAGTO, LINHA_DIGITAVEL
+                            ) VALUES (
+                                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                %s, %s, 0, %s, 0, %s, %s, 'AB', 'CRONUZ', GETDATE(),
+                                'S', 'CRONUZ', 'N', '', 'A', '00000', ''
+                            )
+                            """,
+                            (
+                                emp_int, fil_int, nro_cp,
+                                cod_grp_forn_int, cod_forn_int, cod_depto_int,
+                                cod_ccusto_int, cod_grp_desp_int, cod_desp_int,
+                                bco_int, cod_forma_cp_int, nro_dup,
+                                dt_cp, dt_cp, fee_val, fee_val, obs_cp,
+                            ),
+                        )
+                        if eff_mode != "BORDERO_OPEN":
+                            cur.execute(
+                                """
+                                UPDATE LANCTOS_CPAGAR_GERAL
+                                SET STA_LANCTO_CPAGAR = 'PG',
+                                    VLR_LANCTO_CPAGAR = %s,
+                                    VLR_LANCTO_TOTAL = %s,
+                                    VLR_LANCTO_PAGO = %s,
+                                    DAT_PAGTO_CPAGAR = %s,
+                                    COD_EMPRESA_PAGTO = %s,
+                                    COD_FILIAL_PAGTO = %s,
+                                    COD_BANCO_PAGTO = %s,
+                                    COD_AGENCIA_PAGTO = %s,
+                                    COD_CONTAC_PAGTO = %s,
+                                    COD_FORMA_BAIXA = %s,
+                                    DAT_ULT_ATL = GETDATE()
+                                WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND NRO_LANCTO_CPAGAR = %s
+                                """,
+                                (
+                                    fee_val, fee_val, fee_val, dt_cp,
+                                    emp_int, fil_int, bco_int, ag_int, cc_int, cod_forma_cp_int,
+                                    emp_int, fil_int, nro_cp,
+                                ),
+                            )
+                        cpagar_lancamentos_criados_tx += 1
+                        cpagar_valor_total_tx = round(cpagar_valor_total_tx + fee_val, 2)
+                        cpagar_ids_list.append(nro_cp)
+                else:
+                    # Modo UNIFIED: 1 Despesa Única Unificada com o valor total das taxas do Borderô
+                    nro_cp = next_cp_nro
+                    fee_total_val = round(total_taxa_bordero, 2)
+                    nro_dup = f"BRD-{id_bordero}"[:12].upper()
+                    obs_cp = (
+                        f"TAXA/COMISSAO UNIFICADA {prof_label_upper} - BORDERO #{id_bordero} ({len(releases_validos)} TITULOS - BRUTO R$ {total_bordero:.2f} / LIQ R$ {total_liquido_bordero:.2f})"
+                    ).strip().upper()[:500]
+
+                    cur.execute(
+                        """
+                        INSERT INTO LANCTOS_CPAGAR_GERAL (
+                            COD_EMPRESA, COD_FILIAL, NRO_LANCTO_CPAGAR,
+                            COD_GRP_FORNECEDOR, COD_FORNECEDOR, COD_DEPARTAMENTO,
+                            COD_CENTRO_CUSTO, COD_GRUP_DESP, COD_DESPESA,
+                            COD_BANCO, COD_FORMA, NRO_DUPLICATA,
+                            DAT_EMISS_CPAGAR, DAT_VENC_CPAGAR, VLR_DESP_CARTORIO,
+                            VLR_LANCTO_CPAGAR, VLR_LANCTO_DEB_CRED, VLR_LANCTO_TOTAL,
+                            OBS_CPAGAR, STA_LANCTO_CPAGAR, NOM_USUARIO, DAT_ULT_ATL,
+                            STA_APROVACAO, USU_APROVACAO, STA_GER_BORDERO,
+                            CODIGO_BARRAS, TPO_CODBARRAS, FINALIDADE_PAGTO, LINHA_DIGITAVEL
+                        ) VALUES (
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, 0, %s, 0, %s, %s, 'AB', 'CRONUZ', GETDATE(),
+                            'S', 'CRONUZ', 'N', '', 'A', '00000', ''
+                        )
+                        """,
+                        (
+                            emp_int, fil_int, nro_cp,
+                            cod_grp_forn_int, cod_forn_int, cod_depto_int,
+                            cod_ccusto_int, cod_grp_desp_int, cod_desp_int,
+                            bco_int, cod_forma_cp_int, nro_dup,
+                            default_cp_dt, default_cp_dt, fee_total_val, fee_total_val, obs_cp,
+                        ),
                     )
-                    verified_sum = round(
-                        float(v_row["total_gravado"] if isinstance(v_row, dict) else v_row[1]), 2
-                    )
-        except Exception as ex_v:
-            logger.warning("[HorusBordero] Aviso na conferência pós-commit: %s", ex_v)
+                    if eff_mode != "BORDERO_OPEN":
+                        cur.execute(
+                            """
+                            UPDATE LANCTOS_CPAGAR_GERAL
+                            SET STA_LANCTO_CPAGAR = 'PG',
+                                VLR_LANCTO_CPAGAR = %s,
+                                VLR_LANCTO_TOTAL = %s,
+                                VLR_LANCTO_PAGO = %s,
+                                DAT_PAGTO_CPAGAR = %s,
+                                COD_EMPRESA_PAGTO = %s,
+                                COD_FILIAL_PAGTO = %s,
+                                COD_BANCO_PAGTO = %s,
+                                COD_AGENCIA_PAGTO = %s,
+                                COD_CONTAC_PAGTO = %s,
+                                COD_FORMA_BAIXA = %s,
+                                DAT_ULT_ATL = GETDATE()
+                            WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND NRO_LANCTO_CPAGAR = %s
+                            """,
+                            (
+                                fee_total_val, fee_total_val, fee_total_val, default_cp_dt,
+                                emp_int, fil_int, bco_int, ag_int, cc_int, cod_forma_cp_int,
+                                emp_int, fil_int, nro_cp,
+                            ),
+                        )
+                    cpagar_lancamentos_criados_tx = 1
+                    cpagar_valor_total_tx = fee_total_val
+                    cpagar_ids_list.append(nro_cp)
+
+            # 4.4. Conferência de Contagem e Soma antes do Commit
+            verified_count = len(lancto_ids)
+            verified_sum = vlr_bordero_efetivo
+            cur.execute(
+                """
+                SELECT COUNT(*) AS qtd_gravada,
+                       ISNULL(SUM(VLR_LANCTO_TOTAL), 0) AS total_gravado
+                FROM LANCTOS_CRECEBER
+                WHERE COD_FILIAL = %s AND COD_BORDERO = %s AND STA_LANCTO_CRECEBER = %s
+                """,
+                (cod_filial, id_bordero, expected_lancto_sta),
+            )
+            v_row = cur.fetchone()
+            if v_row:
+                verified_count = int(v_row["qtd_gravada"] if isinstance(v_row, dict) else v_row[0])
+                verified_sum = round(float(v_row["total_gravado"] if isinstance(v_row, dict) else v_row[1]), 2)
+
+            if verified_count == 0:
+                raise RuntimeError(
+                    f"Auditoria de segurança abortou o Borderô #{id_bordero}: nenhum lançamento permaneceu vinculado com status '{expected_lancto_sta}'."
+                )
+
+          # Commit atômico da transação no SQL Server
+          conn.commit()
+        except Exception as tx_err:
+            logger.error("[HorusBordero] Erro na transação do Borderô company=%s: %s (executando ROLLBACK)", company_id, tx_err)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
         return {
             "id_bordero": id_bordero,
             "nom_arquivo": nom_arquivo,
             "payment_date_mode": eff_mode,
             "unify_installments": eff_unify,
+            "launch_fee_as_expense": eff_launch_fee_as_expense,
+            "cp_fee_posting_mode": eff_cp_fee_posting_mode,
+            "cpagar_lancamentos_criados_tx": cpagar_lancamentos_criados_tx,
+            "cpagar_valor_total_tx": cpagar_valor_total_tx,
+            "cpagar_ids_list": cpagar_ids_list,
             "unificadas_orders_tx": unificadas_orders_tx,
             "unificadas_parcelas_removidas_tx": unificadas_parcelas_removidas_tx,
             "credito_maior_lancamentos_criados_tx": credito_maior_lancamentos_criados_tx,
@@ -2383,6 +3220,11 @@ async def create_vindi_bordero(
                 if tx_res.get("credito_maior_lancamentos_criados_tx", 0) > 0
                 else ""
             )
+            cpagar_desc = (
+                f" • Despesa de Taxa lançada no Contas a Pagar Horus ({tx_res['cpagar_lancamentos_criados_tx']} lançamento(s) {'Unificado' if tx_res.get('cp_fee_posting_mode') == 'UNIFIED' else 'Individual'}: R$ {tx_res['cpagar_valor_total_tx']:.2f})"
+                if tx_res.get("cpagar_lancamentos_criados_tx", 0) > 0
+                else ""
+            )
 
             final_res = {
                 "success": True,
@@ -2390,7 +3232,11 @@ async def create_vindi_bordero(
                 "bordero_number": bordero_id,
                 "payment_date_mode": eff_mode,
                 "unify_installments": eff_unify,
-                "total_valor": total_liquido_bordero,
+                "launch_fee_as_expense": eff_launch_fee_as_expense,
+                "cp_fee_posting_mode": eff_cp_fee_posting_mode,
+                "cpagar_lancamentos_criados": tx_res.get("cpagar_lancamentos_criados_tx", 0),
+                "cpagar_valor_total": tx_res.get("cpagar_valor_total_tx", 0.0),
+                "total_valor": total_bordero if eff_launch_fee_as_expense else total_liquido_bordero,
                 "total_bruto": total_bordero,
                 "total_liquido": total_liquido_bordero,
                 "total_taxa": total_taxa_bordero,
@@ -2404,9 +3250,11 @@ async def create_vindi_bordero(
                     "unificadas_parcelas_removidas_tx": tx_res["unificadas_parcelas_removidas_tx"],
                     "credito_maior_lancamentos_criados_tx": tx_res.get("credito_maior_lancamentos_criados_tx", 0),
                     "credito_maior_valor_total_tx": tx_res.get("credito_maior_valor_total_tx", 0.0),
+                    "cpagar_lancamentos_criados_tx": tx_res.get("cpagar_lancamentos_criados_tx", 0),
+                    "cpagar_valor_total_tx": tx_res.get("cpagar_valor_total_tx", 0.0),
                     "completed_at": tx_res["completed_at"],
                 },
-                "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP e salvo no histórico do Cronuz! {mode_desc}{unif_desc}{cred_desc} ({tx_res['verified_count']} títulos confirmados • Valor Baixado no Borderô: R$ {total_liquido_bordero:.2f} • Bruto: R$ {total_bordero:.2f}).",
+                "message": f"Borderô #{bordero_id} gravado com sucesso no Horus ERP e salvo no histórico do Cronuz! {mode_desc}{unif_desc}{cred_desc}{cpagar_desc} ({tx_res['verified_count']} títulos confirmados • Valor no Borderô: R$ {(total_bordero if eff_launch_fee_as_expense else total_liquido_bordero):.2f} • Líquido Planilha: R$ {total_liquido_bordero:.2f}).",
             }
 
             _update_job_progress(

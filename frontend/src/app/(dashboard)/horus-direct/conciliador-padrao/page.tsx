@@ -55,6 +55,16 @@ interface ColumnMappingConfig {
   documento_col?: string;
   deduct_debit_rows?: boolean;
   use_horus_value?: boolean;
+  launch_fee_as_expense?: boolean;
+  cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+  cp_cod_grp_fornecedor?: string;
+  cp_cod_fornecedor?: string;
+  cp_nom_fornecedor?: string;
+  cp_cod_departamento?: string;
+  cp_cod_centro_custo?: string;
+  cp_cod_grup_desp?: string;
+  cp_cod_despesa?: string;
+  cp_cod_forma?: string;
   bridge_channel_key_col?: string;
   bridge_channel_extract_rule?: string;
   bridge_horus_key_col?: string;
@@ -93,6 +103,17 @@ interface DynamicTemplate {
   unify_installments: boolean;
   split_excess_launch: boolean;
   use_horus_value?: boolean;
+  launch_fee_as_expense?: boolean;
+  cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+  cp_cod_grp_fornecedor?: string;
+  cp_cod_fornecedor?: string;
+  cp_nom_fornecedor?: string;
+  cp_cod_departamento?: string;
+  cp_cod_centro_custo?: string;
+  cp_cod_grup_desp?: string;
+  cp_cod_despesa?: string;
+  cp_cod_forma?: string;
+  cpagar_configured?: boolean;
   is_active: boolean;
   is_system_preset: boolean;
   bank_configured: boolean;
@@ -176,9 +197,80 @@ interface BankConfig {
   unify_installments?: boolean;
   split_excess_launch?: boolean;
   use_horus_value?: boolean;
+  launch_fee_as_expense?: boolean;
+  cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+  cp_cod_grp_fornecedor?: string;
+  cp_cod_fornecedor?: string;
+  cp_nom_fornecedor?: string;
+  cp_cod_departamento?: string;
+  cp_cod_centro_custo?: string;
+  cp_cod_grup_desp?: string;
+  cp_cod_despesa?: string;
+  cp_cod_forma?: string;
+  cpagar_configured?: boolean;
   cod_empresa: string;
   cod_filial: string;
   is_configured: boolean;
+}
+
+interface HorusOptionsPayload {
+  bank_accounts: {
+    cod_banco: number;
+    nom_banco: string;
+    cod_agencia: number;
+    nom_agencia: string;
+    cod_contac: number;
+    nro_contac: string;
+    dig_contac: string;
+  }[];
+  payment_forms: {
+    cod_forma: number;
+    desc_forma: string;
+    tipo_operacao?: string;
+  }[];
+  departamentos: {
+    cod_departamento: number;
+    desc_departamento: string;
+  }[];
+  centros_custo: {
+    cod_departamento: number;
+    cod_centro_custo: number;
+    desc_centro_custo: string;
+  }[];
+  grupos_despesa: {
+    cod_grup_desp: number;
+    desc_grup_desp: string;
+  }[];
+  despesas: {
+    cod_grup_desp: number;
+    cod_despesa: number;
+    desc_despesa: string;
+  }[];
+  grupos_fornecedor: {
+    cod_grp_fornecedor: number;
+    desc_grp_fornecedor: string;
+  }[];
+  fornecedores: {
+    cod_grp_fornecedor: number;
+    cod_fornecedor: number;
+    nom_fornecedor: string;
+    nom_fantasia?: string;
+  }[];
+  recent_tariff_presets?: {
+    cod_grp_fornecedor: number;
+    cod_fornecedor: number;
+    nom_fornecedor: string;
+    cod_departamento: number;
+    cod_centro_custo: number;
+    cod_grup_desp: number;
+    cod_despesa: number;
+    desc_despesa?: string;
+    cod_forma: number;
+    cod_banco?: number;
+    cod_agencia?: number;
+    cod_contac?: number;
+    obs_cpagar?: string;
+  }[];
 }
 
 interface ReleaseItem {
@@ -308,6 +400,8 @@ export default function ConciliadorPadraoPage() {
   const [splitExcessLaunch, setSplitExcessLaunch] = useState<boolean>(true);
   const [useHorusValue, setUseHorusValue] = useState<boolean>(false);
   const [formaPagtoCreditoMaior, setFormaPagtoCreditoMaior] = useState<string>('');
+  const [launchFeeAsExpense, setLaunchFeeAsExpense] = useState<boolean>(false);
+  const [cpFeePostingMode, setCpFeePostingMode] = useState<'UNIFIED' | 'INDIVIDUAL'>('UNIFIED');
   const [specificPaymentDate, setSpecificPaymentDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
   );
@@ -318,6 +412,10 @@ export default function ConciliadorPadraoPage() {
     verified_count?: number;
     completed_at?: string;
     payment_date_mode?: string;
+    launch_fee_as_expense?: boolean;
+    cp_fee_posting_mode?: string;
+    total_taxa_bordero?: number;
+    cpagar_expenses_count?: number;
   } | null>(null);
 
   // Modal Construtor / Editor de Modelo Dinâmico ("De -> Para" + Banco)
@@ -327,6 +425,9 @@ export default function ConciliadorPadraoPage() {
   const [inspectingSample, setInspectingSample] = useState(false);
   const [detectedHeaders, setDetectedHeaders] = useState<string[]>([]);
   const [sampleRows, setSampleRows] = useState<Record<string, string>[]>([]);
+  const [horusOptions, setHorusOptions] = useState<HorusOptionsPayload | null>(null);
+  const [loadingHorusOptions, setLoadingHorusOptions] = useState(false);
+  const [fornecedorSearchQuery, setFornecedorSearchQuery] = useState('');
   const [builderForm, setBuilderForm] = useState({
     name: '',
     short_name: '',
@@ -361,6 +462,16 @@ export default function ConciliadorPadraoPage() {
     unify_installments: true,
     split_excess_launch: true,
     use_horus_value: false,
+    launch_fee_as_expense: false,
+    cp_fee_posting_mode: 'UNIFIED' as 'UNIFIED' | 'INDIVIDUAL',
+    cp_cod_grp_fornecedor: '',
+    cp_cod_fornecedor: '',
+    cp_nom_fornecedor: '',
+    cp_cod_departamento: '',
+    cp_cod_centro_custo: '',
+    cp_cod_grup_desp: '',
+    cp_cod_despesa: '',
+    cp_cod_forma: '',
   });
 
   // Histórico de Fechamentos
@@ -427,9 +538,46 @@ export default function ConciliadorPadraoPage() {
       Boolean(activeTemplate.use_horus_value ?? activeTemplate.column_mapping?.use_horus_value)
     );
     setFormaPagtoCreditoMaior(activeTemplate.forma_pagto_credito_maior || '');
+    setLaunchFeeAsExpense(
+      Boolean(
+        activeTemplate.launch_fee_as_expense ??
+          activeTemplate.column_mapping?.launch_fee_as_expense ??
+          activeTemplate.effective_bank?.launch_fee_as_expense
+      )
+    );
+    const cpMode = (activeTemplate.cp_fee_posting_mode ||
+      activeTemplate.column_mapping?.cp_fee_posting_mode ||
+      activeTemplate.effective_bank?.cp_fee_posting_mode ||
+      'UNIFIED') as 'UNIFIED' | 'INDIVIDUAL';
+    setCpFeePostingMode(cpMode === 'INDIVIDUAL' ? 'INDIVIDUAL' : 'UNIFIED');
   }, [activeTemplate]);
 
   const isDualFileMode = activeTemplate?.mode === 'DUAL_FILE';
+
+  const fetchHorusOptions = async (qFornecedor?: string) => {
+    setLoadingHorusOptions(true);
+    try {
+      const token = getToken();
+      const qs = new URLSearchParams();
+      if (qFornecedor && qFornecedor.trim()) {
+        qs.set('q_fornecedor', qFornecedor.trim());
+      }
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/horus-options${
+          qs.toString() ? `?${qs.toString()}` : ''
+        }`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setHorusOptions(data);
+      }
+    } catch {
+      // silencioso
+    } finally {
+      setLoadingHorusOptions(false);
+    }
+  };
 
   const handleSelectTemplate = (tplId: number) => {
     setActiveTemplateId(tplId);
@@ -510,7 +658,67 @@ export default function ConciliadorPadraoPage() {
         unify_installments: Boolean(tpl.unify_installments),
         split_excess_launch: Boolean(tpl.split_excess_launch),
         use_horus_value: Boolean(tpl.use_horus_value ?? cm.use_horus_value),
+        launch_fee_as_expense: Boolean(
+          tpl.launch_fee_as_expense ??
+            cm.launch_fee_as_expense ??
+            tpl.effective_bank?.launch_fee_as_expense
+        ),
+        cp_fee_posting_mode:
+          ((tpl.cp_fee_posting_mode ||
+            cm.cp_fee_posting_mode ||
+            tpl.effective_bank?.cp_fee_posting_mode ||
+            'UNIFIED') as 'UNIFIED' | 'INDIVIDUAL') === 'INDIVIDUAL'
+            ? 'INDIVIDUAL'
+            : 'UNIFIED',
+        cp_cod_grp_fornecedor:
+          tpl.cp_cod_grp_fornecedor ||
+          cm.cp_cod_grp_fornecedor ||
+          tpl.effective_bank?.cp_cod_grp_fornecedor ||
+          '',
+        cp_cod_fornecedor:
+          tpl.cp_cod_fornecedor ||
+          cm.cp_cod_fornecedor ||
+          tpl.effective_bank?.cp_cod_fornecedor ||
+          '',
+        cp_nom_fornecedor:
+          tpl.cp_nom_fornecedor ||
+          cm.cp_nom_fornecedor ||
+          tpl.effective_bank?.cp_nom_fornecedor ||
+          '',
+        cp_cod_departamento:
+          tpl.cp_cod_departamento ||
+          cm.cp_cod_departamento ||
+          tpl.effective_bank?.cp_cod_departamento ||
+          '',
+        cp_cod_centro_custo:
+          tpl.cp_cod_centro_custo ||
+          cm.cp_cod_centro_custo ||
+          tpl.effective_bank?.cp_cod_centro_custo ||
+          '',
+        cp_cod_grup_desp:
+          tpl.cp_cod_grup_desp ||
+          cm.cp_cod_grup_desp ||
+          tpl.effective_bank?.cp_cod_grup_desp ||
+          '',
+        cp_cod_despesa:
+          tpl.cp_cod_despesa ||
+          cm.cp_cod_despesa ||
+          tpl.effective_bank?.cp_cod_despesa ||
+          '',
+        cp_cod_forma:
+          tpl.cp_cod_forma ||
+          cm.cp_cod_forma ||
+          tpl.effective_bank?.cp_cod_forma ||
+          tpl.forma_pagto ||
+          '',
       });
+      const initialFornName =
+        tpl.cp_nom_fornecedor ||
+        cm.cp_nom_fornecedor ||
+        tpl.effective_bank?.cp_nom_fornecedor ||
+        '';
+      setFornecedorSearchQuery(initialFornName);
+      fetchHorusOptions(initialFornName || undefined);
     } else {
       setEditingTemplateId(null);
       const baseBank = activeTemplate?.effective_bank;
@@ -548,7 +756,19 @@ export default function ConciliadorPadraoPage() {
         unify_installments: true,
         split_excess_launch: true,
         use_horus_value: false,
+        launch_fee_as_expense: false,
+        cp_fee_posting_mode: 'UNIFIED',
+        cp_cod_grp_fornecedor: baseBank?.cp_cod_grp_fornecedor || '',
+        cp_cod_fornecedor: baseBank?.cp_cod_fornecedor || '',
+        cp_nom_fornecedor: baseBank?.cp_nom_fornecedor || '',
+        cp_cod_departamento: baseBank?.cp_cod_departamento || '',
+        cp_cod_centro_custo: baseBank?.cp_cod_centro_custo || '',
+        cp_cod_grup_desp: baseBank?.cp_cod_grup_desp || '',
+        cp_cod_despesa: baseBank?.cp_cod_despesa || '',
+        cp_cod_forma: baseBank?.cp_cod_forma || baseBank?.forma_pagto || '',
       });
+      setFornecedorSearchQuery(baseBank?.cp_nom_fornecedor || '');
+      fetchHorusOptions(baseBank?.cp_nom_fornecedor || undefined);
     }
     setShowBuilderModal(true);
   };
@@ -618,6 +838,22 @@ export default function ConciliadorPadraoPage() {
       return;
     }
 
+    if (builderForm.launch_fee_as_expense) {
+      if (
+        !builderForm.cp_cod_grp_fornecedor.trim() ||
+        !builderForm.cp_cod_fornecedor.trim() ||
+        !builderForm.cp_cod_departamento.trim() ||
+        !builderForm.cp_cod_centro_custo.trim() ||
+        !builderForm.cp_cod_grup_desp.trim() ||
+        !builderForm.cp_cod_despesa.trim()
+      ) {
+        toast.error(
+          'Para ativar a 4ª Opção (Lançar Taxa como Despesa no Contas a Pagar), selecione Fornecedor, Departamento, Centro de Custo, Grupo de Despesa e Despesa.'
+        );
+        return;
+      }
+    }
+
     setSavingTemplate(true);
     try {
       const token = getToken();
@@ -648,6 +884,17 @@ export default function ConciliadorPadraoPage() {
           documento_col: builderForm.documento_col.trim(),
           deduct_debit_rows: Boolean(builderForm.deduct_debit_rows),
           use_horus_value: Boolean(builderForm.use_horus_value),
+          launch_fee_as_expense: Boolean(builderForm.launch_fee_as_expense),
+          cp_fee_posting_mode: builderForm.cp_fee_posting_mode || 'UNIFIED',
+          cp_cod_grp_fornecedor: builderForm.cp_cod_grp_fornecedor.trim(),
+          cp_cod_fornecedor: builderForm.cp_cod_fornecedor.trim(),
+          cp_nom_fornecedor: builderForm.cp_nom_fornecedor.trim(),
+          cp_cod_departamento: builderForm.cp_cod_departamento.trim(),
+          cp_cod_centro_custo: builderForm.cp_cod_centro_custo.trim(),
+          cp_cod_grup_desp: builderForm.cp_cod_grup_desp.trim(),
+          cp_cod_despesa: builderForm.cp_cod_despesa.trim(),
+          cp_cod_forma:
+            builderForm.cp_cod_forma.trim() || builderForm.forma_pagto.trim(),
           bridge_channel_key_col: builderForm.bridge_channel_key_col.trim(),
           bridge_horus_key_col: builderForm.bridge_horus_key_col.trim(),
           bridge_valor_pedido_col: builderForm.bridge_valor_pedido_col.trim(),
@@ -662,6 +909,17 @@ export default function ConciliadorPadraoPage() {
         unify_installments: Boolean(builderForm.unify_installments),
         split_excess_launch: Boolean(builderForm.split_excess_launch),
         use_horus_value: Boolean(builderForm.use_horus_value),
+        launch_fee_as_expense: Boolean(builderForm.launch_fee_as_expense),
+        cp_fee_posting_mode: builderForm.cp_fee_posting_mode || 'UNIFIED',
+        cp_cod_grp_fornecedor: builderForm.cp_cod_grp_fornecedor.trim(),
+        cp_cod_fornecedor: builderForm.cp_cod_fornecedor.trim(),
+        cp_nom_fornecedor: builderForm.cp_nom_fornecedor.trim(),
+        cp_cod_departamento: builderForm.cp_cod_departamento.trim(),
+        cp_cod_centro_custo: builderForm.cp_cod_centro_custo.trim(),
+        cp_cod_grup_desp: builderForm.cp_cod_grup_desp.trim(),
+        cp_cod_despesa: builderForm.cp_cod_despesa.trim(),
+        cp_cod_forma:
+          builderForm.cp_cod_forma.trim() || builderForm.forma_pagto.trim(),
       };
 
       const url = editingTemplateId
@@ -978,12 +1236,41 @@ export default function ConciliadorPadraoPage() {
 
     try {
       const token = getToken();
+      const effCfg = activeTemplate.effective_bank;
+      if (launchFeeAsExpense) {
+        if (
+          !effCfg?.cp_cod_grp_fornecedor ||
+          !effCfg?.cp_cod_fornecedor ||
+          !effCfg?.cp_cod_departamento ||
+          !effCfg?.cp_cod_centro_custo ||
+          !effCfg?.cp_cod_grup_desp ||
+          !effCfg?.cp_cod_despesa
+        ) {
+          toast.error(
+            'A 4ª Opção (Lançar Taxa no Contas a Pagar) está ativa, mas os códigos de Fornecedor/Departamento/Centro de Custo/Despesa ainda não foram salvos no Modelo. Clique em "Editar Modelo" primeiro.'
+          );
+          setCreatingBordero(false);
+          setBorderoProgress(null);
+          return;
+        }
+      }
+
       const payload = {
         profile_code: activeTemplate.code,
         payment_date_mode: paymentDateMode,
         unify_installments: unifyInstallments,
         split_excess_launch: splitExcessLaunch,
         forma_pagto_credito_maior: formaPagtoCreditoMaior || undefined,
+        launch_fee_as_expense: launchFeeAsExpense,
+        cp_fee_posting_mode: cpFeePostingMode,
+        cp_cod_grp_fornecedor: effCfg?.cp_cod_grp_fornecedor || undefined,
+        cp_cod_fornecedor: effCfg?.cp_cod_fornecedor || undefined,
+        cp_nom_fornecedor: effCfg?.cp_nom_fornecedor || undefined,
+        cp_cod_departamento: effCfg?.cp_cod_departamento || undefined,
+        cp_cod_centro_custo: effCfg?.cp_cod_centro_custo || undefined,
+        cp_cod_grup_desp: effCfg?.cp_cod_grup_desp || undefined,
+        cp_cod_despesa: effCfg?.cp_cod_despesa || undefined,
+        cp_cod_forma: effCfg?.cp_cod_forma || effCfg?.forma_pagto || undefined,
         channel_filename: channelFile?.name || undefined,
         tray_filename: trayFile?.name || undefined,
         specific_payment_date:
@@ -2135,9 +2422,84 @@ export default function ConciliadorPadraoPage() {
                 {/* COLUNA DIREITA (5 cols): Parâmetros Bancários do Borderô e Regras de Baixa */}
                 <div className="lg:col-span-5 space-y-4">
                   <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-3.5 space-y-3 bg-slate-50/40 dark:bg-slate-800/30">
-                    <p className="text-xs font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
-                      3. Conta Bancária &amp; Parâmetros do Borderô Horus
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                        3. Conta Bancária &amp; Parâmetros do Borderô Horus
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => fetchHorusOptions(fornecedorSearchQuery || undefined)}
+                        disabled={loadingHorusOptions}
+                        className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 px-2 py-1 text-[10px] font-bold text-indigo-600 cursor-pointer"
+                      >
+                        <RefreshCw className={`h-3 w-3 ${loadingHorusOptions ? 'animate-spin' : ''}`} />
+                        {loadingHorusOptions ? 'Consultando...' : 'Atualizar do Horus'}
+                      </button>
+                    </div>
+
+                    {/* Seletores em Tempo Real do Horus */}
+                    {horusOptions && horusOptions.bank_accounts.length > 0 && (
+                      <div className="space-y-2 pb-1">
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 block mb-0.5">
+                            Selecionar Conta Bancária do Horus (Tempo Real):
+                          </label>
+                          <select
+                            value={`${builderForm.banco}|${builderForm.agencia}|${builderForm.conta}`}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (!val) return;
+                              const [b, ag, cc] = val.split('|');
+                              setBuilderForm((p) => ({
+                                ...p,
+                                banco: b || p.banco,
+                                agencia: ag || p.agencia,
+                                conta: cc || p.conta,
+                              }));
+                            }}
+                            className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-[11px] font-bold"
+                          >
+                            <option value="">-- Escolha uma Conta Corrente no Horus --</option>
+                            {horusOptions.bank_accounts.map((acc, idx) => (
+                              <option
+                                key={`${acc.cod_banco}-${acc.cod_agencia}-${acc.cod_contac}-${idx}`}
+                                value={`${acc.cod_banco}|${acc.cod_agencia}|${acc.cod_contac}`}
+                              >
+                                Banco {acc.cod_banco} ({acc.nom_banco}) • Ag {acc.cod_agencia} • CC{' '}
+                                {acc.cod_contac} ({acc.nro_contac}-{acc.dig_contac})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 block mb-0.5">
+                            Selecionar Forma de Pagto do Horus (Tempo Real):
+                          </label>
+                          <select
+                            value={builderForm.forma_pagto}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (!val) return;
+                              setBuilderForm((p) => ({
+                                ...p,
+                                forma_pagto: val,
+                                cp_cod_forma: p.cp_cod_forma || val,
+                              }));
+                            }}
+                            className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-[11px] font-bold"
+                          >
+                            <option value="">-- Escolha uma Forma de Pagto (FORMA_PAGTO) --</option>
+                            {horusOptions.payment_forms.map((fp) => (
+                              <option key={fp.cod_forma} value={String(fp.cod_forma)}>
+                                {fp.cod_forma} - {fp.desc_forma}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-2.5">
                       <div>
                         <label className="text-[10px] font-bold text-slate-600 dark:text-slate-400 block mb-1">
@@ -2352,6 +2714,413 @@ export default function ConciliadorPadraoPage() {
                             className="h-4 w-4 mt-0.5 rounded text-emerald-600 shrink-0 cursor-pointer"
                           />
                         </label>
+
+                        {/* 4ª Opção: Baixar Valor Total (Bruto) no Recebimento + Lançar Taxa como Despesa no Contas a Pagar */}
+                        <div className="rounded-lg border border-indigo-200 dark:border-indigo-800/70 bg-indigo-50/40 dark:bg-indigo-950/20 p-2.5 space-y-2">
+                          <label
+                            onClick={() =>
+                              setBuilderForm((p) => ({
+                                ...p,
+                                launch_fee_as_expense: !p.launch_fee_as_expense,
+                              }))
+                            }
+                            className="flex items-start justify-between gap-3 cursor-pointer"
+                          >
+                            <div className="space-y-0.5">
+                              <span className="text-xs font-bold text-indigo-900 dark:text-indigo-200 block">
+                                4ª Opção: Baixar Valor Total (Bruto) + Lançar Taxa no Contas a Pagar
+                              </span>
+                              <span className="text-[10.5px] leading-snug text-slate-600 dark:text-slate-400 block">
+                                Baixa o valor bruto real da venda no Contas a Receber (fiel à planilha) e lança o valor da taxa como Despesa no Contas a Pagar (<code>LANCTOS_CPAGAR_GERAL</code>).
+                              </span>
+                            </div>
+                            <input
+                              type="checkbox"
+                              checked={builderForm.launch_fee_as_expense}
+                              onChange={(e) =>
+                                setBuilderForm((p) => ({
+                                  ...p,
+                                  launch_fee_as_expense: e.target.checked,
+                                }))
+                              }
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-4 w-4 mt-0.5 rounded text-indigo-600 shrink-0 cursor-pointer"
+                            />
+                          </label>
+
+                          {builderForm.launch_fee_as_expense && (
+                            <div className="pt-2 border-t border-indigo-200/70 dark:border-indigo-800/50 space-y-2 text-[11px]">
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBuilderForm((p) => ({
+                                      ...p,
+                                      cp_fee_posting_mode: 'UNIFIED',
+                                    }))
+                                  }
+                                  className={`rounded-lg border px-2 py-1.5 text-[10px] font-extrabold cursor-pointer ${
+                                    builderForm.cp_fee_posting_mode === 'UNIFIED'
+                                      ? 'border-indigo-600 bg-indigo-600 text-white'
+                                      : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600'
+                                  }`}
+                                >
+                                  1. Despesa Única Unificada
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setBuilderForm((p) => ({
+                                      ...p,
+                                      cp_fee_posting_mode: 'INDIVIDUAL',
+                                    }))
+                                  }
+                                  className={`rounded-lg border px-2 py-1.5 text-[10px] font-extrabold cursor-pointer ${
+                                    builderForm.cp_fee_posting_mode === 'INDIVIDUAL'
+                                      ? 'border-indigo-600 bg-indigo-600 text-white'
+                                      : 'border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-600'
+                                  }`}
+                                >
+                                  2. Despesa Uma a Uma (1/Pedido)
+                                </button>
+                              </div>
+
+                              {horusOptions?.recent_tariff_presets &&
+                                horusOptions.recent_tariff_presets.length > 0 && (
+                                  <div className="space-y-1">
+                                    <span className="text-[10px] font-bold text-indigo-800 dark:text-indigo-300 block">
+                                      Preenchimento Rápido (Despesas recentes no Horus):
+                                    </span>
+                                    <div className="flex flex-wrap gap-1">
+                                      {horusOptions.recent_tariff_presets.map((pr, idx) => (
+                                        <button
+                                          key={idx}
+                                          type="button"
+                                          onClick={() => {
+                                            setBuilderForm((p) => ({
+                                              ...p,
+                                              cp_cod_grp_fornecedor: String(pr.cod_grp_fornecedor),
+                                              cp_cod_fornecedor: String(pr.cod_fornecedor),
+                                              cp_nom_fornecedor: pr.nom_fornecedor || '',
+                                              cp_cod_departamento: String(pr.cod_departamento),
+                                              cp_cod_centro_custo: String(pr.cod_centro_custo),
+                                              cp_cod_grup_desp: String(pr.cod_grup_desp),
+                                              cp_cod_despesa: String(pr.cod_despesa),
+                                              cp_cod_forma: String(pr.cod_forma || p.forma_pagto),
+                                            }));
+                                            setFornecedorSearchQuery(pr.nom_fornecedor || '');
+                                          }}
+                                          className="rounded-md border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-0.5 text-[10px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                                        >
+                                          ⚡ {pr.nom_fornecedor} • Desp {pr.cod_despesa}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                              {/* Busca Fornecedor */}
+                              <div className="space-y-1">
+                                <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block">
+                                  Fornecedor no Horus (FORNECEDORES_GERAL) *
+                                </label>
+                                <div className="flex gap-1">
+                                  <input
+                                    type="text"
+                                    value={fornecedorSearchQuery}
+                                    onChange={(e) => setFornecedorSearchQuery(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        fetchHorusOptions(fornecedorSearchQuery);
+                                      }
+                                    }}
+                                    placeholder="Buscar fornecedor ex: SHOPEE, VINDI..."
+                                    className="flex-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px]"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => fetchHorusOptions(fornecedorSearchQuery)}
+                                    className="rounded-lg bg-indigo-600 text-white px-2.5 py-1 text-[10px] font-bold cursor-pointer"
+                                  >
+                                    Buscar
+                                  </button>
+                                </div>
+                                {horusOptions && horusOptions.fornecedores.length > 0 && (
+                                  <select
+                                    value={
+                                      builderForm.cp_cod_grp_fornecedor &&
+                                      builderForm.cp_cod_fornecedor
+                                        ? `${builderForm.cp_cod_grp_fornecedor}|${builderForm.cp_cod_fornecedor}`
+                                        : ''
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (!val) return;
+                                      const [grp, cod] = val.split('|');
+                                      const found = horusOptions.fornecedores.find(
+                                        (f) =>
+                                          String(f.cod_grp_fornecedor) === grp &&
+                                          String(f.cod_fornecedor) === cod
+                                      );
+                                      setBuilderForm((p) => ({
+                                        ...p,
+                                        cp_cod_grp_fornecedor: grp,
+                                        cp_cod_fornecedor: cod,
+                                        cp_nom_fornecedor:
+                                          found?.nom_fornecedor || p.cp_nom_fornecedor,
+                                      }));
+                                    }}
+                                    className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                                  >
+                                    <option value="">-- Selecione o Fornecedor --</option>
+                                    {horusOptions.fornecedores.map((f) => (
+                                      <option
+                                        key={`${f.cod_grp_fornecedor}-${f.cod_fornecedor}`}
+                                        value={`${f.cod_grp_fornecedor}|${f.cod_fornecedor}`}
+                                      >
+                                        [Grp {f.cod_grp_fornecedor} / Cód {f.cod_fornecedor}]{' '}
+                                        {f.nom_fornecedor}
+                                      </option>
+                                    ))}
+                                  </select>
+                                )}
+                                <div className="grid grid-cols-2 gap-1.5">
+                                  <input
+                                    type="text"
+                                    value={builderForm.cp_cod_grp_fornecedor}
+                                    onChange={(e) =>
+                                      setBuilderForm((p) => ({
+                                        ...p,
+                                        cp_cod_grp_fornecedor: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="Grupo Forn. (Ex: 1)"
+                                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                  />
+                                  <input
+                                    type="text"
+                                    value={builderForm.cp_cod_fornecedor}
+                                    onChange={(e) =>
+                                      setBuilderForm((p) => ({
+                                        ...p,
+                                        cp_cod_fornecedor: e.target.value,
+                                      }))
+                                    }
+                                    placeholder="Cód. Forn. (Ex: 230)"
+                                    className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                  />
+                                </div>
+                              </div>
+
+                              {/* Departamento e Centro de Custo */}
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
+                                    Departamento *
+                                  </label>
+                                  {horusOptions && horusOptions.departamentos.length > 0 ? (
+                                    <select
+                                      value={builderForm.cp_cod_departamento}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_departamento: e.target.value,
+                                        }))
+                                      }
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                                    >
+                                      <option value="">-- Depto --</option>
+                                      {horusOptions.departamentos.map((d) => (
+                                        <option
+                                          key={d.cod_departamento}
+                                          value={String(d.cod_departamento)}
+                                        >
+                                          {d.cod_departamento} - {d.desc_departamento}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={builderForm.cp_cod_departamento}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_departamento: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="COD_DEPARTAMENTO"
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                    />
+                                  )}
+                                </div>
+
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
+                                    Centro de Custo *
+                                  </label>
+                                  {horusOptions && horusOptions.centros_custo.length > 0 ? (
+                                    <select
+                                      value={builderForm.cp_cod_centro_custo}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        const ccObj = horusOptions.centros_custo.find(
+                                          (c) =>
+                                            String(c.cod_centro_custo) === val &&
+                                            (!builderForm.cp_cod_departamento ||
+                                              String(c.cod_departamento) ===
+                                                builderForm.cp_cod_departamento)
+                                        );
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_centro_custo: val,
+                                          cp_cod_departamento: ccObj
+                                            ? String(ccObj.cod_departamento)
+                                            : p.cp_cod_departamento,
+                                        }));
+                                      }}
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                                    >
+                                      <option value="">-- Centro Custo --</option>
+                                      {horusOptions.centros_custo
+                                        .filter(
+                                          (c) =>
+                                            !builderForm.cp_cod_departamento ||
+                                            String(c.cod_departamento) ===
+                                              builderForm.cp_cod_departamento
+                                        )
+                                        .map((c) => (
+                                          <option
+                                            key={`${c.cod_departamento}-${c.cod_centro_custo}`}
+                                            value={String(c.cod_centro_custo)}
+                                          >
+                                            {c.cod_centro_custo} - {c.desc_centro_custo}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={builderForm.cp_cod_centro_custo}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_centro_custo: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="COD_CENTRO_CUSTO"
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Grupo de Despesa e Despesa */}
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
+                                    Grupo de Despesa *
+                                  </label>
+                                  {horusOptions && horusOptions.grupos_despesa.length > 0 ? (
+                                    <select
+                                      value={builderForm.cp_cod_grup_desp}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_grup_desp: e.target.value,
+                                        }))
+                                      }
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                                    >
+                                      <option value="">-- Grupo Desp --</option>
+                                      {horusOptions.grupos_despesa.map((g) => (
+                                        <option
+                                          key={g.cod_grup_desp}
+                                          value={String(g.cod_grup_desp)}
+                                        >
+                                          {g.cod_grup_desp} - {g.desc_grup_desp}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={builderForm.cp_cod_grup_desp}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_grup_desp: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="COD_GRUP_DESP"
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                    />
+                                  )}
+                                </div>
+
+                                <div>
+                                  <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
+                                    Despesa (Taxa/Tarifa) *
+                                  </label>
+                                  {horusOptions && horusOptions.despesas.length > 0 ? (
+                                    <select
+                                      value={builderForm.cp_cod_despesa}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        const dObj = horusOptions.despesas.find(
+                                          (d) =>
+                                            String(d.cod_despesa) === val &&
+                                            (!builderForm.cp_cod_grup_desp ||
+                                              String(d.cod_grup_desp) ===
+                                                builderForm.cp_cod_grup_desp)
+                                        );
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_despesa: val,
+                                          cp_cod_grup_desp: dObj
+                                            ? String(dObj.cod_grup_desp)
+                                            : p.cp_cod_grup_desp,
+                                        }));
+                                      }}
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
+                                    >
+                                      <option value="">-- Despesa --</option>
+                                      {horusOptions.despesas
+                                        .filter(
+                                          (d) =>
+                                            !builderForm.cp_cod_grup_desp ||
+                                            String(d.cod_grup_desp) ===
+                                              builderForm.cp_cod_grup_desp
+                                        )
+                                        .map((d) => (
+                                          <option
+                                            key={`${d.cod_grup_desp}-${d.cod_despesa}`}
+                                            value={String(d.cod_despesa)}
+                                          >
+                                            {d.cod_despesa} - {d.desc_despesa}
+                                          </option>
+                                        ))}
+                                    </select>
+                                  ) : (
+                                    <input
+                                      type="text"
+                                      value={builderForm.cp_cod_despesa}
+                                      onChange={(e) =>
+                                        setBuilderForm((p) => ({
+                                          ...p,
+                                          cp_cod_despesa: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="COD_DESPESA"
+                                      className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-mono"
+                                    />
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2503,18 +3272,29 @@ export default function ConciliadorPadraoPage() {
                           {selectedReleases.length} lançamentos em aberto
                         </span>
                         <span className="text-[11px] font-mono text-slate-500">
-                          (Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas/Saídas: -R${' '}
+                          (Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas/Saídas:{' '}
+                          {launchFeeAsExpense ? 'Contas a Pagar ' : '-'}R${' '}
                           {formatBRL(totalSelectedTaxaAmount)})
                         </span>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-                        Valor Líquido a Baixar no Borderô
+                        {launchFeeAsExpense
+                          ? 'Valor Total (Bruto) a Baixar no Recebimento'
+                          : 'Valor Líquido a Baixar no Borderô'}
                       </p>
                       <p className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                        R$ {formatBRL(totalSelectedAmount)}
+                        R${' '}
+                        {formatBRL(
+                          launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount
+                        )}
                       </p>
+                      {launchFeeAsExpense && totalSelectedTaxaAmount > 0 && (
+                        <p className="text-[10px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                          + Despesa Contas a Pagar ({cpFeePostingMode === 'UNIFIED' ? 'Unificada' : '1 a 1'}): R$ {formatBRL(totalSelectedTaxaAmount)}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -2567,6 +3347,78 @@ export default function ConciliadorPadraoPage() {
                           </div>
                         </div>
                       )}
+
+                      {/* 4ª Opção no Modal de Confirmação do Borderô */}
+                      <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="text-xs">
+                            <span className="font-extrabold text-slate-900 dark:text-white block text-[11px]">
+                              4ª Opção: Baixar Valor Total (Bruto) + Lançar Taxa em Despesas (CP)
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5 leading-snug">
+                              Baixa o valor bruto da venda (R$ {formatBRL(totalSelectedBrutoAmount)}) no Contas a Receber e lança a taxa (R$ {formatBRL(totalSelectedTaxaAmount)}) no Contas a Pagar.
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setLaunchFeeAsExpense(true)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                launchFeeAsExpense
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              SIM
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLaunchFeeAsExpense(false)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                !launchFeeAsExpense
+                                  ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              NÃO
+                            </button>
+                          </div>
+                        </div>
+
+                        {launchFeeAsExpense && (
+                          <div className="pt-2 border-t border-emerald-200/70 dark:border-emerald-800/50 space-y-2 text-[11px]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-emerald-900 dark:text-emerald-300">
+                                Modo da Despesa no CP:
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setCpFeePostingMode('UNIFIED')}
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold cursor-pointer ${
+                                    cpFeePostingMode === 'UNIFIED'
+                                      ? 'bg-indigo-600 text-white'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 border border-slate-200 dark:border-slate-700'
+                                  }`}
+                                >
+                                  Única Unificada
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setCpFeePostingMode('INDIVIDUAL')}
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold cursor-pointer ${
+                                    cpFeePostingMode === 'INDIVIDUAL'
+                                      ? 'bg-indigo-600 text-white'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 border border-slate-200 dark:border-slate-700'
+                                  }`}
+                                >
+                                  Uma a Uma (1/Pedido)
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="lg:col-span-7 space-y-2">
@@ -2655,7 +3507,11 @@ export default function ConciliadorPadraoPage() {
                     ) : (
                       <>
                         <CheckCircle2 className="h-4 w-4" />
-                        Confirmar e Gerar Borderô (R$ {formatBRL(totalSelectedAmount)})
+                        Confirmar e Gerar Borderô (R${' '}
+                        {formatBRL(
+                          launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount
+                        )}
+                        )
                       </>
                     )}
                   </button>

@@ -207,6 +207,57 @@ class HorusSQLClient:
         entry = self._get_connection_entry()
         return entry["conn"]
 
+    def create_dedicated_connection(self, autocommit: bool = False, timeout: int = 300):
+        """
+        Cria uma conexao dedicada e 100% isolada do pool compartilhado.
+        Uso obrigatorio em transacoes criticas de escrita (ex: geracao de Bordero no Horus ERP),
+        garantindo atomicidade (COMMIT/ROLLBACK real com autocommit=False) e impedindo que jobs
+        em background executem 'SELECT 1' na mesma sessao TDS e fechem o cursor ativo ('Cursor is closed').
+        O chamador e responsavel por fechar a conexao no bloco finally.
+        """
+        import pytds
+        raw_host = self._settings.horus_sql_host.strip()
+        raw_port = (self._settings.horus_sql_port or "1433").strip()
+        host, port = parse_host_port(raw_host, raw_port)
+        database = self._settings.horus_sql_database.strip()
+        username = self._settings.horus_sql_username.strip()
+        password = self._decrypt_password()
+
+        logger.info(
+            f"[HorusSQLDedicated] Abrindo conexao dedicada (autocommit={autocommit}): "
+            f"{username}@{host}:{port}/{database} (company={self.company_id})"
+        )
+        try:
+            try:
+                return pytds.connect(
+                    server=host,
+                    port=port,
+                    user=username,
+                    password=password,
+                    database=database,
+                    login_timeout=20,
+                    timeout=timeout,
+                    autocommit=autocommit,
+                    as_dict=True,
+                )
+            except Exception as login_err:
+                err_str = str(login_err)
+                if username.lower() != "sa" and ("Falha de logon" in err_str or "Login failed" in err_str):
+                    return pytds.connect(
+                        server=host,
+                        port=port,
+                        user="sa",
+                        password=password,
+                        database=database,
+                        login_timeout=20,
+                        timeout=timeout,
+                        autocommit=autocommit,
+                        as_dict=True,
+                    )
+                raise
+        finally:
+            password = ""
+
     def test_connection(self) -> dict:
         """
         Testa conectividade TCP + autenticacao + selecao do banco.

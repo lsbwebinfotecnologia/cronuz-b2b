@@ -33,6 +33,17 @@ interface ReconciliationProfile {
   unify_installments?: boolean;
   split_excess_launch?: boolean;
   forma_pagto_credito_maior?: string;
+  launch_fee_as_expense?: boolean;
+  cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+  cp_cod_grp_fornecedor?: string;
+  cp_cod_fornecedor?: string;
+  cp_nom_fornecedor?: string;
+  cp_cod_departamento?: string;
+  cp_cod_centro_custo?: string;
+  cp_cod_grup_desp?: string;
+  cp_cod_despesa?: string;
+  cp_cod_forma?: string;
+  cpagar_configured?: boolean;
   effective_bank: {
     forma_pagto: string;
     forma_pagto_credito_maior?: string;
@@ -43,6 +54,17 @@ interface ReconciliationProfile {
     payment_date_mode?: string;
     unify_installments?: boolean;
     split_excess_launch?: boolean;
+    launch_fee_as_expense?: boolean;
+    cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+    cp_cod_grp_fornecedor?: string;
+    cp_cod_fornecedor?: string;
+    cp_nom_fornecedor?: string;
+    cp_cod_departamento?: string;
+    cp_cod_centro_custo?: string;
+    cp_cod_grup_desp?: string;
+    cp_cod_despesa?: string;
+    cp_cod_forma?: string;
+    cpagar_configured?: boolean;
   };
   bank_configured: boolean;
 }
@@ -128,9 +150,80 @@ interface BankConfig {
   payment_date_mode?: 'CHANNEL_DATE' | 'SPECIFIC_DATE' | 'BORDERO_OPEN' | string;
   unify_installments?: boolean;
   split_excess_launch?: boolean;
+  launch_fee_as_expense?: boolean;
+  cp_fee_posting_mode?: 'UNIFIED' | 'INDIVIDUAL' | string;
+  cp_cod_grp_fornecedor?: string;
+  cp_cod_fornecedor?: string;
+  cp_nom_fornecedor?: string;
+  cp_cod_departamento?: string;
+  cp_cod_centro_custo?: string;
+  cp_cod_grup_desp?: string;
+  cp_cod_despesa?: string;
+  cp_cod_forma?: string;
+  cpagar_configured?: boolean;
   cod_empresa: string;
   cod_filial: string;
   is_configured: boolean;
+}
+
+interface HorusOptionsPayload {
+  bank_accounts: {
+    cod_banco: number;
+    nom_banco: string;
+    cod_agencia: number;
+    nom_agencia: string;
+    cod_contac: number;
+    nro_contac: string;
+    dig_contac: string;
+  }[];
+  payment_forms: {
+    cod_forma: number;
+    desc_forma: string;
+    tipo_operacao?: string;
+  }[];
+  departamentos: {
+    cod_departamento: number;
+    desc_departamento: string;
+  }[];
+  centros_custo: {
+    cod_departamento: number;
+    cod_centro_custo: number;
+    desc_centro_custo: string;
+  }[];
+  grupos_despesa: {
+    cod_grup_desp: number;
+    desc_grup_desp: string;
+  }[];
+  despesas: {
+    cod_grup_desp: number;
+    cod_despesa: number;
+    desc_despesa: string;
+  }[];
+  grupos_fornecedor: {
+    cod_grp_fornecedor: number;
+    desc_grp_fornecedor: string;
+  }[];
+  fornecedores: {
+    cod_grp_fornecedor: number;
+    cod_fornecedor: number;
+    nom_fornecedor: string;
+    nom_fantasia?: string;
+  }[];
+  recent_tariff_presets?: {
+    cod_grp_fornecedor: number;
+    cod_fornecedor: number;
+    nom_fornecedor: string;
+    cod_departamento: number;
+    cod_centro_custo: number;
+    cod_grup_desp: number;
+    cod_despesa: number;
+    desc_despesa?: string;
+    cod_forma: number;
+    cod_banco?: number;
+    cod_agencia?: number;
+    cod_contac?: number;
+    obs_cpagar?: string;
+  }[];
 }
 
 interface ReleaseItem {
@@ -296,6 +389,8 @@ export default function FinanceiroVindiPage() {
   const [unifyInstallments, setUnifyInstallments] = useState<boolean>(true);
   const [splitExcessLaunch, setSplitExcessLaunch] = useState<boolean>(true);
   const [formaPagtoCreditoMaior, setFormaPagtoCreditoMaior] = useState<string>('');
+  const [launchFeeAsExpense, setLaunchFeeAsExpense] = useState<boolean>(false);
+  const [cpFeePostingMode, setCpFeePostingMode] = useState<'UNIFIED' | 'INDIVIDUAL'>('UNIFIED');
   const [specificPaymentDate, setSpecificPaymentDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10)
   );
@@ -306,11 +401,18 @@ export default function FinanceiroVindiPage() {
     verified_count?: number;
     completed_at?: string;
     payment_date_mode?: string;
+    launch_fee_as_expense?: boolean;
+    cp_fee_posting_mode?: string;
+    total_taxa_bordero?: number;
+    cpagar_expenses_count?: number;
   } | null>(null);
 
   // Modal de Configuração de Banco / Agência / Conta / Forma de Pagto Horus por Conciliação
   const [showBankConfigModal, setShowBankConfigModal] = useState(false);
   const [savingBankConfig, setSavingBankConfig] = useState(false);
+  const [horusOptions, setHorusOptions] = useState<HorusOptionsPayload | null>(null);
+  const [loadingHorusOptions, setLoadingHorusOptions] = useState(false);
+  const [fornecedorSearchQuery, setFornecedorSearchQuery] = useState('');
 
   // Histórico de Fechamentos / Borderôs Salvos no Banco de Dados do Cronuz B2B
   const [showHistoryModal, setShowHistoryModal] = useState(false);
@@ -328,6 +430,16 @@ export default function FinanceiroVindiPage() {
     payment_date_mode: 'CHANNEL_DATE',
     unify_installments: true,
     split_excess_launch: true,
+    launch_fee_as_expense: false,
+    cp_fee_posting_mode: 'UNIFIED' as 'UNIFIED' | 'INDIVIDUAL',
+    cp_cod_grp_fornecedor: '',
+    cp_cod_fornecedor: '',
+    cp_nom_fornecedor: '',
+    cp_cod_departamento: '',
+    cp_cod_centro_custo: '',
+    cp_cod_grup_desp: '',
+    cp_cod_despesa: '',
+    cp_cod_forma: '',
   });
 
   const channelFileInputRef = useRef<HTMLInputElement>(null);
@@ -417,13 +529,59 @@ export default function FinanceiroVindiPage() {
           activeProfile?.effective_bank?.forma_pagto_credito_maior ||
           '';
     setFormaPagtoCreditoMaior(formaCredFromCfg);
+
+    const feeExpenseFromCfg =
+      bankConfig?.profile_code === activeProfile?.code &&
+      bankConfig?.launch_fee_as_expense !== undefined
+        ? Boolean(bankConfig.launch_fee_as_expense)
+        : activeProfile?.launch_fee_as_expense !== undefined
+        ? Boolean(activeProfile.launch_fee_as_expense)
+        : Boolean(activeProfile?.effective_bank?.launch_fee_as_expense);
+    setLaunchFeeAsExpense(feeExpenseFromCfg);
+
+    const cpModeFromCfg = (
+      (bankConfig?.profile_code === activeProfile?.code && bankConfig?.cp_fee_posting_mode) ||
+      activeProfile?.cp_fee_posting_mode ||
+      activeProfile?.effective_bank?.cp_fee_posting_mode ||
+      'UNIFIED'
+    ) as 'UNIFIED' | 'INDIVIDUAL';
+    setCpFeePostingMode(cpModeFromCfg === 'INDIVIDUAL' ? 'INDIVIDUAL' : 'UNIFIED');
   }, [activeProfile, bankConfig]);
 
   const isDualFileMode = activeProfile?.mode === 'DUAL_FILE';
   const requiresTrayFile =
     activeProfile?.code === 'TRAY_SHOPEE' || activeProfile?.code === 'TRAY_TIKTOK';
 
-  // Abre o modal de configuração bancária carregando os códigos atuais do perfil selecionado
+  // Busca em tempo real no Horus ERP: Contas Bancárias, Formas de Pagto, Fornecedores, Departamentos, Centros de Custo e Despesas
+  const fetchHorusOptions = useCallback(
+    async (qFornecedor?: string) => {
+      setLoadingHorusOptions(true);
+      try {
+        const token = getToken();
+        const qs = new URLSearchParams();
+        if (qFornecedor && qFornecedor.trim()) {
+          qs.set('q_fornecedor', qFornecedor.trim());
+        }
+        const res = await fetch(
+          `${API}/companies/${companyId}/horus-sql/reconciliation/horus-options${
+            qs.toString() ? `?${qs.toString()}` : ''
+          }`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setHorusOptions(data);
+        }
+      } catch {
+        // Silencioso para não bloquear digitação manual se Horus estiver ocupado
+      } finally {
+        setLoadingHorusOptions(false);
+      }
+    },
+    [companyId]
+  );
+
+  // Abre o modal de configuração bancária carregando os códigos atuais do perfil selecionado + consulta Horus em tempo real
   const openBankConfigModal = (prof?: ReconciliationProfile) => {
     const target = prof || activeProfile;
     const defaultUnify = target.code === 'TRAY_SHOPEE' || target.code === 'TRAY_TIKTOK';
@@ -440,6 +598,16 @@ export default function FinanceiroVindiPage() {
             payment_date_mode: 'CHANNEL_DATE',
             unify_installments: defaultUnify,
             split_excess_launch: true,
+            launch_fee_as_expense: false,
+            cp_fee_posting_mode: 'UNIFIED',
+            cp_cod_grp_fornecedor: '',
+            cp_cod_fornecedor: '',
+            cp_nom_fornecedor: '',
+            cp_cod_departamento: '',
+            cp_cod_centro_custo: '',
+            cp_cod_grup_desp: '',
+            cp_cod_despesa: '',
+            cp_cod_forma: '',
           };
     setBankForm({
       forma_pagto: eff.forma_pagto || '',
@@ -463,11 +631,35 @@ export default function FinanceiroVindiPage() {
           : target.split_excess_launch !== undefined
           ? Boolean(target.split_excess_launch)
           : true,
+      launch_fee_as_expense:
+        eff.launch_fee_as_expense !== undefined
+          ? Boolean(eff.launch_fee_as_expense)
+          : Boolean(target.launch_fee_as_expense),
+      cp_fee_posting_mode:
+        ((eff.cp_fee_posting_mode || target.cp_fee_posting_mode || 'UNIFIED') as
+          | 'UNIFIED'
+          | 'INDIVIDUAL') === 'INDIVIDUAL'
+          ? 'INDIVIDUAL'
+          : 'UNIFIED',
+      cp_cod_grp_fornecedor:
+        eff.cp_cod_grp_fornecedor || target.cp_cod_grp_fornecedor || '',
+      cp_cod_fornecedor: eff.cp_cod_fornecedor || target.cp_cod_fornecedor || '',
+      cp_nom_fornecedor: eff.cp_nom_fornecedor || target.cp_nom_fornecedor || '',
+      cp_cod_departamento:
+        eff.cp_cod_departamento || target.cp_cod_departamento || '',
+      cp_cod_centro_custo:
+        eff.cp_cod_centro_custo || target.cp_cod_centro_custo || '',
+      cp_cod_grup_desp: eff.cp_cod_grup_desp || target.cp_cod_grup_desp || '',
+      cp_cod_despesa: eff.cp_cod_despesa || target.cp_cod_despesa || '',
+      cp_cod_forma:
+        eff.cp_cod_forma || target.cp_cod_forma || eff.forma_pagto || '',
     });
+    setFornecedorSearchQuery(eff.cp_nom_fornecedor || target.cp_nom_fornecedor || '');
     setShowBankConfigModal(true);
+    fetchHorusOptions(eff.cp_nom_fornecedor || target.cp_nom_fornecedor || undefined);
   };
 
-  // Salva Banco, Agência, Conta, Forma de Pagamento e Modo de Data de Pagamento (códigos Horus) nas configurações do Seller para o perfil ativo
+  // Salva Banco, Agência, Conta, Forma de Pagamento, Modo de Data e Despesa no Contas a Pagar nas configurações do Seller para o perfil ativo
   const handleSaveProfileBankConfig = async () => {
     if (
       !bankForm.forma_pagto.trim() ||
@@ -479,6 +671,22 @@ export default function FinanceiroVindiPage() {
         'Preencha Forma de Pagamento (COD_FORMA), Banco (COD_BANCO), Agência (COD_AGENCIA) e Conta Corrente (COD_CONTAC).'
       );
       return;
+    }
+
+    if (bankForm.launch_fee_as_expense) {
+      if (
+        !bankForm.cp_cod_grp_fornecedor.trim() ||
+        !bankForm.cp_cod_fornecedor.trim() ||
+        !bankForm.cp_cod_departamento.trim() ||
+        !bankForm.cp_cod_centro_custo.trim() ||
+        !bankForm.cp_cod_grup_desp.trim() ||
+        !bankForm.cp_cod_despesa.trim()
+      ) {
+        toast.error(
+          'Para ativar a 4ª Opção (Lançar Taxa como Despesa no Contas a Pagar), selecione Fornecedor, Departamento, Centro de Custo, Grupo de Despesa e Despesa.'
+        );
+        return;
+      }
     }
 
     setSavingBankConfig(true);
@@ -503,6 +711,17 @@ export default function FinanceiroVindiPage() {
             payment_date_mode: bankForm.payment_date_mode || 'CHANNEL_DATE',
             unify_installments: Boolean(bankForm.unify_installments),
             split_excess_launch: Boolean(bankForm.split_excess_launch),
+            launch_fee_as_expense: Boolean(bankForm.launch_fee_as_expense),
+            cp_fee_posting_mode: bankForm.cp_fee_posting_mode || 'UNIFIED',
+            cp_cod_grp_fornecedor: bankForm.cp_cod_grp_fornecedor.trim(),
+            cp_cod_fornecedor: bankForm.cp_cod_fornecedor.trim(),
+            cp_nom_fornecedor: bankForm.cp_nom_fornecedor.trim(),
+            cp_cod_departamento: bankForm.cp_cod_departamento.trim(),
+            cp_cod_centro_custo: bankForm.cp_cod_centro_custo.trim(),
+            cp_cod_grup_desp: bankForm.cp_cod_grup_desp.trim(),
+            cp_cod_despesa: bankForm.cp_cod_despesa.trim(),
+            cp_cod_forma:
+              bankForm.cp_cod_forma.trim() || bankForm.forma_pagto.trim(),
           }),
         }
       );
@@ -1026,12 +1245,45 @@ export default function FinanceiroVindiPage() {
     });
     try {
       const token = getToken();
+      const effCfg =
+        bankConfig?.profile_code === activeProfile.code
+          ? bankConfig
+          : activeProfile.effective_bank;
+
+      if (launchFeeAsExpense) {
+        if (
+          !effCfg?.cp_cod_grp_fornecedor ||
+          !effCfg?.cp_cod_fornecedor ||
+          !effCfg?.cp_cod_departamento ||
+          !effCfg?.cp_cod_centro_custo ||
+          !effCfg?.cp_cod_grup_desp ||
+          !effCfg?.cp_cod_despesa
+        ) {
+          toast.error(
+            'A 4ª Opção (Lançar Taxa no Contas a Pagar) está ativa, mas os códigos de Fornecedor/Departamento/Centro de Custo/Despesa ainda não foram salvos nas configurações deste perfil. Clique em "Editar Códigos" primeiro.'
+          );
+          setCreatingBordero(false);
+          setBorderoProgress(null);
+          return;
+        }
+      }
+
       const payload = {
         profile_code: activeProfile.code,
         payment_date_mode: paymentDateMode,
         unify_installments: unifyInstallments,
         split_excess_launch: splitExcessLaunch,
         forma_pagto_credito_maior: formaPagtoCreditoMaior || undefined,
+        launch_fee_as_expense: launchFeeAsExpense,
+        cp_fee_posting_mode: cpFeePostingMode,
+        cp_cod_grp_fornecedor: effCfg?.cp_cod_grp_fornecedor || undefined,
+        cp_cod_fornecedor: effCfg?.cp_cod_fornecedor || undefined,
+        cp_nom_fornecedor: effCfg?.cp_nom_fornecedor || undefined,
+        cp_cod_departamento: effCfg?.cp_cod_departamento || undefined,
+        cp_cod_centro_custo: effCfg?.cp_cod_centro_custo || undefined,
+        cp_cod_grup_desp: effCfg?.cp_cod_grup_desp || undefined,
+        cp_cod_despesa: effCfg?.cp_cod_despesa || undefined,
+        cp_cod_forma: effCfg?.cp_cod_forma || effCfg?.forma_pagto || undefined,
         channel_filename: channelFile?.name || undefined,
         tray_filename: trayFile?.name || undefined,
         specific_payment_date:
@@ -1123,6 +1375,10 @@ export default function FinanceiroVindiPage() {
         verified_count: data.security_verification?.verified_count ?? data.itens_baixados,
         completed_at: data.security_verification?.completed_at,
         payment_date_mode: data.payment_date_mode || paymentDateMode,
+        launch_fee_as_expense: Boolean(data.launch_fee_as_expense),
+        cp_fee_posting_mode: data.cp_fee_posting_mode,
+        total_taxa_bordero: data.total_taxa_bordero,
+        cpagar_expenses_count: data.cpagar_expenses_count,
       });
       setShowBorderoModal(false);
       toast.success(data.message || `Borderô #${data.bordero_number} gerado com sucesso!`);
@@ -2695,18 +2951,29 @@ export default function FinanceiroVindiPage() {
                           {selectedReleases.length} lançamentos em aberto
                         </span>
                         <span className="text-[11px] font-mono text-slate-500">
-                          (Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas/Saídas: -R${' '}
+                          (Bruto: R$ {formatBRL(totalSelectedBrutoAmount)} • Taxas/Saídas:{' '}
+                          {launchFeeAsExpense ? 'Contas a Pagar ' : '-'}R${' '}
                           {formatBRL(totalSelectedTaxaAmount)})
                         </span>
                       </div>
                     </div>
                     <div className="text-right">
                       <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">
-                        Valor Líquido a Baixar no Borderô
+                        {launchFeeAsExpense
+                          ? 'Valor Total (Bruto) a Baixar no Recebimento'
+                          : 'Valor Líquido a Baixar no Borderô'}
                       </p>
                       <p className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 font-mono">
-                        R$ {formatBRL(totalSelectedAmount)}
+                        R${' '}
+                        {formatBRL(
+                          launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount
+                        )}
                       </p>
+                      {launchFeeAsExpense && totalSelectedTaxaAmount > 0 && (
+                        <p className="text-[10px] font-mono font-bold text-rose-600 dark:text-rose-400">
+                          + Despesa Contas a Pagar ({cpFeePostingMode === 'UNIFIED' ? 'Unificada' : '1 a 1'}): R$ {formatBRL(totalSelectedTaxaAmount)}
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -2860,6 +3127,106 @@ export default function FinanceiroVindiPage() {
                           </div>
                         )}
                       </div>
+
+                      {/* 4ª Opção: Baixar Valor Total (Bruto) no Recebimento + Lançar Taxa como Despesa no Contas a Pagar */}
+                      <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-2.5">
+                          <div className="text-xs">
+                            <span className="font-extrabold text-slate-900 dark:text-white block text-[11px]">
+                              4ª Opção: Baixar Valor Total (Bruto) + Lançar Taxa em Despesas (CP)
+                            </span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5 leading-snug">
+                              Baixa o valor cheio da venda da planilha (R$ {formatBRL(totalSelectedBrutoAmount)}) no Contas a Receber e lança a taxa (R$ {formatBRL(totalSelectedTaxaAmount)}) no Contas a Pagar.
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setLaunchFeeAsExpense(true)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                launchFeeAsExpense
+                                  ? 'bg-emerald-600 text-white shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              SIM
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLaunchFeeAsExpense(false)}
+                              className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                                !launchFeeAsExpense
+                                  ? 'bg-slate-800 text-white dark:bg-slate-700 shadow-2xs'
+                                  : 'bg-white dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              NÃO
+                            </button>
+                          </div>
+                        </div>
+
+                        {launchFeeAsExpense && (
+                          <div className="pt-2 border-t border-emerald-200/70 dark:border-emerald-800/50 space-y-2 text-[11px]">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="font-bold text-emerald-900 dark:text-emerald-300">
+                                Modo da Despesa no Contas a Pagar:
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setCpFeePostingMode('UNIFIED')}
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold cursor-pointer ${
+                                    cpFeePostingMode === 'UNIFIED'
+                                      ? 'bg-indigo-600 text-white'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 border border-slate-200 dark:border-slate-700'
+                                  }`}
+                                >
+                                  Única Unificada
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setCpFeePostingMode('INDIVIDUAL')}
+                                  className={`px-2 py-0.5 rounded-md text-[10px] font-extrabold cursor-pointer ${
+                                    cpFeePostingMode === 'INDIVIDUAL'
+                                      ? 'bg-indigo-600 text-white'
+                                      : 'bg-white dark:bg-slate-800 text-slate-600 border border-slate-200 dark:border-slate-700'
+                                  }`}
+                                >
+                                  Uma a Uma (1 por Pedido)
+                                </button>
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] text-slate-600 dark:text-slate-300 bg-white/80 dark:bg-slate-900/60 rounded-lg px-2.5 py-1.5 border border-emerald-200/60 dark:border-emerald-800/50">
+                              <span>
+                                Forn:{' '}
+                                <b>
+                                  {bankConfig?.cp_nom_fornecedor ||
+                                    activeProfile.effective_bank?.cp_nom_fornecedor ||
+                                    bankConfig?.cp_cod_fornecedor ||
+                                    activeProfile.effective_bank?.cp_cod_fornecedor ||
+                                    'Não configurado'}
+                                </b>{' '}
+                                • Desp:{' '}
+                                <b>
+                                  {bankConfig?.cp_cod_despesa ||
+                                    activeProfile.effective_bank?.cp_cod_despesa ||
+                                    '—'}
+                                </b>
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setShowBorderoModal(false);
+                                  openBankConfigModal(activeProfile);
+                                }}
+                                className="font-bold text-indigo-600 hover:underline cursor-pointer"
+                              >
+                                Configurar CP →
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
 
                     {/* COLUNA DIREITA (7 cols): Regra de Data de Pagamento & Baixa no Horus ERP */}
@@ -3010,7 +3377,11 @@ export default function FinanceiroVindiPage() {
                     ) : (
                       <>
                         <CheckCircle2 className="h-4 w-4" />
-                        Confirmar e Gerar Borderô (R$ {formatBRL(totalSelectedAmount)})
+                        Confirmar e Gerar Borderô (R${' '}
+                        {formatBRL(
+                          launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount
+                        )}
+                        )
                       </>
                     )}
                   </button>
@@ -3029,162 +3400,235 @@ export default function FinanceiroVindiPage() {
               initial={{ opacity: 0, scale: 0.96 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
+              className="w-full max-w-4xl max-h-[90vh] rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden flex flex-col"
             >
-              <div className="bg-slate-900 px-6 py-4 flex items-center justify-between text-white">
+              <div className="bg-slate-900 px-6 py-4 flex items-center justify-between text-white shrink-0">
                 <div className="flex items-center gap-2.5">
                   <Building2 className="h-5 w-5 text-indigo-400" />
                   <div>
                     <h3 className="text-sm font-extrabold">
-                      Códigos Horus ERP — {activeProfile.name}
+                      Códigos Horus ERP &amp; Despesas Contas a Pagar — {activeProfile.name}
                     </h3>
                     <p className="text-[11px] text-slate-400">
-                      Salvo nas configurações da empresa para geração de Borderô desta modalidade
+                      Consulte em tempo real os cadastros do Horus (Banco, Forma, Fornecedor, Centro de Custo e Despesa) e salve para este perfil
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setShowBankConfigModal(false)}
-                  className="text-slate-400 hover:text-white text-sm font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => fetchHorusOptions(fornecedorSearchQuery || undefined)}
+                    disabled={loadingHorusOptions}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 px-2.5 py-1.5 text-[11px] font-bold text-indigo-300 border border-slate-700 cursor-pointer"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${loadingHorusOptions ? 'animate-spin' : ''}`} />
+                    {loadingHorusOptions ? 'Consultando Horus...' : 'Atualizar do Horus'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowBankConfigModal(false)}
+                    className="text-slate-400 hover:text-white text-sm font-bold cursor-pointer px-1"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
 
-              <div className="p-6 space-y-4 text-xs">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Forma de Pagamento Horus (COD_FORMA) *
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.forma_pagto}
-                      onChange={(e) =>
-                        setBankForm((p) => ({ ...p, forma_pagto: e.target.value }))
-                      }
-                      placeholder="Ex: 01, CAR, PIX, BOL"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <span className="text-[10px] text-slate-400 block">
-                      Código na tabela FORMAS_PAGTO do Horus
-                    </span>
+              <div className="p-5 overflow-y-auto flex-1 space-y-5 text-xs">
+                {/* SEÇÃO 1: CONTA BANCÁRIA & FORMA DE PAGAMENTO DO BORDERÔ (CONTAS A RECEBER) */}
+                <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3.5 bg-slate-50/40 dark:bg-slate-800/30">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                        1. Conta Bancária &amp; Forma de Recebimento do Borderô (Contas a Receber)
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Selecione uma Conta Corrente cadastrada no Horus (<code>BCONTAC_GERAL</code>) ou digite os códigos diretamente
+                      </p>
+                    </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Código do Banco Horus (COD_BANCO) *
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.banco}
-                      onChange={(e) => setBankForm((p) => ({ ...p, banco: e.target.value }))}
-                      placeholder="Ex: 001, 237, 341, 756"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <span className="text-[10px] text-slate-400 block">
-                      Código do banco no Horus ERP
-                    </span>
+                  {/* Seletor rápido de Conta Bancária do Horus em Tempo Real */}
+                  {horusOptions && horusOptions.bank_accounts.length > 0 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-bold text-indigo-700 dark:text-indigo-300 block text-[11px]">
+                          Selecionar Conta Bancária do Horus (Tempo Real):
+                        </label>
+                        <select
+                          value={`${bankForm.banco}|${bankForm.agencia}|${bankForm.conta}`}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) return;
+                            const [b, ag, cc] = val.split('|');
+                            setBankForm((p) => ({
+                              ...p,
+                              banco: b || p.banco,
+                              agencia: ag || p.agencia,
+                              conta: cc || p.conta,
+                            }));
+                          }}
+                          className="w-full rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">-- Escolha uma Conta Corrente no Horus --</option>
+                          {horusOptions.bank_accounts.map((acc, idx) => (
+                            <option
+                              key={`${acc.cod_banco}-${acc.cod_agencia}-${acc.cod_contac}-${idx}`}
+                              value={`${acc.cod_banco}|${acc.cod_agencia}|${acc.cod_contac}`}
+                            >
+                              Banco {acc.cod_banco} ({acc.nom_banco}) • Ag {acc.cod_agencia} • CC{' '}
+                              {acc.cod_contac} ({acc.nro_contac}-{acc.dig_contac})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-bold text-indigo-700 dark:text-indigo-300 block text-[11px]">
+                          Selecionar Forma de Pagto do Horus (Tempo Real):
+                        </label>
+                        <select
+                          value={bankForm.forma_pagto}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) return;
+                            setBankForm((p) => ({
+                              ...p,
+                              forma_pagto: val,
+                              cp_cod_forma: p.cp_cod_forma || val,
+                            }));
+                          }}
+                          className="w-full rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        >
+                          <option value="">-- Escolha uma Forma de Pagto (FORMA_PAGTO) --</option>
+                          {horusOptions.payment_forms.map((fp) => (
+                            <option key={fp.cod_forma} value={String(fp.cod_forma)}>
+                              {fp.cod_forma} - {fp.desc_forma}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 sm:grid-cols-6 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        COD_FORMA *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.forma_pagto}
+                        onChange={(e) =>
+                          setBankForm((p) => ({ ...p, forma_pagto: e.target.value }))
+                        }
+                        placeholder="Ex: 114"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        COD_BANCO *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.banco}
+                        onChange={(e) => setBankForm((p) => ({ ...p, banco: e.target.value }))}
+                        placeholder="Ex: 14"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        COD_AGENCIA *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.agencia}
+                        onChange={(e) => setBankForm((p) => ({ ...p, agencia: e.target.value }))}
+                        placeholder="Ex: 1"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        COD_CONTAC *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.conta}
+                        onChange={(e) => setBankForm((p) => ({ ...p, conta: e.target.value }))}
+                        placeholder="Ex: 1"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        CARTEIRA (Opc.)
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.carteira}
+                        onChange={(e) => setBankForm((p) => ({ ...p, carteira: e.target.value }))}
+                        placeholder="Ex: 109"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-bold text-amber-700 dark:text-amber-400 block text-[11px]">
+                        FORMA Créd. Maior
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.forma_pagto_credito_maior}
+                        onChange={(e) =>
+                          setBankForm((p) => ({
+                            ...p,
+                            forma_pagto_credito_maior: e.target.value,
+                          }))
+                        }
+                        placeholder="Ex: 135"
+                        className="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-800 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                    </div>
                   </div>
 
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Código da Agência (COD_AGENCIA) *
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.agencia}
-                      onChange={(e) => setBankForm((p) => ({ ...p, agencia: e.target.value }))}
-                      placeholder="Ex: 1234"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <span className="text-[10px] text-slate-400 block">
-                      Agência cadastrada no Horus ERP
-                    </span>
-                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Regra Padrão de Data de Pagamento &amp; Baixa no Horus
+                      </label>
+                      <select
+                        value={bankForm.payment_date_mode || 'CHANNEL_DATE'}
+                        onChange={(e) =>
+                          setBankForm((p) => ({ ...p, payment_date_mode: e.target.value }))
+                        }
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="CHANNEL_DATE">
+                          1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label}) em cada título (PG)
+                        </option>
+                        <option value="SPECIFIC_DATE">
+                          2. Usar Borderô e Pagar (PG) com uma Data Específica
+                        </option>
+                        <option value="BORDERO_OPEN">
+                          3. Apenas Gerar Borderô em Aberto (AP) no Horus
+                        </option>
+                      </select>
+                    </div>
 
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Conta Corrente (COD_CONTAC) *
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.conta}
-                      onChange={(e) => setBankForm((p) => ({ ...p, conta: e.target.value }))}
-                      placeholder="Ex: 56789-0"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                    <span className="text-[10px] text-slate-400 block">
-                      Conta corrente de liquidação no Horus
-                    </span>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Carteira de Cobrança (NRO_CARTEIRA) <span className="text-slate-400 font-normal">(Opcional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.carteira}
-                      onChange={(e) => setBankForm((p) => ({ ...p, carteira: e.target.value }))}
-                      placeholder="Ex: 17, 109, 09 (ou deixe em branco)"
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="font-bold text-amber-700 dark:text-amber-400 block">
-                      Forma Pagto p/ Crédito Maior (COD_FORMA Excedente)
-                    </label>
-                    <input
-                      type="text"
-                      value={bankForm.forma_pagto_credito_maior}
-                      onChange={(e) =>
-                        setBankForm((p) => ({
-                          ...p,
-                          forma_pagto_credito_maior: e.target.value,
-                        }))
-                      }
-                      placeholder="Ex: 135 (CREDITO SHOPEE)"
-                      className="w-full rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50/40 dark:bg-slate-800 px-3.5 py-2.5 text-sm font-mono font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-amber-500"
-                    />
-                    <span className="text-[10px] text-slate-400 block">
-                      Usado no lançamento separado quando o título Horus for maior que a nota
-                    </span>
-                  </div>
-
-                  <div className="space-y-1 sm:col-span-2 pt-1">
-                    <label className="font-bold text-slate-700 dark:text-slate-300 block">
-                      Regra Padrão de Data de Pagamento & Baixa no Horus
-                    </label>
-                    <select
-                      value={bankForm.payment_date_mode || 'CHANNEL_DATE'}
-                      onChange={(e) =>
-                        setBankForm((p) => ({ ...p, payment_date_mode: e.target.value }))
-                      }
-                      className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3.5 py-2.5 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="CHANNEL_DATE">
-                        1. Usar Data de Pagamento da Planilha ({activeProfile.channel_label}) em cada título (PG)
-                      </option>
-                      <option value="SPECIFIC_DATE">
-                        2. Usar Borderô e Pagar (PG) com uma Data Específica
-                      </option>
-                      <option value="BORDERO_OPEN">
-                        3. Apenas Gerar Borderô em Aberto (AP) no Horus
-                      </option>
-                    </select>
-                  </div>
-
-                  <div className="sm:col-span-2 pt-1">
-                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/70 p-3 flex items-center justify-between gap-3">
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800/70 px-3 py-2 flex items-center justify-between gap-2">
                       <div>
-                        <span className="font-extrabold text-slate-800 dark:text-slate-200 block">
-                          Unificar Parcelas da Nota + Gravar Taxa ({activeProfile.channel_label})
+                        <span className="font-extrabold text-slate-800 dark:text-slate-200 block text-[11px]">
+                          Unificar Parcelas da Nota ({activeProfile.channel_label})
                         </span>
                         <span className="text-[10px] text-slate-500 dark:text-slate-400 block">
-                          Unifica parcelas em aberto da mesma nota em 1 lançamento e registra a taxa em <code>VLR_LANCTO_ABATIMENTO</code> para bater o Fechamento Bancário.
+                          Consolida parcelas em aberto da mesma nota no 1º lançamento.
                         </span>
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
@@ -3193,10 +3637,10 @@ export default function FinanceiroVindiPage() {
                           onClick={() =>
                             setBankForm((p) => ({ ...p, unify_installments: true }))
                           }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
                             bankForm.unify_installments
                               ? 'bg-emerald-600 text-white'
-                              : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              : 'bg-slate-100 dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
                           }`}
                         >
                           SIM
@@ -3206,15 +3650,464 @@ export default function FinanceiroVindiPage() {
                           onClick={() =>
                             setBankForm((p) => ({ ...p, unify_installments: false }))
                           }
-                          className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
                             !bankForm.unify_installments
                               ? 'bg-slate-800 text-white dark:bg-slate-700'
-                              : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                              : 'bg-slate-100 dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
                           }`}
                         >
                           NÃO
                         </button>
                       </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* SEÇÃO 2: 4ª OPÇÃO — BAIXAR VALOR TOTAL (BRUTO) NO RECEBIMENTO + LANÇAR TAXA COMO DESPESA NO CONTAS A PAGAR */}
+                <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/60 p-4 space-y-3.5 bg-emerald-50/30 dark:bg-emerald-950/20">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="max-w-2xl">
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-md bg-emerald-600 text-white px-2 py-0.5 text-[10px] font-black uppercase">
+                          4ª Opção
+                        </span>
+                        <h4 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                          Baixar Valor Total (Bruto) no Recebimento + Lançar Taxa como Despesa no Contas a Pagar
+                        </h4>
+                      </div>
+                      <p className="text-[11px] text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                        Exemplo ({activeProfile.channel_label}): Venda real na planilha de <b>R$ 125,00</b>, recebido líquido <b>R$ 120,00</b> e taxa <b>R$ 5,00</b>. Quando ativado, o sistema baixa <b>R$ 125,00</b> cheio no Contas a Receber (mesmo que a NF no Horus estivesse R$ 135,00, mantendo-se 100% fiel ao valor real da venda da planilha) e lança a despesa de <b>R$ 5,00</b> já baixada no Contas a Pagar (<code>LANCTOS_CPAGAR_GERAL</code>).
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBankForm((p) => ({ ...p, launch_fee_as_expense: true }))
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          bankForm.launch_fee_as_expense
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        ATIVADO
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setBankForm((p) => ({ ...p, launch_fee_as_expense: false }))
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-extrabold transition-all cursor-pointer ${
+                          !bankForm.launch_fee_as_expense
+                            ? 'bg-slate-800 text-white dark:bg-slate-700'
+                            : 'bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        DESATIVADO
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Modo de Lançamento da Despesa: Unificada vs Individual */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBankForm((p) => ({ ...p, cp_fee_posting_mode: 'UNIFIED' }))
+                      }
+                      className={`text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                        bankForm.cp_fee_posting_mode === 'UNIFIED'
+                          ? 'border-indigo-600 bg-indigo-50/80 dark:bg-indigo-950/40 ring-1 ring-indigo-600'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      <span className="font-extrabold text-slate-900 dark:text-white block text-xs">
+                        1. Despesa Única Unificada (Total das Taxas do Borderô)
+                      </span>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                        Gera 1 único lançamento no Contas a Pagar com a soma total de todas as taxas do Borderô.
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setBankForm((p) => ({ ...p, cp_fee_posting_mode: 'INDIVIDUAL' }))
+                      }
+                      className={`text-left rounded-xl border p-3 transition-all cursor-pointer ${
+                        bankForm.cp_fee_posting_mode === 'INDIVIDUAL'
+                          ? 'border-indigo-600 bg-indigo-50/80 dark:bg-indigo-950/40 ring-1 ring-indigo-600'
+                          : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900'
+                      }`}
+                    >
+                      <span className="font-extrabold text-slate-900 dark:text-white block text-xs">
+                        2. Despesa Individual Uma a Uma (1 por Pedido/Título)
+                      </span>
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 block mt-0.5">
+                        Gera 1 lançamento no Contas a Pagar para cada título do Borderô que possua taxa, identificando o pedido na observação.
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Atalhos Rápidos de Despesas Recentes encontradas no Horus */}
+                  {horusOptions?.recent_tariff_presets &&
+                    horusOptions.recent_tariff_presets.length > 0 && (
+                      <div className="space-y-1">
+                        <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider block">
+                          Preenchimento Rápido (Despesas de Taxa/Tarifa usadas recentemente no seu Horus):
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {horusOptions.recent_tariff_presets.map((pr, idx) => (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => {
+                                setBankForm((p) => ({
+                                  ...p,
+                                  cp_cod_grp_fornecedor: String(pr.cod_grp_fornecedor),
+                                  cp_cod_fornecedor: String(pr.cod_fornecedor),
+                                  cp_nom_fornecedor: pr.nom_fornecedor || '',
+                                  cp_cod_departamento: String(pr.cod_departamento),
+                                  cp_cod_centro_custo: String(pr.cod_centro_custo),
+                                  cp_cod_grup_desp: String(pr.cod_grup_desp),
+                                  cp_cod_despesa: String(pr.cod_despesa),
+                                  cp_cod_forma: String(pr.cod_forma || p.forma_pagto),
+                                }));
+                                setFornecedorSearchQuery(pr.nom_fornecedor || '');
+                                toast.success(
+                                  `Parâmetros preenchidos: ${pr.nom_fornecedor} • Desp ${pr.cod_despesa} (${pr.desc_despesa})`
+                                );
+                              }}
+                              className="rounded-lg border border-emerald-300 dark:border-emerald-700 bg-white dark:bg-slate-900 hover:bg-emerald-50 px-2.5 py-1 text-[10px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                            >
+                              ⚡ {pr.nom_fornecedor} (Forn {pr.cod_fornecedor}) • Desp {pr.cod_despesa} ({pr.desc_despesa})
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  {/* Busca e Seleção em Tempo Real no Horus: Fornecedor, Departamento, Centro de Custo, Grupo de Despesa e Despesa */}
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 pt-1">
+                    {/* Pesquisa de Fornecedor em Tempo Real */}
+                    <div className="sm:col-span-6 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Pesquisar Fornecedor no Horus (FORNECEDORES_GERAL) *
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={fornecedorSearchQuery}
+                          onChange={(e) => setFornecedorSearchQuery(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              fetchHorusOptions(fornecedorSearchQuery);
+                            }
+                          }}
+                          placeholder="Digite ex: SHOPEE, VINDI, BANCO..."
+                          className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => fetchHorusOptions(fornecedorSearchQuery)}
+                          disabled={loadingHorusOptions}
+                          className="rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 text-xs font-bold flex items-center gap-1 shrink-0 cursor-pointer"
+                        >
+                          <Search className="h-3.5 w-3.5" />
+                          Buscar
+                        </button>
+                      </div>
+                      {horusOptions && horusOptions.fornecedores.length > 0 && (
+                        <select
+                          value={
+                            bankForm.cp_cod_grp_fornecedor && bankForm.cp_cod_fornecedor
+                              ? `${bankForm.cp_cod_grp_fornecedor}|${bankForm.cp_cod_fornecedor}`
+                              : ''
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            if (!val) return;
+                            const [grp, cod] = val.split('|');
+                            const found = horusOptions.fornecedores.find(
+                              (f) =>
+                                String(f.cod_grp_fornecedor) === grp &&
+                                String(f.cod_fornecedor) === cod
+                            );
+                            setBankForm((p) => ({
+                              ...p,
+                              cp_cod_grp_fornecedor: grp,
+                              cp_cod_fornecedor: cod,
+                              cp_nom_fornecedor: found?.nom_fornecedor || p.cp_nom_fornecedor,
+                            }));
+                          }}
+                          className="w-full mt-1 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+                        >
+                          <option value="">
+                            -- Selecione o Fornecedor ({horusOptions.fornecedores.length} encontrados) --
+                          </option>
+                          {horusOptions.fornecedores.map((f) => (
+                            <option
+                              key={`${f.cod_grp_fornecedor}-${f.cod_fornecedor}`}
+                              value={`${f.cod_grp_fornecedor}|${f.cod_fornecedor}`}
+                            >
+                              [Grp {f.cod_grp_fornecedor} / Cód {f.cod_fornecedor}] {f.nom_fornecedor}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Grupo Forn. (COD_GRP) *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.cp_cod_grp_fornecedor}
+                        onChange={(e) =>
+                          setBankForm((p) => ({
+                            ...p,
+                            cp_cod_grp_fornecedor: e.target.value,
+                          }))
+                        }
+                        placeholder="Ex: 1"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Cód. Fornecedor *
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.cp_cod_fornecedor}
+                        onChange={(e) =>
+                          setBankForm((p) => ({
+                            ...p,
+                            cp_cod_fornecedor: e.target.value,
+                          }))
+                        }
+                        placeholder="Ex: 230"
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                      />
+                    </div>
+
+                    {/* Departamento */}
+                    <div className="sm:col-span-6 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Departamento (DEPARTAMENTOS_GERAL) *
+                      </label>
+                      <div className="flex gap-1.5">
+                        {horusOptions && horusOptions.departamentos.length > 0 && (
+                          <select
+                            value={bankForm.cp_cod_departamento}
+                            onChange={(e) =>
+                              setBankForm((p) => ({
+                                ...p,
+                                cp_cod_departamento: e.target.value,
+                              }))
+                            }
+                            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- Selecione o Departamento --</option>
+                            {horusOptions.departamentos.map((d) => (
+                              <option key={d.cod_departamento} value={String(d.cod_departamento)}>
+                                {d.cod_departamento} - {d.desc_departamento}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <input
+                          type="text"
+                          value={bankForm.cp_cod_departamento}
+                          onChange={(e) =>
+                            setBankForm((p) => ({
+                              ...p,
+                              cp_cod_departamento: e.target.value,
+                            }))
+                          }
+                          placeholder="Cód"
+                          className="w-20 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Centro de Custo */}
+                    <div className="sm:col-span-6 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Centro de Custo (CENTRO_CUSTOS_GERAL) *
+                      </label>
+                      <div className="flex gap-1.5">
+                        {horusOptions && horusOptions.centros_custo.length > 0 && (
+                          <select
+                            value={bankForm.cp_cod_centro_custo}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const ccObj = horusOptions.centros_custo.find(
+                                (c) =>
+                                  String(c.cod_centro_custo) === val &&
+                                  (!bankForm.cp_cod_departamento ||
+                                    String(c.cod_departamento) === bankForm.cp_cod_departamento)
+                              );
+                              setBankForm((p) => ({
+                                ...p,
+                                cp_cod_centro_custo: val,
+                                cp_cod_departamento: ccObj
+                                  ? String(ccObj.cod_departamento)
+                                  : p.cp_cod_departamento,
+                              }));
+                            }}
+                            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- Selecione o Centro de Custo --</option>
+                            {horusOptions.centros_custo
+                              .filter(
+                                (c) =>
+                                  !bankForm.cp_cod_departamento ||
+                                  String(c.cod_departamento) === bankForm.cp_cod_departamento
+                              )
+                              .map((c) => (
+                                <option
+                                  key={`${c.cod_departamento}-${c.cod_centro_custo}`}
+                                  value={String(c.cod_centro_custo)}
+                                >
+                                  [Depto {c.cod_departamento}] {c.cod_centro_custo} -{' '}
+                                  {c.desc_centro_custo}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                        <input
+                          type="text"
+                          value={bankForm.cp_cod_centro_custo}
+                          onChange={(e) =>
+                            setBankForm((p) => ({
+                              ...p,
+                              cp_cod_centro_custo: e.target.value,
+                            }))
+                          }
+                          placeholder="Cód"
+                          className="w-20 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Grupo de Despesa */}
+                    <div className="sm:col-span-5 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Grupo de Despesa (DESPESAGRP_GERAL) *
+                      </label>
+                      <div className="flex gap-1.5">
+                        {horusOptions && horusOptions.grupos_despesa.length > 0 && (
+                          <select
+                            value={bankForm.cp_cod_grup_desp}
+                            onChange={(e) =>
+                              setBankForm((p) => ({
+                                ...p,
+                                cp_cod_grup_desp: e.target.value,
+                              }))
+                            }
+                            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- Selecione o Grupo de Despesa --</option>
+                            {horusOptions.grupos_despesa.map((g) => (
+                              <option key={g.cod_grup_desp} value={String(g.cod_grup_desp)}>
+                                {g.cod_grup_desp} - {g.desc_grup_desp}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                        <input
+                          type="text"
+                          value={bankForm.cp_cod_grup_desp}
+                          onChange={(e) =>
+                            setBankForm((p) => ({
+                              ...p,
+                              cp_cod_grup_desp: e.target.value,
+                            }))
+                          }
+                          placeholder="Cód"
+                          className="w-20 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Despesa */}
+                    <div className="sm:col-span-5 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Despesa (DESPESAS_GERAL) *
+                      </label>
+                      <div className="flex gap-1.5">
+                        {horusOptions && horusOptions.despesas.length > 0 && (
+                          <select
+                            value={bankForm.cp_cod_despesa}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              const dObj = horusOptions.despesas.find(
+                                (d) =>
+                                  String(d.cod_despesa) === val &&
+                                  (!bankForm.cp_cod_grup_desp ||
+                                    String(d.cod_grup_desp) === bankForm.cp_cod_grup_desp)
+                              );
+                              setBankForm((p) => ({
+                                ...p,
+                                cp_cod_despesa: val,
+                                cp_cod_grup_desp: dObj
+                                  ? String(dObj.cod_grup_desp)
+                                  : p.cp_cod_grup_desp,
+                              }));
+                            }}
+                            className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
+                          >
+                            <option value="">-- Selecione a Despesa --</option>
+                            {horusOptions.despesas
+                              .filter(
+                                (d) =>
+                                  !bankForm.cp_cod_grup_desp ||
+                                  String(d.cod_grup_desp) === bankForm.cp_cod_grup_desp
+                              )
+                              .map((d) => (
+                                <option
+                                  key={`${d.cod_grup_desp}-${d.cod_despesa}`}
+                                  value={String(d.cod_despesa)}
+                                >
+                                  [Grp {d.cod_grup_desp}] {d.cod_despesa} - {d.desc_despesa}
+                                </option>
+                              ))}
+                          </select>
+                        )}
+                        <input
+                          type="text"
+                          value={bankForm.cp_cod_despesa}
+                          onChange={(e) =>
+                            setBankForm((p) => ({
+                              ...p,
+                              cp_cod_despesa: e.target.value,
+                            }))
+                          }
+                          placeholder="Cód"
+                          className="w-20 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2.5 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Forma de Pagto Contas a Pagar */}
+                    <div className="sm:col-span-2 space-y-1">
+                      <label className="font-bold text-slate-700 dark:text-slate-300 block text-[11px]">
+                        Forma CP (COD_FORMA)
+                      </label>
+                      <input
+                        type="text"
+                        value={bankForm.cp_cod_forma}
+                        onChange={(e) =>
+                          setBankForm((p) => ({ ...p, cp_cod_forma: e.target.value }))
+                        }
+                        placeholder={bankForm.forma_pagto || 'Ex: 7'}
+                        className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                      />
                     </div>
                   </div>
                 </div>
@@ -3242,7 +4135,7 @@ export default function FinanceiroVindiPage() {
                     ) : (
                       <>
                         <Save className="h-4 w-4" />
-                        Salvar Códigos Horus ({activeProfile.short_name})
+                        Salvar Códigos &amp; Despesas Horus ({activeProfile.short_name})
                       </>
                     )}
                   </button>

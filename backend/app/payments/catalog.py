@@ -227,6 +227,18 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
             split_excess_launch = True
 
         forma_pagto_credito_maior = str(saved.get("forma_pagto_credito_maior") or "").strip()
+        launch_fee_as_expense = bool(saved.get("launch_fee_as_expense", False))
+        cp_fee_posting_mode = str(saved.get("cp_fee_posting_mode") or "UNIFIED").upper().strip()
+        if cp_fee_posting_mode not in ("UNIFIED", "INDIVIDUAL"):
+            cp_fee_posting_mode = "UNIFIED"
+        cp_cod_grp_fornecedor = str(saved.get("cp_cod_grp_fornecedor") or "").strip()
+        cp_cod_fornecedor = str(saved.get("cp_cod_fornecedor") or "").strip()
+        cp_nom_fornecedor = str(saved.get("cp_nom_fornecedor") or "").strip()
+        cp_cod_departamento = str(saved.get("cp_cod_departamento") or "").strip()
+        cp_cod_centro_custo = str(saved.get("cp_cod_centro_custo") or "").strip()
+        cp_cod_grup_desp = str(saved.get("cp_cod_grup_desp") or "").strip()
+        cp_cod_despesa = str(saved.get("cp_cod_despesa") or "").strip()
+        cp_cod_forma = str(saved.get("cp_cod_forma") or "").strip()
 
         custom_bank = {
             "forma_pagto": str(saved.get("forma_pagto") or "").strip(),
@@ -238,10 +250,20 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
             "split_excess_launch": split_excess_launch,
+            "launch_fee_as_expense": launch_fee_as_expense,
+            "cp_fee_posting_mode": cp_fee_posting_mode,
+            "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+            "cp_cod_fornecedor": cp_cod_fornecedor,
+            "cp_nom_fornecedor": cp_nom_fornecedor,
+            "cp_cod_departamento": cp_cod_departamento,
+            "cp_cod_centro_custo": cp_cod_centro_custo,
+            "cp_cod_grup_desp": cp_cod_grup_desp,
+            "cp_cod_despesa": cp_cod_despesa,
+            "cp_cod_forma": cp_cod_forma,
         }
         has_any_custom = any(
             bool(custom_bank.get(k))
-            for k in ("forma_pagto", "forma_pagto_credito_maior", "banco", "agencia", "conta", "carteira")
+            for k in ("forma_pagto", "forma_pagto_credito_maior", "banco", "agencia", "conta", "carteira", "cp_cod_fornecedor", "cp_cod_despesa")
         )
         use_custom_bank = bool(saved.get("use_custom_bank", False)) or has_any_custom
 
@@ -255,10 +277,31 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
             "split_excess_launch": split_excess_launch,
+            "launch_fee_as_expense": launch_fee_as_expense,
+            "cp_fee_posting_mode": cp_fee_posting_mode,
+            "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+            "cp_cod_fornecedor": cp_cod_fornecedor,
+            "cp_nom_fornecedor": cp_nom_fornecedor,
+            "cp_cod_departamento": cp_cod_departamento,
+            "cp_cod_centro_custo": cp_cod_centro_custo,
+            "cp_cod_grup_desp": cp_cod_grup_desp,
+            "cp_cod_despesa": cp_cod_despesa,
+            "cp_cod_forma": cp_cod_forma or custom_bank["forma_pagto"] or default_bank["forma_pagto"],
         }
         bank_configured = all(
             bool(effective_bank.get(k))
             for k in ("forma_pagto", "banco", "agencia", "conta")
+        )
+        cpagar_configured = all(
+            bool(effective_bank.get(k))
+            for k in (
+                "cp_cod_grp_fornecedor",
+                "cp_cod_fornecedor",
+                "cp_cod_departamento",
+                "cp_cod_centro_custo",
+                "cp_cod_grup_desp",
+                "cp_cod_despesa",
+            )
         )
 
         result.append({
@@ -268,6 +311,17 @@ def get_company_reconciliation_profiles(settings) -> List[dict]:
             "payment_date_mode": raw_mode,
             "unify_installments": unify_installments,
             "split_excess_launch": split_excess_launch,
+            "launch_fee_as_expense": launch_fee_as_expense,
+            "cp_fee_posting_mode": cp_fee_posting_mode,
+            "cp_cod_grp_fornecedor": cp_cod_grp_fornecedor,
+            "cp_cod_fornecedor": cp_cod_fornecedor,
+            "cp_nom_fornecedor": cp_nom_fornecedor,
+            "cp_cod_departamento": cp_cod_departamento,
+            "cp_cod_centro_custo": cp_cod_centro_custo,
+            "cp_cod_grup_desp": cp_cod_grup_desp,
+            "cp_cod_despesa": cp_cod_despesa,
+            "cp_cod_forma": effective_bank["cp_cod_forma"],
+            "cpagar_configured": cpagar_configured,
             "forma_pagto_credito_maior": forma_pagto_credito_maior,
             "custom_bank": custom_bank,
             "effective_bank": effective_bank,
