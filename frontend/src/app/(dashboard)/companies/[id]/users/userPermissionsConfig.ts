@@ -29,7 +29,8 @@ import {
   Globe,
   Settings,
   Store,
-  Send
+  Send,
+  BarChart3
 } from 'lucide-react';
 
 export interface InitialPageOption {
@@ -57,7 +58,8 @@ export const INITIAL_PAGE_OPTIONS: InitialPageOption[] = [
   { value: '/inventory', label: 'Inventário & Balanço', group: 'Horus, Logística & Estoque' },
   { value: '/bookinfo/orders', label: 'Bookinfo (Pedidos)', group: 'Horus, Logística & Estoque' },
   { value: '/orders/dropship', label: 'Dropship (Erdos)', group: 'Horus, Logística & Estoque' },
-  { value: '/horus-direct/pedidos', label: 'Horus Direct (SQL)', group: 'Horus, Logística & Estoque' },
+  { value: '/horus-direct/analise-itens', label: 'Horus Direct — Análise de Itens & Reposição', group: 'Horus, Logística & Estoque' },
+  { value: '/horus-direct/pedidos', label: 'Horus Direct — Pedidos (SQL)', group: 'Horus, Logística & Estoque' },
   { value: '/dbm', label: 'DBM (Catálogo & Metadados)', group: 'Horus, Logística & Estoque' },
   { value: '/products', label: 'Catálogo de Produtos', group: 'CRM, Catálogo & Comercial' },
   { value: '/customers', label: 'Empresas & Clientes', group: 'CRM, Catálogo & Comercial' },
@@ -271,6 +273,14 @@ export const MODULE_PERMISSIONS_LIST: ModulePermissionItem[] = [
     companyCheck: (c) => Boolean(c?.module_horus_sql),
   },
   {
+    id: 'horus_analise_itens',
+    label: 'Horus Direct — Análise de Itens & Reposição',
+    description: 'Saldos multi-filial, estoque mínimo (laranja/vermelho), preço vendido, custo e reposição',
+    category: 'horus_logistics',
+    icon: BarChart3,
+    companyCheck: (c) => Boolean(c?.horus_sql_feature_analise_itens || c?.module_horus_sql),
+  },
+  {
     id: 'dbm',
     label: 'DBM (Catálogo & Metadados)',
     description: 'Consulta de catálogo nacional, tiragens e enriquecimento DBM',
@@ -463,6 +473,14 @@ export const USER_ROLE_PRESETS: RolePreset[] = [
     initialPage: '/logistics/conference',
     fullAccess: false,
     modules: ['logistics', 'inventory', 'busca_preco', 'orders', 'products', 'dropship', 'bookinfo'],
+  },
+  {
+    id: 'compras_analise_itens',
+    label: 'Compras / Análise de Itens & Reposição',
+    description: 'Abre direto na Análise de Itens Multi-Filial (saldos por loja, estoque mínimo, vendas e reposição).',
+    initialPage: '/horus-direct/analise-itens',
+    fullAccess: false,
+    modules: ['horus_analise_itens', 'horus_sql', 'logistics', 'busca_preco', 'products'],
   },
   {
     id: 'financeiro_fiscal',

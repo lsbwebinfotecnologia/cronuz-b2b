@@ -34,8 +34,10 @@ import csv
 import io
 import logging
 import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import openpyxl
@@ -64,6 +66,8 @@ from app.models.horus_purchase import (
     HorusPurchaseOrder,
     HorusPurchaseOrderItem,
     HorusPurchaseOrderLog,
+    HorusPurchaseXmlAudit,
+    HorusPurchaseXmlAuditItem,
     HorusSupplierPublisherDiscount,
 )
 from app.models.product import Product
@@ -74,6 +78,8 @@ router = APIRouter(prefix="/horus-purchases", tags=["horus-purchases"])
 log = logging.getLogger(__name__)
 
 MAX_PURCHASE_SHEET_BYTES = 10 * 1024 * 1024  # 10 MB (Regra Mandatória AGENTS.md Seção 1)
+MAX_PURCHASE_XML_BYTES = 10 * 1024 * 1024    # 10 MB para documentos fiscais XML (AGENTS.md Seção 1.3)
+UPLOADS_ROOT = Path(__file__).resolve().parents[3] / "uploads"
 
 # ── Conjuntos SARGables de CFOPs para Dossiê 360° do Fornecedor ───────────────
 SARGABLE_CFOP_COMPRA = _build_sargable_cfop_in((
@@ -106,6 +112,21 @@ HORUS_STATUS_LABELS = {
     "AC": "Aguardando Conferência (AC)",
     "EE": "Encerrado / Recebido (EE)",
     "CA": "Cancelado (CA)",
+}
+
+XML_DECISION_LABELS = {
+    "NONE": "Sem XML",
+    "PENDING_REVIEW": "Em Análise (Divergência)",
+    "XML_OK": "XML OK",
+    "ACCEPTED_WITH_DIVERGENCE": "XML Aceito c/ Divergência",
+    "REJECTED": "XML Recusado",
+}
+
+XML_DECISION_TO_ORDER_STATUS = {
+    "PENDING_REVIEW": "XML_DIVERGENT",
+    "XML_OK": "XML_OK",
+    "ACCEPTED_WITH_DIVERGENCE": "XML_ACCEPTED_DIV",
+    "REJECTED": "XML_REJECTED",
 }
 
 
@@ -2555,7 +2576,11 @@ def list_horus_purchase_orders(
         q_db = q_db.filter(HorusPurchaseOrder.branch_id == int(branch_id))
     if status and status.upper() != "ALL":
         st_up = status.upper()
-        q_db = q_db.filter((HorusPurchaseOrder.status == st_up) | (HorusPurchaseOrder.horus_status == st_up))
+        q_db = q_db.filter(
+            (HorusPurchaseOrder.status == st_up)
+            | (HorusPurchaseOrder.horus_status == st_up)
+            | (HorusPurchaseOrder.xml_status == st_up)
+        )
     if search and search.strip():
         term = f"%{search.strip()}%"
         if search.strip().isdigit():
@@ -2563,9 +2588,13 @@ def list_horus_purchase_orders(
                 (HorusPurchaseOrder.horus_cod_pedido == int(search.strip()))
                 | (HorusPurchaseOrder.nome_fornecedor.ilike(term))
                 | (HorusPurchaseOrder.cnpj_fornecedor.ilike(term))
+                | (HorusPurchaseOrder.last_nfe_number.ilike(term))
             )
         else:
-            q_db = q_db.filter(HorusPurchaseOrder.nome_fornecedor.ilike(term))
+            q_db = q_db.filter(
+                (HorusPurchaseOrder.nome_fornecedor.ilike(term))
+                | (HorusPurchaseOrder.last_nfe_key.ilike(term))
+            )
 
     orders = q_db.order_by(HorusPurchaseOrder.created_at.desc()).limit(limit).all()
 
@@ -2596,7 +2625,11 @@ def list_horus_purchase_orders(
                     if live_hs and live_hs != o.horus_status:
                         old_hs = o.horus_status
                         old_st = o.status
-                        new_st = HORUS_TO_CRONUZ_STATUS.get(live_hs, o.status)
+                        # Preserva status de auditoria XML (ex: XML_OK) caso o pedido ainda não tenha sido encerrado (EE) ou cancelado (CA)
+                        if live_hs not in ("EE", "FE", "CA") and o.status in ("XML_OK", "XML_DIVERGENT", "XML_ACCEPTED_DIV", "XML_REJECTED"):
+                            new_st = o.status
+                        else:
+                            new_st = HORUS_TO_CRONUZ_STATUS.get(live_hs, o.status)
                         o.horus_status = live_hs
                         o.status = new_st
                         db.add(HorusPurchaseOrderLog(
@@ -2633,6 +2666,14 @@ def list_horus_purchase_orders(
                 "status": o.status,
                 "horus_status": o.horus_status,
                 "status_label": HORUS_STATUS_LABELS.get(o.horus_status, o.status),
+                "xml_status": o.xml_status or "NONE",
+                "xml_status_label": XML_DECISION_LABELS.get(o.xml_status or "NONE", o.xml_status or "Sem XML"),
+                "last_xml_audit_id": o.last_xml_audit_id,
+                "last_nfe_number": o.last_nfe_number,
+                "last_nfe_series": o.last_nfe_series,
+                "last_nfe_key": o.last_nfe_key,
+                "xml_checked_at": _fmt_dt(o.xml_checked_at),
+                "xml_checked_by_name": o.xml_checked_by_name,
                 "total_skus": o.total_skus,
                 "total_quantity": o.total_quantity,
                 "total_gross": float(o.total_gross or 0.0),
@@ -2687,6 +2728,14 @@ def get_horus_purchase_order_detail(
             "status": order.status,
             "horus_status": order.horus_status,
             "status_label": HORUS_STATUS_LABELS.get(order.horus_status, order.status),
+            "xml_status": order.xml_status or "NONE",
+            "xml_status_label": XML_DECISION_LABELS.get(order.xml_status or "NONE", order.xml_status or "Sem XML"),
+            "last_xml_audit_id": order.last_xml_audit_id,
+            "last_nfe_number": order.last_nfe_number,
+            "last_nfe_series": order.last_nfe_series,
+            "last_nfe_key": order.last_nfe_key,
+            "xml_checked_at": _fmt_dt(order.xml_checked_at),
+            "xml_checked_by_name": order.xml_checked_by_name,
             "total_skus": order.total_skus,
             "total_quantity": order.total_quantity,
             "total_gross": float(order.total_gross or 0.0),
@@ -2947,3 +2996,1353 @@ def export_horus_purchase_order_excel(
             "X-Order-Cronuz-Status": order.status,
         },
     )
+
+
+# ── 8. Auditoria Preventiva de XML da NF-e vs Pedido de Compra & Decisão Posterior ─
+
+class XmlAuditDecisionPayload(BaseModel):
+    company_id: Optional[int] = None
+    decision_status: str  # XML_OK, ACCEPTED_WITH_DIVERGENCE, REJECTED, PENDING_REVIEW
+    decision_notes: Optional[str] = None
+    item_notes: Optional[Dict[str, str]] = None  # {str(audit_item_id): "pontuação no item"}
+    advance_horus_to_ae: bool = False
+
+
+def _xml_local_name(tag: str) -> str:
+    return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _xml_child_text(parent: Optional[ET.Element], child_local_name: str) -> str:
+    if parent is None:
+        return ""
+    for ch in parent:
+        if _xml_local_name(ch.tag) == child_local_name:
+            return (ch.text or "").strip()
+    return ""
+
+
+def _xml_find_first(root: ET.Element, local_name: str) -> Optional[ET.Element]:
+    for el in root.iter():
+        if _xml_local_name(el.tag) == local_name:
+            return el
+    return None
+
+
+def _safe_dec(val: Any, default: str = "0") -> Decimal:
+    if val is None:
+        return Decimal(default)
+    s = str(val).strip().replace(",", ".")
+    if not s:
+        return Decimal(default)
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal(default)
+
+
+def _normalize_gtin_isbn(raw: Optional[str]) -> str:
+    if not raw:
+        return ""
+    up = str(raw).strip().upper()
+    if up in ("SEM GTIN", "SEMGTIN", "ISENTO", "N/A", "0", "0000000000000"):
+        return ""
+    cleaned = "".join(ch for ch in up if ch.isdigit() or ch == "X")
+    if len(cleaned) >= 10 and cleaned.strip("0"):
+        return cleaned
+    return ""
+
+
+def _isbn_core9(isbn_str: str) -> str:
+    """Extrai o miolo de 9 dígitos para conciliar ISBN-13 (978XXXXXXXXX-D) com ISBN-10 (XXXXXXXXX-D)."""
+    c = _normalize_gtin_isbn(isbn_str)
+    if len(c) == 13 and c.startswith("978"):
+        return c[3:12]
+    if len(c) == 10:
+        return c[:9]
+    return ""
+
+
+def _parse_supplier_nfe_xml(raw_bytes: bytes) -> Dict[str, Any]:
+    """
+    Faz o parse seguro do XML de NF-e (modelo 55 — <nfeProc> ou <NFe>) enviado pelo fornecedor.
+    Extrai cabeçalho fiscal, totais e itens detalhados (incluindo detecção inteligente de
+    Preço de Capa e Desconto em <vDesc>, rateio de desconto do cabeçalho ou <infAdProd>).
+    """
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="O arquivo XML enviado está vazio.")
+    if len(raw_bytes) > MAX_PURCHASE_XML_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="O arquivo XML excede o limite máximo permitido de 10 MB para este tipo de envio.",
+        )
+
+    head_probe = raw_bytes[:4096].upper()
+    if b"<!ENTITY" in head_probe or b"<!DOCTYPE" in head_probe:
+        raise HTTPException(status_code=400, detail="Estrutura XML bloqueada por segurança (DOCTYPE/ENTITY não permitido).")
+
+    xml_text: Optional[str] = None
+    for enc in ("utf-8-sig", "utf-8", "iso-8859-1", "cp1252"):
+        try:
+            xml_text = raw_bytes.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if xml_text is None:
+        xml_text = raw_bytes.decode("utf-8", errors="replace")
+
+    try:
+        root = ET.fromstring(xml_text.strip())
+    except ET.ParseError as e:
+        raise HTTPException(status_code=400, detail=f"Arquivo XML inválido ou malformado: {e}")
+
+    inf_nfe = _xml_find_first(root, "infNFe")
+    if inf_nfe is None:
+        raise HTTPException(
+            status_code=400,
+            detail="O arquivo enviado não é um XML de NF-e válido (bloco <infNFe> não encontrado).",
+        )
+
+    # Chave de acesso (44 dígitos)
+    chave = ""
+    inf_prot = _xml_find_first(root, "infProt")
+    if inf_prot is not None:
+        chave = _clean_digits(_xml_child_text(inf_prot, "chNFe"))
+    if not chave:
+        raw_id = inf_nfe.attrib.get("Id") or inf_nfe.attrib.get("id") or ""
+        chave = _clean_digits(raw_id)
+
+    ide_el = None
+    emit_el = None
+    dest_el = None
+    total_el = None
+    compra_el = None
+    det_elements: List[ET.Element] = []
+
+    for child in inf_nfe:
+        ln = _xml_local_name(child.tag)
+        if ln == "ide":
+            ide_el = child
+        elif ln == "emit":
+            emit_el = child
+        elif ln == "dest":
+            dest_el = child
+        elif ln == "total":
+            total_el = child
+        elif ln == "compra":
+            compra_el = child
+        elif ln == "det":
+            det_elements.append(child)
+
+    if not det_elements:
+        raise HTTPException(status_code=400, detail="O XML da NF-e não possui itens (<det>) para conferência.")
+
+    numero_nf = _xml_child_text(ide_el, "nNF") or "S/N"
+    serie_nf = _xml_child_text(ide_el, "serie") or "1"
+    data_emissao = _xml_child_text(ide_el, "dhEmi") or _xml_child_text(ide_el, "dEmi") or ""
+    nat_op = _xml_child_text(ide_el, "natOp") or ""
+
+    emit_cnpj = _clean_digits(_xml_child_text(emit_el, "CNPJ") or _xml_child_text(emit_el, "CPF"))
+    emit_nome = _xml_child_text(emit_el, "xNome") or _xml_child_text(emit_el, "xFant") or ""
+    dest_cnpj = _clean_digits(_xml_child_text(dest_el, "CNPJ") or _xml_child_text(dest_el, "CPF"))
+    dest_nome = _xml_child_text(dest_el, "xNome") or ""
+
+    icms_tot = _xml_find_first(total_el, "ICMSTot") if total_el is not None else None
+    tot_vprod = _safe_dec(_xml_child_text(icms_tot, "vProd"))
+    tot_vdesc = _safe_dec(_xml_child_text(icms_tot, "vDesc"))
+    tot_vfrete = _safe_dec(_xml_child_text(icms_tot, "vFrete"))
+    tot_vipi = _safe_dec(_xml_child_text(icms_tot, "vIPI"))
+    tot_vst = _safe_dec(_xml_child_text(icms_tot, "vST"))
+    tot_voutro = _safe_dec(_xml_child_text(icms_tot, "vOutro"))
+    tot_vnf = _safe_dec(_xml_child_text(icms_tot, "vNF"))
+
+    header_xped = _xml_child_text(compra_el, "xPed") if compra_el is not None else ""
+
+    raw_items: List[Dict[str, Any]] = []
+    sum_item_vdesc = Decimal("0")
+    sum_item_vprod = Decimal("0")
+    first_item_xped = ""
+
+    for idx_det, det in enumerate(det_elements, start=1):
+        n_item_raw = det.attrib.get("nItem") or str(idx_det)
+        n_item = int(n_item_raw) if str(n_item_raw).isdigit() else idx_det
+        prod_el = None
+        inf_ad_prod = ""
+        for ch in det:
+            cln = _xml_local_name(ch.tag)
+            if cln == "prod":
+                prod_el = ch
+            elif cln == "infAdProd":
+                inf_ad_prod = (ch.text or "").strip()
+
+        if prod_el is None:
+            continue
+
+        c_prod = _xml_child_text(prod_el, "cProd")
+        c_ean = _normalize_gtin_isbn(_xml_child_text(prod_el, "cEAN"))
+        c_ean_trib = _normalize_gtin_isbn(_xml_child_text(prod_el, "cEANTrib"))
+        x_prod = _xml_child_text(prod_el, "xProd")
+        cfop = _clean_digits(_xml_child_text(prod_el, "CFOP"))
+        x_ped_item = _xml_child_text(prod_el, "xPed")
+        if x_ped_item and not first_item_xped:
+            first_item_xped = x_ped_item
+
+        q_com_dec = _safe_dec(_xml_child_text(prod_el, "qCom"), "0")
+        v_un_com_dec = _safe_dec(_xml_child_text(prod_el, "vUnCom"), "0")
+        v_prod_dec = _safe_dec(_xml_child_text(prod_el, "vProd"), "0")
+        v_desc_dec = _safe_dec(_xml_child_text(prod_el, "vDesc"), "0")
+
+        # Resolve melhor ISBN/GTIN disponível no item do XML
+        resolved_ean = c_ean or c_ean_trib
+        if not resolved_ean:
+            cand_cprod = _normalize_gtin_isbn(c_prod)
+            if len(cand_cprod) == 13 and cand_cprod.startswith(("978", "979")):
+                resolved_ean = cand_cprod
+        if not resolved_ean and inf_ad_prod:
+            m_isbn = re.search(r"\b(97[89][\d\-]{10,14})\b", inf_ad_prod)
+            if m_isbn:
+                resolved_ean = _normalize_gtin_isbn(m_isbn.group(1))
+        if not resolved_ean and x_prod:
+            m_isbn2 = re.search(r"\b(97[89]\d{10})\b", x_prod)
+            if m_isbn2:
+                resolved_ean = m_isbn2.group(1)
+
+        sum_item_vdesc += v_desc_dec
+        sum_item_vprod += v_prod_dec
+
+        raw_items.append({
+            "n_item": n_item,
+            "c_prod": c_prod,
+            "ean": resolved_ean,
+            "x_prod": x_prod or f"ITEM XML #{n_item}",
+            "cfop": cfop,
+            "q_com": q_com_dec,
+            "v_un_com": v_un_com_dec,
+            "v_prod": v_prod_dec,
+            "v_desc": v_desc_dec,
+            "inf_ad_prod": inf_ad_prod,
+            "x_ped": x_ped_item,
+        })
+
+    # Caso o fornecedor tenha destacado desconto apenas no totalizador <ICMSTot><vDesc> sem ratear nos itens
+    if tot_vdesc > Decimal("0") and sum_item_vdesc == Decimal("0") and sum_item_vprod > Decimal("0"):
+        for it in raw_items:
+            it["v_desc"] = (tot_vdesc * (it["v_prod"] / sum_item_vprod)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # Calcula Preço de Capa, Desconto (%) e Preço Líquido Unitário de cada linha do XML
+    for it in raw_items:
+        q = it["q_com"]
+        v_un = it["v_un_com"]
+        v_pr = it["v_prod"]
+        v_ds = it["v_desc"]
+        sub_net = (v_pr - v_ds).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        unit_net = (sub_net / q).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) if q > 0 else Decimal("0")
+
+        cover_from_inf_ad: Optional[Decimal] = None
+        disc_from_inf_ad: Optional[Decimal] = None
+        if v_ds == Decimal("0") and it["inf_ad_prod"]:
+            m_capa = re.search(
+                r"(?:CAPA|PRE[CÇ]O\s*(?:DE\s*)?CAPA|VLR\.?\s*CAPA|P\.?\s*CAPA)\s*[:=]?\s*(?:R\$\s*)?(\d+[.,]\d{2})",
+                it["inf_ad_prod"],
+                flags=re.IGNORECASE,
+            )
+            if m_capa:
+                cand_c = _safe_dec(m_capa.group(1))
+                if cand_c > Decimal("0") and cand_c >= unit_net:
+                    cover_from_inf_ad = cand_c
+            m_dsc = re.search(
+                r"(?:DESC(?:ONTO)?)\s*[:=]?\s*(\d+(?:[.,]\d{1,2})?)\s*%",
+                it["inf_ad_prod"],
+                flags=re.IGNORECASE,
+            )
+            if m_dsc:
+                disc_from_inf_ad = _safe_dec(m_dsc.group(1))
+
+        if v_ds > Decimal("0") and v_pr > Decimal("0"):
+            xml_cover = v_un.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            xml_disc_pct = ((v_ds / v_pr) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            billed_net_without_vdesc = False
+        elif cover_from_inf_ad is not None and cover_from_inf_ad > Decimal("0"):
+            xml_cover = cover_from_inf_ad.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if disc_from_inf_ad is not None:
+                xml_disc_pct = disc_from_inf_ad.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            else:
+                xml_disc_pct = (((xml_cover - unit_net) / xml_cover) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            billed_net_without_vdesc = True
+        else:
+            xml_cover = v_un.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            xml_disc_pct = Decimal("0.00")
+            billed_net_without_vdesc = True
+
+        it["xml_qty_int"] = int(q.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        it["xml_cover"] = xml_cover
+        it["xml_disc_pct"] = xml_disc_pct
+        it["xml_unit_net"] = unit_net
+        it["xml_subtotal_net"] = sub_net
+        it["billed_net_without_vdesc"] = billed_net_without_vdesc
+
+    return {
+        "chave_acesso": chave[:60] if chave else None,
+        "numero_nf": numero_nf[:30],
+        "serie_nf": serie_nf[:10],
+        "data_emissao": data_emissao[:40],
+        "nat_op": nat_op[:150],
+        "emit_cnpj": emit_cnpj[:20],
+        "emit_nome": emit_nome[:200],
+        "dest_cnpj": dest_cnpj[:20],
+        "dest_nome": dest_nome[:200],
+        "xml_xped": (header_xped or first_item_xped)[:60] or None,
+        "xml_text": xml_text,
+        "tot_vprod": tot_vprod if tot_vprod > 0 else sum_item_vprod,
+        "tot_vdesc": tot_vdesc if tot_vdesc > 0 else sum_item_vdesc,
+        "tot_vfrete": tot_vfrete,
+        "tot_ipi_st_outros": (tot_vipi + tot_vst + tot_voutro).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        "tot_vnf": tot_vnf,
+        "items": raw_items,
+    }
+
+
+def _compare_xml_with_purchase_order(
+    order: HorusPurchaseOrder,
+    parsed_xml: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Cruza linha a linha o XML da NF-e com os itens do Pedido de Compra (pur_horus_order_item).
+    Avalia e identifica individualmente:
+      1. Preço de Capa (tolerância R$ 0,02)
+      2. Desconto Comercial % (tolerância 0,05 p.p.)
+      3. Quantidade (unidades exatas, agrupando múltiplos <det> do mesmo ISBN caso a editora quebre lotes)
+      4. Itens Extras no XML (não pedidos) e Itens Faltantes (pedidos e não faturados)
+      5. Alertas fiscais de cabeçalho (CNPJ Destinatário vs Filial e CNPJ Emitente vs Fornecedor)
+    """
+    header_warnings: List[str] = []
+    order_branch_cnpj = _clean_digits(order.branch_cnpj)
+    xml_dest_cnpj = _clean_digits(parsed_xml.get("dest_cnpj"))
+    if order_branch_cnpj and xml_dest_cnpj and order_branch_cnpj != xml_dest_cnpj:
+        header_warnings.append(
+            f"CNPJ Destinatário da NF-e ({xml_dest_cnpj}) difere do CNPJ da Filial do Pedido ({order_branch_cnpj})."
+        )
+
+    order_sup_cnpj = _clean_digits(order.cnpj_fornecedor)
+    xml_emit_cnpj = _clean_digits(parsed_xml.get("emit_cnpj"))
+    if order_sup_cnpj and xml_emit_cnpj and order_sup_cnpj != xml_emit_cnpj:
+        if order_sup_cnpj[:8] == xml_emit_cnpj[:8]:
+            header_warnings.append(
+                f"NF-e emitida por outra filial/CD do mesmo grupo fornecedor (CNPJ NF: {xml_emit_cnpj} | Pedido: {order_sup_cnpj})."
+            )
+        else:
+            header_warnings.append(
+                f"CNPJ Emitente da NF-e ({xml_emit_cnpj} - {parsed_xml.get('emit_nome')}) difere do Fornecedor do Pedido ({order_sup_cnpj} - {order.nome_fornecedor})."
+            )
+
+    # Indexa itens do pedido por ISBN normalizado, miolo ISBN-9, cod_item e título exato
+    by_isbn: Dict[str, HorusPurchaseOrderItem] = {}
+    by_core9: Dict[str, HorusPurchaseOrderItem] = {}
+    by_cod: Dict[str, HorusPurchaseOrderItem] = {}
+    by_title: Dict[str, HorusPurchaseOrderItem] = {}
+
+    for oit in order.items:
+        norm_i = _normalize_gtin_isbn(oit.isbn)
+        if norm_i:
+            by_isbn[norm_i] = oit
+            c9 = _isbn_core9(norm_i)
+            if c9:
+                by_core9[c9] = oit
+        if oit.cod_item:
+            by_cod[str(oit.cod_item)] = oit
+        if oit.nome_item:
+            by_title[re.sub(r"\s+", " ", oit.nome_item.strip().upper())] = oit
+
+    # Agrupa linhas do XML que casem com o mesmo item do pedido (evita falso erro quando editora divide lotes)
+    matched_xml_groups: Dict[int, List[Dict[str, Any]]] = {}
+    unmatched_xml_rows: List[Dict[str, Any]] = []
+
+    for xit in parsed_xml["items"]:
+        matched_oit: Optional[HorusPurchaseOrderItem] = None
+        xean = _normalize_gtin_isbn(xit.get("ean"))
+        if xean and xean in by_isbn:
+            matched_oit = by_isbn[xean]
+        elif xean and _isbn_core9(xean) and _isbn_core9(xean) in by_core9:
+            matched_oit = by_core9[_isbn_core9(xean)]
+        else:
+            cprod_clean = str(xit.get("c_prod") or "").strip()
+            if cprod_clean in by_cod and not xean:
+                matched_oit = by_cod[cprod_clean]
+            elif not xean and xit.get("x_prod"):
+                norm_t = re.sub(r"\s+", " ", str(xit["x_prod"]).strip().upper())
+                if norm_t in by_title:
+                    matched_oit = by_title[norm_t]
+
+        if matched_oit is not None:
+            matched_xml_groups.setdefault(matched_oit.id, []).append(xit)
+        else:
+            unmatched_xml_rows.append(xit)
+
+    audit_lines: List[Dict[str, Any]] = []
+    matched_ok_count = 0
+    divergent_items_count = 0
+    diff_cover_count = 0
+    diff_discount_count = 0
+    diff_qty_count = 0
+    extra_in_xml_count = 0
+    missing_in_xml_count = 0
+
+    xml_total_qty_all = 0
+    xml_total_products_net_all = Decimal("0.00")
+
+    # 1. Processa todos os itens do Pedido (casados ou faltantes no XML)
+    for oit in order.items:
+        ord_qty = int(oit.quantity or 0)
+        ord_cover = Decimal(str(oit.unit_cover_price or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ord_disc = Decimal(str(oit.discount_pct or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        ord_unit_net = Decimal(str(oit.unit_net_price or 0)).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        ord_sub_net = Decimal(str(oit.subtotal_net or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        x_group = matched_xml_groups.get(oit.id)
+        if not x_group:
+            # Item pedido NÃO veio no XML da NF-e
+            missing_in_xml_count += 1
+            divergent_items_count += 1
+            diff_qty_count += 1
+            audit_lines.append({
+                "order_item_id": oit.id,
+                "xml_n_item": None,
+                "cod_item": oit.cod_item,
+                "isbn": oit.isbn,
+                "xml_ean": None,
+                "xml_cprod": None,
+                "title": oit.nome_item,
+                "nome_editora": oit.nome_editora,
+                "cfop": None,
+                "order_qty": ord_qty,
+                "order_cover_price": ord_cover,
+                "order_discount_pct": ord_disc,
+                "order_unit_net": ord_unit_net,
+                "order_subtotal_net": ord_sub_net,
+                "xml_qty": 0,
+                "xml_cover_price": Decimal("0.00"),
+                "xml_discount_pct": Decimal("0.00"),
+                "xml_effective_discount_pct": Decimal("0.00"),
+                "xml_unit_net": Decimal("0.0000"),
+                "xml_subtotal_net": Decimal("0.00"),
+                "line_status": "DIVERGENT",
+                "has_qty_diff": True,
+                "has_cover_diff": False,
+                "has_discount_diff": False,
+                "is_extra_in_xml": False,
+                "is_missing_in_xml": True,
+                "divergence_tags": ["ITEM_FALTANTE_XML"],
+                "divergence_summary": f"Item pedido ({ord_qty} un.) não faturado neste XML.",
+            })
+            continue
+
+        # Agrega se houver mais de um <det> para o mesmo item
+        first_x = x_group[0]
+        sum_q_dec = sum((x["q_com"] for x in x_group), Decimal("0"))
+        xml_qty = sum(int(x["xml_qty_int"]) for x in x_group)
+        sum_vprod = sum((x["v_prod"] for x in x_group), Decimal("0"))
+        sum_vdesc = sum((x["v_desc"] for x in x_group), Decimal("0"))
+        sum_sub_net = sum((x["xml_subtotal_net"] for x in x_group), Decimal("0.00"))
+
+        xml_total_qty_all += xml_qty
+        xml_total_products_net_all += sum_sub_net
+
+        if len(x_group) == 1:
+            xml_cover = first_x["xml_cover"]
+            xml_disc = first_x["xml_disc_pct"]
+            xml_unit_net = first_x["xml_unit_net"]
+            billed_net_no_vdesc = bool(first_x.get("billed_net_without_vdesc"))
+        else:
+            xml_unit_net = (sum_sub_net / sum_q_dec).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP) if sum_q_dec > 0 else Decimal("0")
+            if sum_vdesc > Decimal("0") and sum_vprod > Decimal("0"):
+                xml_cover = (sum_vprod / sum_q_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if sum_q_dec > 0 else Decimal("0")
+                xml_disc = ((sum_vdesc / sum_vprod) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                billed_net_no_vdesc = False
+            else:
+                xml_cover = (sum_vprod / sum_q_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if sum_q_dec > 0 else Decimal("0")
+                xml_disc = Decimal("0.00")
+                billed_net_no_vdesc = True
+
+        # Desconto efetivo sobre o Preço de Capa do Pedido (útil quando editora fatura direto pelo líquido)
+        if ord_cover > Decimal("0"):
+            eff_disc_vs_order_cover = (((ord_cover - xml_unit_net) / ord_cover) * Decimal("100")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        else:
+            eff_disc_vs_order_cover = xml_disc
+
+        tags: List[str] = []
+        reasons: List[str] = []
+
+        has_qty_diff = xml_qty != ord_qty
+        if has_qty_diff:
+            diff_qty_count += 1
+            if xml_qty > ord_qty:
+                tags.append("QTD_MAIOR")
+                reasons.append(f"Qtd XML maior ({xml_qty} vs {ord_qty} no pedido)")
+            else:
+                tags.append("QTD_MENOR")
+                reasons.append(f"Qtd XML menor ({xml_qty} vs {ord_qty} no pedido)")
+
+        has_cover_diff = abs(xml_cover - ord_cover) > Decimal("0.02")
+        has_discount_diff = abs(xml_disc - ord_disc) > Decimal("0.05")
+
+        # Caso especial do mercado livreiro: fornecedor faturou líquido em vUnCom sem destacar vDesc
+        if billed_net_no_vdesc and ord_disc > Decimal("0") and abs(xml_unit_net - ord_unit_net) <= Decimal("0.02"):
+            # O líquido unitário bateu cravado com o pedido, mas a NF não destacou Capa + vDesc!
+            has_cover_diff = True
+            has_discount_diff = False
+            diff_cover_count += 1
+            tags.append("FATURADO_LIQUIDO_SEM_VDESC")
+            reasons.append(
+                f"NF emitida pelo líquido (R$ {xml_unit_net:.2f}) sem destacar Capa (R$ {ord_cover:.2f}) e Desc. ({ord_disc:.2f}%)"
+            )
+        else:
+            if has_cover_diff:
+                diff_cover_count += 1
+                if xml_cover > ord_cover:
+                    tags.append("CAPA_MAIOR")
+                    reasons.append(f"Capa XML maior (R$ {xml_cover:.2f} vs R$ {ord_cover:.2f})")
+                else:
+                    tags.append("CAPA_MENOR")
+                    reasons.append(f"Capa XML menor (R$ {xml_cover:.2f} vs R$ {ord_cover:.2f})")
+
+            if has_discount_diff:
+                diff_discount_count += 1
+                if xml_disc < ord_disc:
+                    tags.append("DESCONTO_MENOR")
+                    reasons.append(f"Desconto XML menor ({xml_disc:.2f}% vs {ord_disc:.2f}% no pedido)")
+                else:
+                    tags.append("DESCONTO_MAIOR")
+                    reasons.append(f"Desconto XML maior ({xml_disc:.2f}% vs {ord_disc:.2f}% no pedido)")
+
+        is_div = bool(has_qty_diff or has_cover_diff or has_discount_diff)
+        if is_div:
+            divergent_items_count += 1
+        else:
+            matched_ok_count += 1
+
+        audit_lines.append({
+            "order_item_id": oit.id,
+            "xml_n_item": first_x["n_item"],
+            "cod_item": oit.cod_item,
+            "isbn": oit.isbn,
+            "xml_ean": first_x.get("ean") or None,
+            "xml_cprod": first_x.get("c_prod") or None,
+            "title": oit.nome_item,
+            "nome_editora": oit.nome_editora,
+            "cfop": first_x.get("cfop") or None,
+            "order_qty": ord_qty,
+            "order_cover_price": ord_cover,
+            "order_discount_pct": ord_disc,
+            "order_unit_net": ord_unit_net,
+            "order_subtotal_net": ord_sub_net,
+            "xml_qty": xml_qty,
+            "xml_cover_price": xml_cover,
+            "xml_discount_pct": xml_disc,
+            "xml_effective_discount_pct": eff_disc_vs_order_cover,
+            "xml_unit_net": xml_unit_net,
+            "xml_subtotal_net": sum_sub_net,
+            "line_status": "DIVERGENT" if is_div else "OK",
+            "has_qty_diff": has_qty_diff,
+            "has_cover_diff": has_cover_diff,
+            "has_discount_diff": has_discount_diff,
+            "is_extra_in_xml": False,
+            "is_missing_in_xml": False,
+            "divergence_tags": tags if tags else ["OK"],
+            "divergence_summary": " • ".join(reasons) if reasons else "Quantidade, Preço de Capa e Desconto 100% conferidos.",
+        })
+
+    # 2. Processa itens extras que vieram na NF-e mas NÃO constam no Pedido de Compra
+    for ux in unmatched_xml_rows:
+        extra_in_xml_count += 1
+        divergent_items_count += 1
+        x_q = int(ux["xml_qty_int"])
+        xml_total_qty_all += x_q
+        xml_total_products_net_all += ux["xml_subtotal_net"]
+
+        audit_lines.append({
+            "order_item_id": None,
+            "xml_n_item": ux["n_item"],
+            "cod_item": None,
+            "isbn": ux.get("ean") or None,
+            "xml_ean": ux.get("ean") or None,
+            "xml_cprod": ux.get("c_prod") or None,
+            "title": str(ux.get("x_prod") or f"ITEM XML #{ux['n_item']}")[:255],
+            "nome_editora": None,
+            "cfop": ux.get("cfop") or None,
+            "order_qty": 0,
+            "order_cover_price": Decimal("0.00"),
+            "order_discount_pct": Decimal("0.00"),
+            "order_unit_net": Decimal("0.0000"),
+            "order_subtotal_net": Decimal("0.00"),
+            "xml_qty": x_q,
+            "xml_cover_price": ux["xml_cover"],
+            "xml_discount_pct": ux["xml_disc_pct"],
+            "xml_effective_discount_pct": ux["xml_disc_pct"],
+            "xml_unit_net": ux["xml_unit_net"],
+            "xml_subtotal_net": ux["xml_subtotal_net"],
+            "line_status": "DIVERGENT",
+            "has_qty_diff": True,
+            "has_cover_diff": False,
+            "has_discount_diff": False,
+            "is_extra_in_xml": True,
+            "is_missing_in_xml": False,
+            "divergence_tags": ["ITEM_NAO_PEDIDO"],
+            "divergence_summary": f"Item presente na NF-e ({x_q} un.) mas não solicitado neste Pedido de Compra.",
+        })
+
+    has_dest_mismatch = bool(order_branch_cnpj and xml_dest_cnpj and order_branch_cnpj != xml_dest_cnpj)
+    diagnostic_status = (
+        "MATCH_100"
+        if (divergent_items_count == 0 and not has_dest_mismatch)
+        else "HAS_DIVERGENCE"
+    )
+
+    return {
+        "diagnostic_status": diagnostic_status,
+        "matched_ok_count": matched_ok_count,
+        "divergent_items_count": divergent_items_count,
+        "diff_cover_count": diff_cover_count,
+        "diff_discount_count": diff_discount_count,
+        "diff_qty_count": diff_qty_count,
+        "extra_in_xml_count": extra_in_xml_count,
+        "missing_in_xml_count": missing_in_xml_count,
+        "header_warnings": header_warnings,
+        "xml_total_qty": xml_total_qty_all,
+        "xml_total_products_net": xml_total_products_net_all.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        "lines": audit_lines,
+    }
+
+
+def _serialize_xml_audit_summary(a: HorusPurchaseXmlAudit, order_obj: Optional[HorusPurchaseOrder] = None) -> Dict[str, Any]:
+    ord_ref = order_obj or a.order
+    return {
+        "id": a.id,
+        "order_id": a.order_id,
+        "branch_id": a.branch_id,
+        "branch_name": a.branch_name or (ord_ref.branch_name if ord_ref else None),
+        "horus_cod_pedido": a.horus_cod_pedido or (ord_ref.horus_cod_pedido if ord_ref else None),
+        "order_horus_status": ord_ref.horus_status if ord_ref else None,
+        "order_status": ord_ref.status if ord_ref else None,
+        "nome_fornecedor": ord_ref.nome_fornecedor if ord_ref else a.emit_nome,
+        "cnpj_fornecedor": ord_ref.cnpj_fornecedor if ord_ref else a.emit_cnpj,
+        "chave_acesso": a.chave_acesso,
+        "numero_nf": a.numero_nf,
+        "serie_nf": a.serie_nf,
+        "data_emissao": a.data_emissao,
+        "nat_op": a.nat_op,
+        "emit_cnpj": a.emit_cnpj,
+        "emit_nome": a.emit_nome,
+        "dest_cnpj": a.dest_cnpj,
+        "dest_nome": a.dest_nome,
+        "xml_xped": a.xml_xped,
+        "order_total_qty": a.order_total_qty,
+        "xml_total_qty": a.xml_total_qty,
+        "order_total_gross": float(a.order_total_gross or 0.0),
+        "xml_total_gross": float(a.xml_total_gross or 0.0),
+        "order_total_discount": float(a.order_total_discount or 0.0),
+        "xml_total_discount": float(a.xml_total_discount or 0.0),
+        "order_total_net": float(a.order_total_net or 0.0),
+        "xml_total_products_net": float(a.xml_total_products_net or 0.0),
+        "xml_total_nf": float(a.xml_total_nf or 0.0),
+        "xml_frete": float(a.xml_frete or 0.0),
+        "xml_ipi_st_outros": float(a.xml_ipi_st_outros or 0.0),
+        "diagnostic_status": a.diagnostic_status,
+        "matched_ok_count": a.matched_ok_count,
+        "divergent_items_count": a.divergent_items_count,
+        "diff_cover_count": a.diff_cover_count,
+        "diff_discount_count": a.diff_discount_count,
+        "diff_qty_count": a.diff_qty_count,
+        "extra_in_xml_count": a.extra_in_xml_count,
+        "missing_in_xml_count": a.missing_in_xml_count,
+        "header_warnings": a.header_warnings or [],
+        "decision_status": a.decision_status,
+        "decision_label": XML_DECISION_LABELS.get(a.decision_status, a.decision_status),
+        "decision_notes": a.decision_notes,
+        "uploaded_by_name": a.uploaded_by_name,
+        "decided_by_name": a.decided_by_name,
+        "decided_at": _fmt_dt(a.decided_at),
+        "created_at": _fmt_dt(a.created_at),
+        "updated_at": _fmt_dt(a.updated_at),
+    }
+
+
+def _auto_locate_order_for_xml(
+    db: Session,
+    seller_id: int,
+    parsed_xml: Dict[str, Any],
+    branch_id: Optional[int] = None,
+) -> Optional[HorusPurchaseOrder]:
+    """
+    Quando o comprador sobe o XML sem selecionar o pedido manualmente, tenta localizar com segurança:
+      1º Pelo número do pedido em <xPed> no XML cruzando com horus_cod_pedido.
+      2º Pelos pedidos ativos (AP / AE / AC) do fornecedor (CNPJ raiz) na filial destinatária,
+         escolhendo o pedido com maior interseção de ISBNs.
+    """
+    q_base = db.query(HorusPurchaseOrder).filter(
+        HorusPurchaseOrder.company_id == seller_id,
+        HorusPurchaseOrder.horus_status.in_(["AP", "AE", "AC"]),
+    )
+    if branch_id is not None:
+        q_base = q_base.filter(HorusPurchaseOrder.branch_id == int(branch_id))
+
+    xped_digits = _clean_digits(parsed_xml.get("xml_xped"))
+    if xped_digits and len(xped_digits) <= 9:
+        cand = q_base.filter(HorusPurchaseOrder.horus_cod_pedido == int(xped_digits)).first()
+        if cand:
+            return cand
+
+    emit_cnpj = _clean_digits(parsed_xml.get("emit_cnpj"))
+    dest_cnpj = _clean_digits(parsed_xml.get("dest_cnpj"))
+    candidates = q_base.order_by(HorusPurchaseOrder.created_at.desc()).limit(60).all()
+    if not candidates:
+        return None
+
+    xml_eans = {_normalize_gtin_isbn(it.get("ean")) for it in parsed_xml["items"] if _normalize_gtin_isbn(it.get("ean"))}
+    best_order: Optional[HorusPurchaseOrder] = None
+    best_score = 0
+
+    for ord_c in candidates:
+        score = 0
+        ord_sup_cnpj = _clean_digits(ord_c.cnpj_fornecedor)
+        ord_br_cnpj = _clean_digits(ord_c.branch_cnpj)
+        if dest_cnpj and ord_br_cnpj and dest_cnpj != ord_br_cnpj:
+            continue
+        if emit_cnpj and ord_sup_cnpj:
+            if emit_cnpj == ord_sup_cnpj:
+                score += 20
+            elif emit_cnpj[:8] == ord_sup_cnpj[:8]:
+                score += 10
+            else:
+                continue
+
+        ord_isbns = {_normalize_gtin_isbn(i.isbn) for i in ord_c.items if _normalize_gtin_isbn(i.isbn)}
+        overlap = len(xml_eans.intersection(ord_isbns))
+        if overlap > 0:
+            score += overlap * 5
+        if score > best_score and overlap > 0:
+            best_score = score
+            best_order = ord_c
+
+    return best_order
+
+
+@router.post("/xml-audits/analyze")
+async def analyze_supplier_xml_against_order(
+    file: UploadFile = File(...),
+    order_id: Optional[int] = Form(None),
+    branch_id: Optional[int] = Form(None),
+    auto_accept_if_ok: bool = Form(True),
+    advance_horus_to_ae: bool = Form(False),
+    company_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Recebe o arquivo XML da NF-e do fornecedor (máx. 10 MB), cruza com o Pedido de Compra:
+      - Se 100% batendo (Preço de Capa, Desconto %, Quantidade, sem itens extras/faltantes) e auto_accept_if_ok=True:
+        aceita automaticamente o XML e muda o status do pedido para 'XML_OK' ('XML OK').
+      - Caso haja qualquer divergência (ou auto_accept_if_ok=False):
+        registra cada divergência identificada na Central de Análise de XML como 'PENDING_REVIEW'
+        ('Em Análise') para decisão posterior (Aceitar OK, Aceitar com Divergência ou Recusar XML).
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    uid, uname, _ = _user_meta(current_user)
+
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".xml"):
+        raise HTTPException(status_code=400, detail="Envie um arquivo com extensão .xml (NF-e modelo 55).")
+
+    raw_bytes = await file.read(MAX_PURCHASE_XML_BYTES + 1)
+    if len(raw_bytes) > MAX_PURCHASE_XML_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="O arquivo XML excede o limite máximo permitido de 10 MB para este tipo de envio.",
+        )
+
+    parsed_xml = _parse_supplier_nfe_xml(raw_bytes)
+
+    order: Optional[HorusPurchaseOrder] = None
+    if order_id is not None and int(order_id) > 0:
+        order = (
+            db.query(HorusPurchaseOrder)
+            .filter(HorusPurchaseOrder.id == int(order_id), HorusPurchaseOrder.company_id == seller_id)
+            .first()
+        )
+        if not order:
+            raise HTTPException(status_code=404, detail="Pedido de compra selecionado não foi encontrado.")
+    else:
+        order = _auto_locate_order_for_xml(db, seller_id, parsed_xml, branch_id)
+        if not order:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Não foi possível vincular automaticamente a NF-e nº {parsed_xml['numero_nf']} "
+                    f"({parsed_xml['emit_nome'] or parsed_xml['emit_cnpj']}) a um pedido aberto. "
+                    "Selecione o Pedido de Compra correspondente antes de analisar o XML."
+                ),
+            )
+
+    comp = _compare_xml_with_purchase_order(order, parsed_xml)
+
+    # Salva cópia física isolada por seller em uploads/<company_id>/purchase_xmls/ (Regra 1 AGENTS.md)
+    xml_rel_path: Optional[str] = None
+    try:
+        seller_xml_dir = UPLOADS_ROOT / str(seller_id) / "purchase_xmls"
+        seller_xml_dir.mkdir(parents=True, exist_ok=True)
+        safe_key = re.sub(r"[^A-Za-z0-9_-]", "", parsed_xml.get("chave_acesso") or f"NF{parsed_xml['numero_nf']}")[:50]
+        target_name = f"ped_{order.horus_cod_pedido or order.id}_{safe_key}.xml"
+        full_file = seller_xml_dir / target_name
+        full_file.write_bytes(raw_bytes)
+        xml_rel_path = f"uploads/{seller_id}/purchase_xmls/{target_name}"
+    except Exception as io_err:
+        log.warning(f"[HorusPurchases] Aviso ao persistir XML em uploads/{seller_id}/purchase_xmls: {io_err}")
+
+    is_100_ok = comp["diagnostic_status"] == "MATCH_100"
+    now_utc = datetime.utcnow()
+
+    if is_100_ok and auto_accept_if_ok:
+        initial_decision = "XML_OK"
+        decided_uid = uid
+        decided_uname = uname
+        decided_dt = now_utc
+        auto_note = (
+            f"XML da NF-e nº {parsed_xml['numero_nf']} conferido 100% sem divergências "
+            "(Preço de Capa, Desconto % e Quantidade idênticos ao Pedido). Aceito automaticamente como XML OK."
+        )
+    else:
+        initial_decision = "PENDING_REVIEW"
+        decided_uid = None
+        decided_uname = None
+        decided_dt = None
+        auto_note = None
+
+    audit = HorusPurchaseXmlAudit(
+        company_id=seller_id,
+        order_id=order.id,
+        branch_id=order.branch_id,
+        branch_name=order.branch_name,
+        horus_cod_pedido=order.horus_cod_pedido,
+        chave_acesso=parsed_xml["chave_acesso"],
+        numero_nf=parsed_xml["numero_nf"],
+        serie_nf=parsed_xml["serie_nf"],
+        data_emissao=parsed_xml["data_emissao"],
+        nat_op=parsed_xml["nat_op"],
+        emit_cnpj=parsed_xml["emit_cnpj"],
+        emit_nome=parsed_xml["emit_nome"],
+        dest_cnpj=parsed_xml["dest_cnpj"],
+        dest_nome=parsed_xml["dest_nome"],
+        xml_xped=parsed_xml["xml_xped"],
+        xml_file_path=xml_rel_path,
+        xml_content=parsed_xml["xml_text"],
+        order_total_qty=int(order.total_quantity or 0),
+        xml_total_qty=comp["xml_total_qty"],
+        order_total_gross=order.total_gross or Decimal("0.00"),
+        xml_total_gross=parsed_xml["tot_vprod"],
+        order_total_discount=order.total_discount or Decimal("0.00"),
+        xml_total_discount=parsed_xml["tot_vdesc"],
+        order_total_net=order.total_net or Decimal("0.00"),
+        xml_total_products_net=comp["xml_total_products_net"],
+        xml_total_nf=parsed_xml["tot_vnf"],
+        xml_frete=parsed_xml["tot_vfrete"],
+        xml_ipi_st_outros=parsed_xml["tot_ipi_st_outros"],
+        diagnostic_status=comp["diagnostic_status"],
+        matched_ok_count=comp["matched_ok_count"],
+        divergent_items_count=comp["divergent_items_count"],
+        diff_cover_count=comp["diff_cover_count"],
+        diff_discount_count=comp["diff_discount_count"],
+        diff_qty_count=comp["diff_qty_count"],
+        extra_in_xml_count=comp["extra_in_xml_count"],
+        missing_in_xml_count=comp["missing_in_xml_count"],
+        header_warnings=comp["header_warnings"],
+        decision_status=initial_decision,
+        decision_notes=auto_note,
+        uploaded_by_user_id=uid,
+        uploaded_by_name=uname,
+        decided_by_user_id=decided_uid,
+        decided_by_name=decided_uname,
+        decided_at=decided_dt,
+    )
+    db.add(audit)
+    db.flush()
+
+    for ln in comp["lines"]:
+        db.add(HorusPurchaseXmlAuditItem(
+            audit_id=audit.id,
+            order_item_id=ln["order_item_id"],
+            xml_n_item=ln["xml_n_item"],
+            cod_item=ln["cod_item"],
+            isbn=ln["isbn"][:30] if ln["isbn"] else None,
+            xml_ean=ln["xml_ean"][:30] if ln["xml_ean"] else None,
+            xml_cprod=ln["xml_cprod"][:60] if ln["xml_cprod"] else None,
+            title=ln["title"][:255],
+            nome_editora=ln["nome_editora"][:150] if ln["nome_editora"] else None,
+            cfop=ln["cfop"][:10] if ln["cfop"] else None,
+            order_qty=ln["order_qty"],
+            order_cover_price=ln["order_cover_price"],
+            order_discount_pct=ln["order_discount_pct"],
+            order_unit_net=ln["order_unit_net"],
+            order_subtotal_net=ln["order_subtotal_net"],
+            xml_qty=ln["xml_qty"],
+            xml_cover_price=ln["xml_cover_price"],
+            xml_discount_pct=ln["xml_discount_pct"],
+            xml_effective_discount_pct=ln["xml_effective_discount_pct"],
+            xml_unit_net=ln["xml_unit_net"],
+            xml_subtotal_net=ln["xml_subtotal_net"],
+            line_status=ln["line_status"],
+            has_qty_diff=ln["has_qty_diff"],
+            has_cover_diff=ln["has_cover_diff"],
+            has_discount_diff=ln["has_discount_diff"],
+            is_extra_in_xml=ln["is_extra_in_xml"],
+            is_missing_in_xml=ln["is_missing_in_xml"],
+            divergence_tags=ln["divergence_tags"],
+            divergence_summary=ln["divergence_summary"][:500] if ln["divergence_summary"] else None,
+        ))
+
+    # Se solicitado e XML aprovado (XML_OK), avança também no Horus de AP para AE caso ainda esteja AP
+    if initial_decision == "XML_OK" and advance_horus_to_ae and order.horus_status == "AP":
+        _transition_order_status_in_horus_and_cronuz(
+            db=db,
+            seller_id=seller_id,
+            order=order,
+            new_horus_status="AE",
+            current_user=current_user,
+            notes=f"Pedido avançado de AP para AE no Horus após conferência 100% da NF-e nº {parsed_xml['numero_nf']}.",
+        )
+
+    old_order_status = order.status
+    new_order_status = XML_DECISION_TO_ORDER_STATUS[initial_decision]
+    order.status = new_order_status
+    order.xml_status = initial_decision
+    order.last_xml_audit_id = audit.id
+    order.last_nfe_number = parsed_xml["numero_nf"]
+    order.last_nfe_series = parsed_xml["serie_nf"]
+    order.last_nfe_key = parsed_xml["chave_acesso"]
+    order.xml_checked_at = now_utc
+    order.xml_checked_by_name = uname
+    order.updated_by_user_id = uid
+    order.updated_by_name = uname
+
+    db.add(HorusPurchaseOrderLog(
+        order_id=order.id,
+        action="XML_ACCEPTED_OK" if initial_decision == "XML_OK" else "XML_UPLOADED_DIVERGENT",
+        old_status=old_order_status,
+        new_status=new_order_status,
+        old_horus_status=order.horus_status,
+        new_horus_status=order.horus_status,
+        details=(
+            f"NF-e nº {parsed_xml['numero_nf']} analisada contra Pedido #{order.horus_cod_pedido}: "
+            + (
+                "100% compatível -> Status alterado para XML OK."
+                if initial_decision == "XML_OK"
+                else (
+                    f"{comp['divergent_items_count']} item(ns) com divergência "
+                    f"(Capa: {comp['diff_cover_count']}, Desconto: {comp['diff_discount_count']}, "
+                    f"Qtd: {comp['diff_qty_count']}, Extras: {comp['extra_in_xml_count']}, "
+                    f"Faltantes: {comp['missing_in_xml_count']}) -> Enviada para Análise Posterior."
+                )
+            )
+        ),
+        extra_meta={"audit_id": audit.id, "chave_acesso": parsed_xml["chave_acesso"]},
+        user_id=uid,
+        user_name=uname,
+    ))
+
+    db.commit()
+    db.refresh(audit)
+
+    return {
+        "success": True,
+        "audit": _serialize_xml_audit_summary(audit, order),
+        "message": (
+            f"XML da NF-e nº {parsed_xml['numero_nf']} 100% compatível com o Pedido #{order.horus_cod_pedido}! Status atualizado para XML OK."
+            if initial_decision == "XML_OK"
+            else (
+                f"NF-e nº {parsed_xml['numero_nf']} analisada com {comp['divergent_items_count']} divergência(s) pontuada(s). "
+                "Verifique os itens na tela de Análise para Aceitar c/ Divergência, Recusar ou Validar."
+            )
+        ),
+    }
+
+
+@router.get("/xml-audits")
+def list_horus_purchase_xml_audits(
+    branch_id: Optional[int] = Query(None),
+    decision_status: Optional[str] = Query(None),
+    diagnostic_status: Optional[str] = Query(None),
+    divergence_type: Optional[str] = Query(None),  # ALL, COVER, DISCOUNT, QTY, EXTRA, MISSING
+    search: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=300),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+
+    base_q = db.query(HorusPurchaseXmlAudit).filter(HorusPurchaseXmlAudit.company_id == seller_id)
+    if branch_id is not None:
+        base_q = base_q.filter(HorusPurchaseXmlAudit.branch_id == int(branch_id))
+
+    # Contadores executivos da filial selecionada (para cabeçalho e abas de filtro rápido)
+    all_for_kpi = base_q.all()
+    kpis = {
+        "total": len(all_for_kpi),
+        "pending_review": sum(1 for x in all_for_kpi if x.decision_status == "PENDING_REVIEW"),
+        "xml_ok": sum(1 for x in all_for_kpi if x.decision_status == "XML_OK"),
+        "accepted_with_divergence": sum(1 for x in all_for_kpi if x.decision_status == "ACCEPTED_WITH_DIVERGENCE"),
+        "rejected": sum(1 for x in all_for_kpi if x.decision_status == "REJECTED"),
+        "has_divergence": sum(1 for x in all_for_kpi if x.diagnostic_status == "HAS_DIVERGENCE"),
+    }
+
+    q = base_q
+    if decision_status and decision_status.upper() != "ALL":
+        q = q.filter(HorusPurchaseXmlAudit.decision_status == decision_status.upper())
+    if diagnostic_status and diagnostic_status.upper() != "ALL":
+        q = q.filter(HorusPurchaseXmlAudit.diagnostic_status == diagnostic_status.upper())
+    if divergence_type and divergence_type.upper() != "ALL":
+        dt_up = divergence_type.upper()
+        if dt_up == "COVER":
+            q = q.filter(HorusPurchaseXmlAudit.diff_cover_count > 0)
+        elif dt_up == "DISCOUNT":
+            q = q.filter(HorusPurchaseXmlAudit.diff_discount_count > 0)
+        elif dt_up == "QTY":
+            q = q.filter(HorusPurchaseXmlAudit.diff_qty_count > 0)
+        elif dt_up == "EXTRA":
+            q = q.filter(HorusPurchaseXmlAudit.extra_in_xml_count > 0)
+        elif dt_up == "MISSING":
+            q = q.filter(HorusPurchaseXmlAudit.missing_in_xml_count > 0)
+
+    if search and search.strip():
+        s_clean = search.strip()
+        term = f"%{s_clean}%"
+        if s_clean.isdigit() and len(s_clean) <= 9:
+            q = q.filter(
+                (HorusPurchaseXmlAudit.numero_nf.ilike(term))
+                | (HorusPurchaseXmlAudit.horus_cod_pedido == int(s_clean))
+                | (HorusPurchaseXmlAudit.emit_cnpj.ilike(term))
+            )
+        else:
+            q = q.filter(
+                (HorusPurchaseXmlAudit.numero_nf.ilike(term))
+                | (HorusPurchaseXmlAudit.chave_acesso.ilike(term))
+                | (HorusPurchaseXmlAudit.emit_nome.ilike(term))
+                | (HorusPurchaseXmlAudit.emit_cnpj.ilike(term))
+            )
+
+    audits = q.order_by(HorusPurchaseXmlAudit.created_at.desc()).limit(limit).all()
+    return {
+        "kpis": kpis,
+        "audits": [_serialize_xml_audit_summary(a) for a in audits],
+    }
+
+
+@router.get("/xml-audits/{audit_id}")
+def get_horus_purchase_xml_audit_detail(
+    audit_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    seller_id = _resolve_seller_id(current_user, company_id)
+    audit = (
+        db.query(HorusPurchaseXmlAudit)
+        .filter(HorusPurchaseXmlAudit.id == int(audit_id), HorusPurchaseXmlAudit.company_id == seller_id)
+        .first()
+    )
+    if not audit:
+        raise HTTPException(status_code=404, detail="Registro de auditoria de XML não encontrado.")
+
+    return {
+        "audit": _serialize_xml_audit_summary(audit),
+        "items": [
+            {
+                "id": it.id,
+                "order_item_id": it.order_item_id,
+                "xml_n_item": it.xml_n_item,
+                "cod_item": it.cod_item,
+                "isbn": it.isbn,
+                "xml_ean": it.xml_ean,
+                "xml_cprod": it.xml_cprod,
+                "title": it.title,
+                "nome_editora": it.nome_editora,
+                "cfop": it.cfop,
+                "order_qty": it.order_qty,
+                "order_cover_price": float(it.order_cover_price or 0.0),
+                "order_discount_pct": float(it.order_discount_pct or 0.0),
+                "order_unit_net": float(it.order_unit_net or 0.0),
+                "order_subtotal_net": float(it.order_subtotal_net or 0.0),
+                "xml_qty": it.xml_qty,
+                "xml_cover_price": float(it.xml_cover_price or 0.0),
+                "xml_discount_pct": float(it.xml_discount_pct or 0.0),
+                "xml_effective_discount_pct": float(it.xml_effective_discount_pct or 0.0),
+                "xml_unit_net": float(it.xml_unit_net or 0.0),
+                "xml_subtotal_net": float(it.xml_subtotal_net or 0.0),
+                "line_status": it.line_status,
+                "has_qty_diff": it.has_qty_diff,
+                "has_cover_diff": it.has_cover_diff,
+                "has_discount_diff": it.has_discount_diff,
+                "is_extra_in_xml": it.is_extra_in_xml,
+                "is_missing_in_xml": it.is_missing_in_xml,
+                "divergence_tags": it.divergence_tags or [],
+                "divergence_summary": it.divergence_summary,
+                "item_note": it.item_note,
+            }
+            for it in audit.audit_items
+        ],
+        "order_logs": [
+            {
+                "id": lg.id,
+                "action": lg.action,
+                "old_status": lg.old_status,
+                "new_status": lg.new_status,
+                "old_horus_status": lg.old_horus_status,
+                "new_horus_status": lg.new_horus_status,
+                "details": lg.details,
+                "user_name": lg.user_name,
+                "created_at": _fmt_dt(lg.created_at),
+            }
+            for lg in (audit.order.logs if audit.order else [])
+        ],
+    }
+
+
+@router.patch("/xml-audits/{audit_id}/decision")
+def decide_horus_purchase_xml_audit(
+    audit_id: int,
+    payload: XmlAuditDecisionPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Executa a Análise Posterior / Decisão Formal sobre o XML da NF-e:
+      - XML_OK: Aceitar OK (muda pedido para XML OK)
+      - ACCEPTED_WITH_DIVERGENCE: Aceitar com Divergência (exige justificativa/pontuação obrigatória)
+      - REJECTED: Recusar XML (exige motivo da recusa obrigatório)
+      - PENDING_REVIEW: Reabrir para análise
+    Salva também pontuações específicas por item (item_notes) e registra histórico completo de auditoria.
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    uid, uname, _ = _user_meta(current_user)
+
+    target_dec = (payload.decision_status or "").strip().upper()
+    if target_dec not in ("XML_OK", "ACCEPTED_WITH_DIVERGENCE", "REJECTED", "PENDING_REVIEW"):
+        raise HTTPException(status_code=400, detail="Status de decisão de XML inválido.")
+
+    audit = (
+        db.query(HorusPurchaseXmlAudit)
+        .filter(HorusPurchaseXmlAudit.id == int(audit_id), HorusPurchaseXmlAudit.company_id == seller_id)
+        .first()
+    )
+    if not audit:
+        raise HTTPException(status_code=404, detail="Auditoria de XML não encontrada.")
+
+    notes_clean = (payload.decision_notes or "").strip()
+    if target_dec in ("ACCEPTED_WITH_DIVERGENCE", "REJECTED") and len(notes_clean) < 5:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Informe a observação/pontuação obrigatória justificando o "
+                + ("Aceite com Divergência." if target_dec == "ACCEPTED_WITH_DIVERGENCE" else "Motivo da Recusa do XML.")
+            ),
+        )
+    if target_dec == "XML_OK" and audit.diagnostic_status == "HAS_DIVERGENCE" and len(notes_clean) < 5:
+        raise HTTPException(
+            status_code=400,
+            detail="Esta NF-e possui divergências apontadas. Use 'Aceitar com Divergência' ou pontue a justificativa para marcar como XML OK.",
+        )
+
+    if payload.item_notes:
+        notes_by_item_id = {int(k): str(v or "").strip()[:500] for k, v in payload.item_notes.items() if str(k).isdigit()}
+        for ait in audit.audit_items:
+            if ait.id in notes_by_item_id:
+                ait.item_note = notes_by_item_id[ait.id] or None
+
+    now_utc = datetime.utcnow()
+    audit.decision_status = target_dec
+    audit.decision_notes = notes_clean or audit.decision_notes
+    audit.decided_by_user_id = uid
+    audit.decided_by_name = uname
+    audit.decided_at = now_utc
+
+    order = audit.order
+    if order:
+        if payload.advance_horus_to_ae and target_dec in ("XML_OK", "ACCEPTED_WITH_DIVERGENCE") and order.horus_status == "AP":
+            _transition_order_status_in_horus_and_cronuz(
+                db=db,
+                seller_id=seller_id,
+                order=order,
+                new_horus_status="AE",
+                current_user=current_user,
+                notes=f"Pedido avançado de AP para AE no Horus na aprovação do XML da NF-e nº {audit.numero_nf}.",
+            )
+
+        old_st = order.status
+        new_st = XML_DECISION_TO_ORDER_STATUS[target_dec]
+        order.xml_status = target_dec
+        order.last_xml_audit_id = audit.id
+        order.last_nfe_number = audit.numero_nf
+        order.last_nfe_series = audit.serie_nf
+        order.last_nfe_key = audit.chave_acesso
+        order.xml_checked_at = now_utc
+        order.xml_checked_by_name = uname
+        if order.horus_status not in ("EE", "FE", "CA"):
+            order.status = new_st
+        order.updated_by_user_id = uid
+        order.updated_by_name = uname
+
+        db.add(HorusPurchaseOrderLog(
+            order_id=order.id,
+            action=f"XML_DECISION_{target_dec}",
+            old_status=old_st,
+            new_status=order.status,
+            old_horus_status=order.horus_status,
+            new_horus_status=order.horus_status,
+            details=(
+                f"Decisão sobre NF-e nº {audit.numero_nf}: {XML_DECISION_LABELS.get(target_dec, target_dec)}"
+                + (f" — Pontuação: {notes_clean}" if notes_clean else "")
+            ),
+            extra_meta={"audit_id": audit.id, "decision_status": target_dec},
+            user_id=uid,
+            user_name=uname,
+        ))
+
+    db.commit()
+    db.refresh(audit)
+
+    return {
+        "success": True,
+        "audit": _serialize_xml_audit_summary(audit, order),
+        "message": f"Decisão '{XML_DECISION_LABELS.get(target_dec, target_dec)}' registrada com sucesso para a NF-e nº {audit.numero_nf}!",
+    }
+
+
+@router.get("/xml-audits/{audit_id}/export-excel")
+def export_horus_purchase_xml_audit_excel(
+    audit_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Exporta planilha executiva (.xlsx) da Auditoria do XML vs Pedido de Compra com todas as divergências
+    (Preço de Capa, Desconto %, Quantidade, Extras e Faltantes) e pontuações destacadas por cor.
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    audit = (
+        db.query(HorusPurchaseXmlAudit)
+        .filter(HorusPurchaseXmlAudit.id == int(audit_id), HorusPurchaseXmlAudit.company_id == seller_id)
+        .first()
+    )
+    if not audit:
+        raise HTTPException(status_code=404, detail="Auditoria de XML não encontrada.")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = f"Auditoria_NF_{audit.numero_nf}"[:31]
+
+    thin = Side(style="thin", color="CBD5E1")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    ws.merge_cells("A1:N1")
+    ws["A1"] = (
+        f"AUDITORIA DE XML NF-e Nº {audit.numero_nf} vs PEDIDO HORUS #{audit.horus_cod_pedido or audit.order_id} "
+        f"— {XML_DECISION_LABELS.get(audit.decision_status, audit.decision_status).upper()}"
+    )
+    ws["A1"].font = Font(size=12, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill(start_color="0F172A", end_color="0F172A", fill_type="solid")
+    ws["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 26
+
+    ws.append([
+        "Filial:", audit.branch_name or "-",
+        "Fornecedor NF:", f"{audit.emit_nome or '-'} ({audit.emit_cnpj or '-'})",
+        "Chave NF-e:", audit.chave_acesso or "-",
+        "Emissão NF:", (audit.data_emissao or "-")[:19],
+    ])
+    ws.append([
+        "Qtd Pedido / XML:", f"{audit.order_total_qty} / {audit.xml_total_qty}",
+        "Líquido Pedido / XML:", f"R$ {float(audit.order_total_net or 0):.2f} / R$ {float(audit.xml_total_products_net or 0):.2f}",
+        "Divergências:", (
+            f"Itens Div: {audit.divergent_items_count} (Capa: {audit.diff_cover_count} | "
+            f"Desc: {audit.diff_discount_count} | Qtd: {audit.diff_qty_count} | "
+            f"Extras: {audit.extra_in_xml_count} | Faltas: {audit.missing_in_xml_count})"
+        ),
+        "Decidido por:", f"{audit.decided_by_name or 'Pendente'} ({_fmt_dt(audit.decided_at) or '-'})",
+    ])
+    if audit.decision_notes:
+        ws.append(["Pontuação / Parecer:", audit.decision_notes])
+    ws.append([])
+
+    headers = [
+        "Situação",
+        "ISBN / EAN",
+        "Cód. Horus",
+        "Título",
+        "Editora",
+        "Qtd Pedido",
+        "Qtd XML",
+        "Capa Pedido (R$)",
+        "Capa XML (R$)",
+        "Desc. Pedido (%)",
+        "Desc. XML (%)",
+        "Líq. Unit. Pedido",
+        "Líq. Unit. XML",
+        "Divergências Identificadas / Pontuação",
+    ]
+    ws.append(headers)
+    h_row = ws.max_row
+    for c_i in range(1, len(headers) + 1):
+        cell = ws.cell(row=h_row, column=c_i)
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.fill = PatternFill(start_color="1E293B", end_color="1E293B", fill_type="solid")
+        cell.border = border_all
+    ws.row_dimensions[h_row].height = 22
+
+    ok_fill = PatternFill(start_color="ECFDF5", end_color="ECFDF5", fill_type="solid")
+    div_fill = PatternFill(start_color="FEF3C7", end_color="FEF3C7", fill_type="solid")
+
+    for it in audit.audit_items:
+        note_suffix = f" | Nota Comprador: {it.item_note}" if it.item_note else ""
+        ws.append([
+            "OK" if it.line_status == "OK" else "DIVERGENTE",
+            it.isbn or it.xml_ean or "",
+            it.cod_item or "-",
+            it.title,
+            it.nome_editora or "-",
+            int(it.order_qty or 0),
+            int(it.xml_qty or 0),
+            float(it.order_cover_price or 0.0),
+            float(it.xml_cover_price or 0.0),
+            float(it.order_discount_pct or 0.0),
+            float(it.xml_discount_pct or 0.0),
+            float(it.order_unit_net or 0.0),
+            float(it.xml_unit_net or 0.0),
+            (it.divergence_summary or "") + note_suffix,
+        ])
+        r_i = ws.max_row
+        row_fill = ok_fill if it.line_status == "OK" else div_fill
+        for c_i in range(1, len(headers) + 1):
+            c_obj = ws.cell(row=r_i, column=c_i)
+            c_obj.border = border_all
+            if c_i in (1, 14) or it.line_status != "OK":
+                c_obj.fill = row_fill
+        for money_col in (8, 9, 12, 13):
+            ws.cell(row=r_i, column=money_col).number_format = "R$ #,##0.00"
+        for pct_col in (10, 11):
+            ws.cell(row=r_i, column=pct_col).number_format = "0.00\"%\""
+
+    widths = [14, 17, 12, 42, 22, 12, 12, 16, 16, 15, 15, 16, 16, 56]
+    for idx_w, w_val in enumerate(widths, start=1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(idx_w)].width = w_val
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    fname = f"Auditoria_XML_NF{audit.numero_nf}_Pedido_{audit.horus_cod_pedido or audit.order_id}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+

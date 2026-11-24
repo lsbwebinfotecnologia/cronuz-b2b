@@ -516,6 +516,8 @@ def update_horus_sql_features(
             or payload.horus_sql_feature_compras is True
         ):
             perms_to_add.append("horus_sql")
+        if payload.horus_sql_feature_analise_itens is True:
+            perms_to_add.append("horus_analise_itens")
         if payload.horus_sql_feature_dbm is True:
             perms_to_add.extend(["horus_sql", "dbm"])
         if perms_to_add:

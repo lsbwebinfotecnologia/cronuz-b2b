@@ -595,6 +595,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     const targetIndex = settingsIndex !== -1 ? settingsIndex : filteredSellerNavigation.length;
     const hasRestricted = user?.type === 'SELLER' && Array.isArray(user?.allowed_modules) && user.allowed_modules.length > 0;
     const canHorusSql = !hasRestricted || user?.allowed_modules?.includes('horus_sql') || user?.allowed_modules?.includes('logistics');
+    const canAnaliseItens = !hasRestricted || user?.allowed_modules?.includes('horus_analise_itens') || user?.allowed_modules?.includes('horus_sql') || user?.allowed_modules?.includes('logistics');
     const canDbm = !hasRestricted || user?.allowed_modules?.includes('dbm') || user?.allowed_modules?.includes('horus_sql');
     const subItems: { name: string; href: string; icon?: any }[] = [];
     if (horusSqlPedidos && canHorusSql) {
@@ -607,7 +608,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
     if (horusSqlConciliadorPadrao && canHorusSql) {
       subItems.push({ name: 'Conciliador (Modelos)', href: '/horus-direct/conciliador-padrao', icon: Layers });
     }
-    if (horusSqlAnaliseItens && canHorusSql) {
+    if (horusSqlAnaliseItens && canAnaliseItens) {
       subItems.push({ name: 'Análise Itens', href: '/horus-direct/analise-itens', icon: BarChart3 });
     }
     if (horusSqlCompras && canHorusSql) {
@@ -806,7 +807,7 @@ export function Sidebar({ isMobileOpen = false, onCloseMobile }: SidebarProps) {
         if (nav.name === 'Propostas' || nav.href === '/proposals') return userAllowedModules.includes('proposals');
         if (nav.name === 'Configurações' || nav.href === '/settings') return userAllowedModules.includes('settings');
         if (nav.name === 'Dropship' || nav.href.startsWith('/orders/dropship')) return userAllowedModules.includes('dropship');
-        if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct') || nav.name === 'DBM' || nav.href.startsWith('/dbm')) return userAllowedModules.includes('horus_sql') || userAllowedModules.includes('dbm') || userAllowedModules.includes('logistics');
+        if (nav.name === 'Horus Direct' || nav.href.startsWith('/horus-direct') || nav.name === 'DBM' || nav.href.startsWith('/dbm')) return userAllowedModules.includes('horus_analise_itens') || userAllowedModules.includes('horus_sql') || userAllowedModules.includes('dbm') || userAllowedModules.includes('logistics');
         if (nav.name === 'Assinaturas' || nav.href === '/subscriptions') return userAllowedModules.includes('subscriptions');
         if (nav.name === 'Notificações' || nav.href === '/notifications') return userAllowedModules.includes('notifications');
         if (nav.name === 'Autores' || nav.href === '/authors') return userAllowedModules.includes('authors') || userAllowedModules.includes('products');

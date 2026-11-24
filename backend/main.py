@@ -229,6 +229,13 @@ try:
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS stock_alert_threshold INTEGER NOT NULL DEFAULT 0"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_analise_itens BOOLEAN NOT NULL DEFAULT FALSE"))
         _conn.execute(_sql_text("ALTER TABLE cmp_settings ADD COLUMN IF NOT EXISTS horus_sql_feature_compras BOOLEAN NOT NULL DEFAULT FALSE"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS xml_status VARCHAR(40) NOT NULL DEFAULT 'NONE'"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS last_xml_audit_id INTEGER"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS last_nfe_number VARCHAR(30)"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS last_nfe_series VARCHAR(10)"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS last_nfe_key VARCHAR(60)"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS xml_checked_at TIMESTAMP"))
+        _conn.execute(_sql_text("ALTER TABLE pur_horus_order ADD COLUMN IF NOT EXISTS xml_checked_by_name VARCHAR(150)"))
 except Exception as _ddl_err:
     _main_logger.warning("Auto-DDL warning: %s", _ddl_err)
 
