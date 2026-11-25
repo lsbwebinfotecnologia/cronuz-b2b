@@ -570,7 +570,46 @@ export default function ConciliadorPadraoPage() {
       );
       if (res.ok) {
         const data = await res.json();
-        setHorusOptions(data);
+        const cp = data?.cpagar_options || {};
+        setHorusOptions({
+          bank_accounts: Array.isArray(data?.bank_accounts) ? data.bank_accounts : [],
+          payment_forms: Array.isArray(data?.payment_forms) ? data.payment_forms : [],
+          departamentos: Array.isArray(data?.departamentos)
+            ? data.departamentos
+            : Array.isArray(cp?.departamentos)
+            ? cp.departamentos
+            : [],
+          centros_custo: Array.isArray(data?.centros_custo)
+            ? data.centros_custo
+            : Array.isArray(cp?.centros_custo)
+            ? cp.centros_custo
+            : [],
+          grupos_despesa: Array.isArray(data?.grupos_despesa)
+            ? data.grupos_despesa
+            : Array.isArray(cp?.grupos_despesa)
+            ? cp.grupos_despesa
+            : [],
+          despesas: Array.isArray(data?.despesas)
+            ? data.despesas
+            : Array.isArray(cp?.despesas)
+            ? cp.despesas
+            : [],
+          grupos_fornecedor: Array.isArray(data?.grupos_fornecedor)
+            ? data.grupos_fornecedor
+            : Array.isArray(cp?.grupos_fornecedor)
+            ? cp.grupos_fornecedor
+            : [],
+          fornecedores: Array.isArray(data?.fornecedores)
+            ? data.fornecedores
+            : Array.isArray(cp?.fornecedores)
+            ? cp.fornecedores
+            : [],
+          recent_tariff_presets: Array.isArray(data?.recent_tariff_presets)
+            ? data.recent_tariff_presets
+            : Array.isArray(cp?.recent_tariff_presets)
+            ? cp.recent_tariff_presets
+            : [],
+        });
       }
     } catch {
       // silencioso
@@ -2438,7 +2477,7 @@ export default function ConciliadorPadraoPage() {
                     </div>
 
                     {/* Seletores em Tempo Real do Horus */}
-                    {horusOptions && horusOptions.bank_accounts.length > 0 && (
+                    {horusOptions && (horusOptions.bank_accounts?.length ?? 0) > 0 && (
                       <div className="space-y-2 pb-1">
                         <div>
                           <label className="text-[10px] font-bold text-indigo-700 dark:text-indigo-300 block mb-0.5">
@@ -2460,13 +2499,13 @@ export default function ConciliadorPadraoPage() {
                             className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-[11px] font-bold"
                           >
                             <option value="">-- Escolha uma Conta Corrente no Horus --</option>
-                            {horusOptions.bank_accounts.map((acc, idx) => (
+                            {(horusOptions.bank_accounts || []).map((acc: any, idx: number) => (
                               <option
                                 key={`${acc.cod_banco}-${acc.cod_agencia}-${acc.cod_contac}-${idx}`}
                                 value={`${acc.cod_banco}|${acc.cod_agencia}|${acc.cod_contac}`}
                               >
-                                Banco {acc.cod_banco} ({acc.nom_banco}) • Ag {acc.cod_agencia} • CC{' '}
-                                {acc.cod_contac} ({acc.nro_contac}-{acc.dig_contac})
+                                Banco {acc.cod_banco} ({acc.nom_banco || acc.nome_banco}) • Ag {acc.cod_agencia} • CC{' '}
+                                {acc.cod_contac} ({acc.nro_contac || acc.num_cc}{acc.dig_contac ? `-${acc.dig_contac}` : ''})
                               </option>
                             ))}
                           </select>
@@ -2490,9 +2529,9 @@ export default function ConciliadorPadraoPage() {
                             className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1.5 text-[11px] font-bold"
                           >
                             <option value="">-- Escolha uma Forma de Pagto (FORMA_PAGTO) --</option>
-                            {horusOptions.payment_forms.map((fp) => (
+                            {(horusOptions.payment_forms || []).map((fp: any) => (
                               <option key={fp.cod_forma} value={String(fp.cod_forma)}>
-                                {fp.cod_forma} - {fp.desc_forma}
+                                {fp.cod_forma} - {fp.desc_forma || fp.nom_forma}
                               </option>
                             ))}
                           </select>
@@ -2846,7 +2885,7 @@ export default function ConciliadorPadraoPage() {
                                     Buscar
                                   </button>
                                 </div>
-                                {horusOptions && horusOptions.fornecedores.length > 0 && (
+                                {horusOptions && (horusOptions.fornecedores?.length ?? 0) > 0 && (
                                   <select
                                     value={
                                       builderForm.cp_cod_grp_fornecedor &&
@@ -2858,7 +2897,7 @@ export default function ConciliadorPadraoPage() {
                                       const val = e.target.value;
                                       if (!val) return;
                                       const [grp, cod] = val.split('|');
-                                      const found = horusOptions.fornecedores.find(
+                                      const found = (horusOptions.fornecedores || []).find(
                                         (f) =>
                                           String(f.cod_grp_fornecedor) === grp &&
                                           String(f.cod_fornecedor) === cod
@@ -2874,7 +2913,7 @@ export default function ConciliadorPadraoPage() {
                                     className="w-full rounded-lg border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
                                   >
                                     <option value="">-- Selecione o Fornecedor --</option>
-                                    {horusOptions.fornecedores.map((f) => (
+                                    {(horusOptions.fornecedores || []).map((f) => (
                                       <option
                                         key={`${f.cod_grp_fornecedor}-${f.cod_fornecedor}`}
                                         value={`${f.cod_grp_fornecedor}|${f.cod_fornecedor}`}
@@ -2919,7 +2958,7 @@ export default function ConciliadorPadraoPage() {
                                   <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
                                     Departamento *
                                   </label>
-                                  {horusOptions && horusOptions.departamentos.length > 0 ? (
+                                  {horusOptions && (horusOptions.departamentos?.length ?? 0) > 0 ? (
                                     <select
                                       value={builderForm.cp_cod_departamento}
                                       onChange={(e) =>
@@ -2931,12 +2970,12 @@ export default function ConciliadorPadraoPage() {
                                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
                                     >
                                       <option value="">-- Depto --</option>
-                                      {horusOptions.departamentos.map((d) => (
+                                      {(horusOptions.departamentos || []).map((d: any) => (
                                         <option
                                           key={d.cod_departamento}
                                           value={String(d.cod_departamento)}
                                         >
-                                          {d.cod_departamento} - {d.desc_departamento}
+                                          {d.cod_departamento} - {d.desc_departamento || d.nom_departamento}
                                         </option>
                                       ))}
                                     </select>
@@ -2960,12 +2999,12 @@ export default function ConciliadorPadraoPage() {
                                   <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
                                     Centro de Custo *
                                   </label>
-                                  {horusOptions && horusOptions.centros_custo.length > 0 ? (
+                                  {horusOptions && (horusOptions.centros_custo?.length ?? 0) > 0 ? (
                                     <select
                                       value={builderForm.cp_cod_centro_custo}
                                       onChange={(e) => {
                                         const val = e.target.value;
-                                        const ccObj = horusOptions.centros_custo.find(
+                                        const ccObj = (horusOptions.centros_custo || []).find(
                                           (c) =>
                                             String(c.cod_centro_custo) === val &&
                                             (!builderForm.cp_cod_departamento ||
@@ -2983,19 +3022,19 @@ export default function ConciliadorPadraoPage() {
                                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
                                     >
                                       <option value="">-- Centro Custo --</option>
-                                      {horusOptions.centros_custo
+                                      {(horusOptions.centros_custo || [])
                                         .filter(
                                           (c) =>
                                             !builderForm.cp_cod_departamento ||
                                             String(c.cod_departamento) ===
                                               builderForm.cp_cod_departamento
                                         )
-                                        .map((c) => (
+                                        .map((c: any) => (
                                           <option
                                             key={`${c.cod_departamento}-${c.cod_centro_custo}`}
                                             value={String(c.cod_centro_custo)}
                                           >
-                                            {c.cod_centro_custo} - {c.desc_centro_custo}
+                                            {c.cod_centro_custo} - {c.desc_centro_custo || c.nom_centro_custo}
                                           </option>
                                         ))}
                                     </select>
@@ -3022,7 +3061,7 @@ export default function ConciliadorPadraoPage() {
                                   <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
                                     Grupo de Despesa *
                                   </label>
-                                  {horusOptions && horusOptions.grupos_despesa.length > 0 ? (
+                                  {horusOptions && (horusOptions.grupos_despesa?.length ?? 0) > 0 ? (
                                     <select
                                       value={builderForm.cp_cod_grup_desp}
                                       onChange={(e) =>
@@ -3034,12 +3073,12 @@ export default function ConciliadorPadraoPage() {
                                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
                                     >
                                       <option value="">-- Grupo Desp --</option>
-                                      {horusOptions.grupos_despesa.map((g) => (
+                                      {(horusOptions.grupos_despesa || []).map((g: any) => (
                                         <option
                                           key={g.cod_grup_desp}
                                           value={String(g.cod_grup_desp)}
                                         >
-                                          {g.cod_grup_desp} - {g.desc_grup_desp}
+                                          {g.cod_grup_desp} - {g.desc_grup_desp || g.nom_grup_desp}
                                         </option>
                                       ))}
                                     </select>
@@ -3063,12 +3102,12 @@ export default function ConciliadorPadraoPage() {
                                   <label className="text-[10px] font-bold text-slate-700 dark:text-slate-300 block mb-0.5">
                                     Despesa (Taxa/Tarifa) *
                                   </label>
-                                  {horusOptions && horusOptions.despesas.length > 0 ? (
+                                  {horusOptions && (horusOptions.despesas?.length ?? 0) > 0 ? (
                                     <select
                                       value={builderForm.cp_cod_despesa}
                                       onChange={(e) => {
                                         const val = e.target.value;
-                                        const dObj = horusOptions.despesas.find(
+                                        const dObj = (horusOptions.despesas || []).find(
                                           (d) =>
                                             String(d.cod_despesa) === val &&
                                             (!builderForm.cp_cod_grup_desp ||
@@ -3086,19 +3125,19 @@ export default function ConciliadorPadraoPage() {
                                       className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold"
                                     >
                                       <option value="">-- Despesa --</option>
-                                      {horusOptions.despesas
+                                      {(horusOptions.despesas || [])
                                         .filter(
                                           (d) =>
                                             !builderForm.cp_cod_grup_desp ||
                                             String(d.cod_grup_desp) ===
                                               builderForm.cp_cod_grup_desp
                                         )
-                                        .map((d) => (
+                                        .map((d: any) => (
                                           <option
                                             key={`${d.cod_grup_desp}-${d.cod_despesa}`}
                                             value={String(d.cod_despesa)}
                                           >
-                                            {d.cod_despesa} - {d.desc_despesa}
+                                            {d.cod_despesa} - {d.desc_despesa || d.nom_despesa}
                                           </option>
                                         ))}
                                     </select>

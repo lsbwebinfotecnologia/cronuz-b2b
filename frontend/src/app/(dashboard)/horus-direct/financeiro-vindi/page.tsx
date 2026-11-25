@@ -570,7 +570,46 @@ export default function FinanceiroVindiPage() {
         );
         if (res.ok) {
           const data = await res.json();
-          setHorusOptions(data);
+          const cp = data?.cpagar_options || {};
+          setHorusOptions({
+            bank_accounts: Array.isArray(data?.bank_accounts) ? data.bank_accounts : [],
+            payment_forms: Array.isArray(data?.payment_forms) ? data.payment_forms : [],
+            departamentos: Array.isArray(data?.departamentos)
+              ? data.departamentos
+              : Array.isArray(cp?.departamentos)
+              ? cp.departamentos
+              : [],
+            centros_custo: Array.isArray(data?.centros_custo)
+              ? data.centros_custo
+              : Array.isArray(cp?.centros_custo)
+              ? cp.centros_custo
+              : [],
+            grupos_despesa: Array.isArray(data?.grupos_despesa)
+              ? data.grupos_despesa
+              : Array.isArray(cp?.grupos_despesa)
+              ? cp.grupos_despesa
+              : [],
+            despesas: Array.isArray(data?.despesas)
+              ? data.despesas
+              : Array.isArray(cp?.despesas)
+              ? cp.despesas
+              : [],
+            grupos_fornecedor: Array.isArray(data?.grupos_fornecedor)
+              ? data.grupos_fornecedor
+              : Array.isArray(cp?.grupos_fornecedor)
+              ? cp.grupos_fornecedor
+              : [],
+            fornecedores: Array.isArray(data?.fornecedores)
+              ? data.fornecedores
+              : Array.isArray(cp?.fornecedores)
+              ? cp.fornecedores
+              : [],
+            recent_tariff_presets: Array.isArray(data?.recent_tariff_presets)
+              ? data.recent_tariff_presets
+              : Array.isArray(cp?.recent_tariff_presets)
+              ? cp.recent_tariff_presets
+              : [],
+          });
         }
       } catch {
         // Silencioso para não bloquear digitação manual se Horus estiver ocupado
@@ -3449,7 +3488,7 @@ export default function FinanceiroVindiPage() {
                   </div>
 
                   {/* Seletor rápido de Conta Bancária do Horus em Tempo Real */}
-                  {horusOptions && horusOptions.bank_accounts.length > 0 && (
+                  {horusOptions && (horusOptions.bank_accounts?.length ?? 0) > 0 && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       <div className="space-y-1">
                         <label className="font-bold text-indigo-700 dark:text-indigo-300 block text-[11px]">
@@ -3471,13 +3510,13 @@ export default function FinanceiroVindiPage() {
                           className="w-full rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
                           <option value="">-- Escolha uma Conta Corrente no Horus --</option>
-                          {horusOptions.bank_accounts.map((acc, idx) => (
+                          {(horusOptions.bank_accounts || []).map((acc: any, idx: number) => (
                             <option
                               key={`${acc.cod_banco}-${acc.cod_agencia}-${acc.cod_contac}-${idx}`}
                               value={`${acc.cod_banco}|${acc.cod_agencia}|${acc.cod_contac}`}
                             >
-                              Banco {acc.cod_banco} ({acc.nom_banco}) • Ag {acc.cod_agencia} • CC{' '}
-                              {acc.cod_contac} ({acc.nro_contac}-{acc.dig_contac})
+                              Banco {acc.cod_banco} ({acc.nom_banco || acc.nome_banco}) • Ag {acc.cod_agencia} • CC{' '}
+                              {acc.cod_contac} ({acc.nro_contac || acc.num_cc}{acc.dig_contac ? `-${acc.dig_contac}` : ''})
                             </option>
                           ))}
                         </select>
@@ -3501,9 +3540,9 @@ export default function FinanceiroVindiPage() {
                           className="w-full rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
                           <option value="">-- Escolha uma Forma de Pagto (FORMA_PAGTO) --</option>
-                          {horusOptions.payment_forms.map((fp) => (
+                          {(horusOptions.payment_forms || []).map((fp: any) => (
                             <option key={fp.cod_forma} value={String(fp.cod_forma)}>
-                              {fp.cod_forma} - {fp.desc_forma}
+                              {fp.cod_forma} - {fp.desc_forma || fp.nom_forma}
                             </option>
                           ))}
                         </select>
@@ -3819,7 +3858,7 @@ export default function FinanceiroVindiPage() {
                           Buscar
                         </button>
                       </div>
-                      {horusOptions && horusOptions.fornecedores.length > 0 && (
+                      {horusOptions && (horusOptions.fornecedores?.length ?? 0) > 0 && (
                         <select
                           value={
                             bankForm.cp_cod_grp_fornecedor && bankForm.cp_cod_fornecedor
@@ -3830,7 +3869,7 @@ export default function FinanceiroVindiPage() {
                             const val = e.target.value;
                             if (!val) return;
                             const [grp, cod] = val.split('|');
-                            const found = horusOptions.fornecedores.find(
+                            const found = (horusOptions.fornecedores || []).find(
                               (f) =>
                                 String(f.cod_grp_fornecedor) === grp &&
                                 String(f.cod_fornecedor) === cod
@@ -3845,9 +3884,9 @@ export default function FinanceiroVindiPage() {
                           className="w-full mt-1 rounded-xl border border-indigo-300 dark:border-indigo-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                         >
                           <option value="">
-                            -- Selecione o Fornecedor ({horusOptions.fornecedores.length} encontrados) --
+                            -- Selecione o Fornecedor ({(horusOptions.fornecedores || []).length} encontrados) --
                           </option>
-                          {horusOptions.fornecedores.map((f) => (
+                          {(horusOptions.fornecedores || []).map((f) => (
                             <option
                               key={`${f.cod_grp_fornecedor}-${f.cod_fornecedor}`}
                               value={`${f.cod_grp_fornecedor}|${f.cod_fornecedor}`}
@@ -3901,7 +3940,7 @@ export default function FinanceiroVindiPage() {
                         Departamento (DEPARTAMENTOS_GERAL) *
                       </label>
                       <div className="flex gap-1.5">
-                        {horusOptions && horusOptions.departamentos.length > 0 && (
+                        {horusOptions && (horusOptions.departamentos?.length ?? 0) > 0 && (
                           <select
                             value={bankForm.cp_cod_departamento}
                             onChange={(e) =>
@@ -3913,9 +3952,9 @@ export default function FinanceiroVindiPage() {
                             className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                           >
                             <option value="">-- Selecione o Departamento --</option>
-                            {horusOptions.departamentos.map((d) => (
+                            {(horusOptions.departamentos || []).map((d: any) => (
                               <option key={d.cod_departamento} value={String(d.cod_departamento)}>
-                                {d.cod_departamento} - {d.desc_departamento}
+                                {d.cod_departamento} - {d.desc_departamento || d.nom_departamento}
                               </option>
                             ))}
                           </select>
@@ -3941,12 +3980,12 @@ export default function FinanceiroVindiPage() {
                         Centro de Custo (CENTRO_CUSTOS_GERAL) *
                       </label>
                       <div className="flex gap-1.5">
-                        {horusOptions && horusOptions.centros_custo.length > 0 && (
+                        {horusOptions && (horusOptions.centros_custo?.length ?? 0) > 0 && (
                           <select
                             value={bankForm.cp_cod_centro_custo}
                             onChange={(e) => {
                               const val = e.target.value;
-                              const ccObj = horusOptions.centros_custo.find(
+                              const ccObj = (horusOptions.centros_custo || []).find(
                                 (c) =>
                                   String(c.cod_centro_custo) === val &&
                                   (!bankForm.cp_cod_departamento ||
@@ -3963,19 +4002,19 @@ export default function FinanceiroVindiPage() {
                             className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                           >
                             <option value="">-- Selecione o Centro de Custo --</option>
-                            {horusOptions.centros_custo
+                            {(horusOptions.centros_custo || [])
                               .filter(
                                 (c) =>
                                   !bankForm.cp_cod_departamento ||
                                   String(c.cod_departamento) === bankForm.cp_cod_departamento
                               )
-                              .map((c) => (
+                              .map((c: any) => (
                                 <option
                                   key={`${c.cod_departamento}-${c.cod_centro_custo}`}
                                   value={String(c.cod_centro_custo)}
                                 >
                                   [Depto {c.cod_departamento}] {c.cod_centro_custo} -{' '}
-                                  {c.desc_centro_custo}
+                                  {c.desc_centro_custo || c.nom_centro_custo}
                                 </option>
                               ))}
                           </select>
@@ -4001,7 +4040,7 @@ export default function FinanceiroVindiPage() {
                         Grupo de Despesa (DESPESAGRP_GERAL) *
                       </label>
                       <div className="flex gap-1.5">
-                        {horusOptions && horusOptions.grupos_despesa.length > 0 && (
+                        {horusOptions && (horusOptions.grupos_despesa?.length ?? 0) > 0 && (
                           <select
                             value={bankForm.cp_cod_grup_desp}
                             onChange={(e) =>
@@ -4013,9 +4052,9 @@ export default function FinanceiroVindiPage() {
                             className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                           >
                             <option value="">-- Selecione o Grupo de Despesa --</option>
-                            {horusOptions.grupos_despesa.map((g) => (
+                            {(horusOptions.grupos_despesa || []).map((g: any) => (
                               <option key={g.cod_grup_desp} value={String(g.cod_grup_desp)}>
-                                {g.cod_grup_desp} - {g.desc_grup_desp}
+                                {g.cod_grup_desp} - {g.desc_grup_desp || g.nom_grup_desp}
                               </option>
                             ))}
                           </select>
@@ -4041,12 +4080,12 @@ export default function FinanceiroVindiPage() {
                         Despesa (DESPESAS_GERAL) *
                       </label>
                       <div className="flex gap-1.5">
-                        {horusOptions && horusOptions.despesas.length > 0 && (
+                        {horusOptions && (horusOptions.despesas?.length ?? 0) > 0 && (
                           <select
                             value={bankForm.cp_cod_despesa}
                             onChange={(e) => {
                               const val = e.target.value;
-                              const dObj = horusOptions.despesas.find(
+                              const dObj = (horusOptions.despesas || []).find(
                                 (d) =>
                                   String(d.cod_despesa) === val &&
                                   (!bankForm.cp_cod_grup_desp ||
@@ -4063,18 +4102,18 @@ export default function FinanceiroVindiPage() {
                             className="flex-1 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                           >
                             <option value="">-- Selecione a Despesa --</option>
-                            {horusOptions.despesas
+                            {(horusOptions.despesas || [])
                               .filter(
                                 (d) =>
                                   !bankForm.cp_cod_grup_desp ||
                                   String(d.cod_grup_desp) === bankForm.cp_cod_grup_desp
                               )
-                              .map((d) => (
+                              .map((d: any) => (
                                 <option
                                   key={`${d.cod_grup_desp}-${d.cod_despesa}`}
                                   value={String(d.cod_despesa)}
                                 >
-                                  [Grp {d.cod_grup_desp}] {d.cod_despesa} - {d.desc_despesa}
+                                  [Grp {d.cod_grup_desp}] {d.cod_despesa} - {d.desc_despesa || d.nom_despesa}
                                 </option>
                               ))}
                           </select>

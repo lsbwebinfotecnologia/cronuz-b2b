@@ -511,10 +511,14 @@ def get_horus_reconciliation_options(
                 "cod_filial": str(r.get("COD_FILIAL") or "").strip(),
                 "cod_banco": str(r.get("COD_BANCO") or "").strip(),
                 "nome_banco": str(r.get("NOME_BANCO") or "").strip(),
+                "nom_banco": str(r.get("NOME_BANCO") or "").strip(),
                 "cod_agencia": str(r.get("COD_AGENCIA") or "").strip(),
                 "nome_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
+                "nom_agencia": str(r.get("NOME_AGENCIA") or "").strip(),
                 "cod_contac": str(r.get("COD_CONTAC") or "").strip(),
                 "num_cc": str(r.get("NUM_CC") or "").strip(),
+                "nro_contac": str(r.get("NUM_CC") or "").strip(),
+                "dig_contac": "",
                 "nome_contac": str(r.get("NOME_CONTAC") or "").strip(),
                 "nro_carteira": str(r.get("NRO_CARTEIRA") or "").strip(),
             })
@@ -523,9 +527,11 @@ def get_horus_reconciliation_options(
 
     try:
         for f in sql.query("SELECT COD_FORMA, NOM_FORMA, TIPO_FORMA FROM FORMA_PAGTO WITH (NOLOCK) ORDER BY COD_FORMA"):
+            nom_f = str(f.get("NOM_FORMA") or "").strip()
             payment_forms.append({
                 "cod_forma": str(f.get("COD_FORMA") or "").strip(),
-                "nom_forma": str(f.get("NOM_FORMA") or "").strip(),
+                "nom_forma": nom_f,
+                "desc_forma": nom_f,
                 "tipo_forma_pagto": str(f.get("TIPO_FORMA") or "").strip(),
             })
     except Exception as e:
@@ -533,37 +539,45 @@ def get_horus_reconciliation_options(
 
     try:
         for d in sql.query("SELECT COD_DEPARTAMENTO, NOM_DEPARTAMENTO FROM DEPARTAMENTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO"):
+            nom_d = str(d.get("NOM_DEPARTAMENTO") or "").strip()
             cpagar_options["departamentos"].append({
                 "cod_departamento": str(d.get("COD_DEPARTAMENTO") or "").strip(),
-                "nom_departamento": str(d.get("NOM_DEPARTAMENTO") or "").strip(),
+                "nom_departamento": nom_d,
+                "desc_departamento": nom_d,
             })
     except Exception:
         pass
 
     try:
         for cc in sql.query("SELECT COD_DEPARTAMENTO, COD_CENTRO_CUSTO, NOM_CENTRO_CUSTO FROM CENTRO_CUSTOS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_DEPARTAMENTO, COD_CENTRO_CUSTO"):
+            nom_cc = str(cc.get("NOM_CENTRO_CUSTO") or "").strip()
             cpagar_options["centros_custo"].append({
                 "cod_departamento": str(cc.get("COD_DEPARTAMENTO") or "").strip(),
                 "cod_centro_custo": str(cc.get("COD_CENTRO_CUSTO") or "").strip(),
-                "nom_centro_custo": str(cc.get("NOM_CENTRO_CUSTO") or "").strip(),
+                "nom_centro_custo": nom_cc,
+                "desc_centro_custo": nom_cc,
             })
     except Exception:
         pass
 
     try:
         for gd in sql.query("SELECT COD_GRUP_DESP, NOM_GRUP_DESP FROM DESPESAGRP_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP"):
+            nom_gd = str(gd.get("NOM_GRUP_DESP") or "").strip()
             cpagar_options["grupos_despesa"].append({
                 "cod_grup_desp": str(gd.get("COD_GRUP_DESP") or "").strip(),
-                "nom_grup_desp": str(gd.get("NOM_GRUP_DESP") or "").strip(),
+                "nom_grup_desp": nom_gd,
+                "desc_grup_desp": nom_gd,
             })
     except Exception:
         pass
 
     try:
         for dp in sql.query("SELECT COD_DESPESA, NOM_DESPESA, COD_GRUP_DESP FROM DESPESAS_GERAL WITH (NOLOCK) WHERE ISNULL(STA_ATIVO, 'S') = 'S' ORDER BY COD_GRUP_DESP, COD_DESPESA"):
+            nom_dp = str(dp.get("NOM_DESPESA") or "").strip()
             cpagar_options["despesas"].append({
                 "cod_despesa": str(dp.get("COD_DESPESA") or "").strip(),
-                "nom_despesa": str(dp.get("NOM_DESPESA") or "").strip(),
+                "nom_despesa": nom_dp,
+                "desc_despesa": nom_dp,
                 "cod_grup_desp": str(dp.get("COD_GRUP_DESP") or "").strip(),
             })
     except Exception:
@@ -571,9 +585,11 @@ def get_horus_reconciliation_options(
 
     try:
         for gf in sql.query("SELECT COD_GRP_FORNECEDOR, NOM_GRP_FORNECEDOR FROM GRUPO_FORNECEDORES WITH (NOLOCK) ORDER BY COD_GRP_FORNECEDOR"):
+            nom_gf = str(gf.get("NOM_GRP_FORNECEDOR") or "").strip()
             cpagar_options["grupos_fornecedor"].append({
                 "cod_grp_fornecedor": str(gf.get("COD_GRP_FORNECEDOR") or "").strip(),
-                "nom_grp_fornecedor": str(gf.get("NOM_GRP_FORNECEDOR") or "").strip(),
+                "nom_grp_fornecedor": nom_gf,
+                "desc_grp_fornecedor": nom_gf,
             })
     except Exception:
         pass
@@ -684,6 +700,7 @@ def get_horus_reconciliation_options(
                 ISNULL(cp.COD_FORMA_BAIXA, cp.COD_FORMA)
             ORDER BY ULT_LANCTO DESC
         """):
+            nom_desp_pr = str(pr.get("NOM_DESPESA") or "").strip()
             cpagar_options["recent_tariff_presets"].append({
                 "cod_grp_fornecedor": str(pr.get("COD_GRP_FORNECEDOR") or "").strip(),
                 "cod_fornecedor": str(pr.get("COD_FORNECEDOR") or "").strip(),
@@ -692,7 +709,8 @@ def get_horus_reconciliation_options(
                 "cod_centro_custo": str(pr.get("COD_CENTRO_CUSTO") or "").strip(),
                 "cod_grup_desp": str(pr.get("COD_GRUP_DESP") or "").strip(),
                 "cod_despesa": str(pr.get("COD_DESPESA") or "").strip(),
-                "nom_despesa": str(pr.get("NOM_DESPESA") or "").strip(),
+                "nom_despesa": nom_desp_pr,
+                "desc_despesa": nom_desp_pr,
                 "cod_forma": str(pr.get("COD_FORMA_USADA") or "").strip(),
             })
     except Exception:
@@ -701,6 +719,13 @@ def get_horus_reconciliation_options(
     return {
         "bank_accounts": bank_accounts,
         "payment_forms": payment_forms,
+        "departamentos": cpagar_options["departamentos"],
+        "centros_custo": cpagar_options["centros_custo"],
+        "grupos_despesa": cpagar_options["grupos_despesa"],
+        "despesas": cpagar_options["despesas"],
+        "grupos_fornecedor": cpagar_options["grupos_fornecedor"],
+        "fornecedores": cpagar_options["fornecedores"],
+        "recent_tariff_presets": cpagar_options["recent_tariff_presets"],
         "cpagar_options": cpagar_options,
     }
 
