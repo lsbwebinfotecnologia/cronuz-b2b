@@ -354,12 +354,12 @@ export default function EditorialReportsPage() {
                 <DollarSign className="w-4 h-4 text-emerald-500" />
               </div>
               <div className="text-xl font-extrabold text-slate-900 dark:text-white">
-                R$ {report.kpis.total_realizado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                R$ {Number(report.kpis?.total_realizado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
               </div>
               <div className="text-[11px] text-slate-500 flex items-center justify-between pt-1">
-                <span>Orçado: R$ {report.kpis.total_orcado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                <span className={`font-bold ${report.kpis.desvio_orcamentario_percentual > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                  {report.kpis.desvio_orcamentario_percentual > 0 ? '+' : ''}{report.kpis.desvio_orcamentario_percentual.toFixed(1)}%
+                <span>Orçado: R$ {Number(report.kpis?.total_orcado ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                <span className={`font-bold ${Number(report.kpis?.desvio_orcamentario_percentual ?? 0) > 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
+                  {Number(report.kpis?.desvio_orcamentario_percentual ?? 0) > 0 ? '+' : ''}{Number(report.kpis?.desvio_orcamentario_percentual ?? 0).toFixed(1)}%
                 </span>
               </div>
             </div>
@@ -370,7 +370,7 @@ export default function EditorialReportsPage() {
                 <BookOpen className="w-4 h-4 text-indigo-500" />
               </div>
               <div className="text-xl font-extrabold text-slate-900 dark:text-white">
-                {report.kpis.total_tiragem.toLocaleString('pt-BR')} exemplares
+                {Number(report.kpis?.total_tiragem ?? 0).toLocaleString('pt-BR')} exemplares
               </div>
               <p className="text-[11px] text-slate-400">
                 Soma de todos os projetos ativos & finalizados
@@ -383,7 +383,7 @@ export default function EditorialReportsPage() {
                 <TrendingUp className="w-4 h-4 text-amber-500" />
               </div>
               <div className="text-xl font-extrabold text-amber-600 dark:text-amber-400">
-                R$ {report.kpis.custo_medio_exemplar.toFixed(2)} / un
+                R$ {Number(report.kpis?.custo_medio_exemplar ?? (report.kpis as any)?.custo_medio_por_livro ?? 0).toFixed(2)} / un
               </div>
               <p className="text-[11px] text-slate-400">
                 Média industrial ponderada por tiragem
@@ -396,10 +396,10 @@ export default function EditorialReportsPage() {
                 <Layers className="w-4 h-4 text-violet-500" />
               </div>
               <div className="text-xl font-extrabold text-slate-900 dark:text-white">
-                {report.kpis.active_projects} ativas
+                {Number(report.kpis?.active_projects ?? (report.kpis as any)?.active_count ?? 0)} ativas
               </div>
               <p className="text-[11px] text-slate-400">
-                {report.kpis.completed_projects} concluídas de {report.kpis.total_projects} totais
+                {Number(report.kpis?.completed_projects ?? (report.kpis as any)?.completed_count ?? 0)} concluídas de {Number(report.kpis?.total_projects ?? 0)} totais
               </p>
             </div>
           </div>
@@ -429,39 +429,45 @@ export default function EditorialReportsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {report.stages_bottlenecks.map((st, idx) => (
-                    <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition">
-                      <td className="p-3 font-semibold text-slate-600 dark:text-slate-300">
-                        {st.pipeline_name}
-                      </td>
-                      <td className="p-3 font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: st.stage_color }} />
-                        <span>{st.stage_name}</span>
-                      </td>
-                      <td className="p-3 text-center font-bold text-slate-700 dark:text-slate-300">
-                        {st.projects_count}
-                      </td>
-                      <td className="p-3 text-center text-slate-500">
-                        {st.sla_days} dias
-                      </td>
-                      <td className="p-3 text-center font-bold">
-                        {st.avg_days_in_stage.toFixed(1)} dias
-                      </td>
-                      <td className="p-3 text-right">
-                        {st.is_bottleneck ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 inline-flex items-center gap-1">
-                            <AlertTriangle className="w-3 h-3" />
-                            Gargalo Crítico (+{(st.avg_days_in_stage - st.sla_days).toFixed(1)}d)
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 inline-flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            No Prazo
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                  {(report.stages_bottlenecks || (report as any).bottlenecks || []).map((st: any, idx: number) => {
+                    const avgDays = Number(st.avg_days_in_stage ?? st.average_days_in_stage ?? 0);
+                    const slaDays = Number(st.sla_days ?? 0);
+                    const projCount = Number(st.projects_count ?? st.active_projects ?? 0);
+                    const isBottleneck = Boolean(st.is_bottleneck ?? (slaDays > 0 && avgDays > slaDays));
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition">
+                        <td className="p-3 font-semibold text-slate-600 dark:text-slate-300">
+                          {st.pipeline_name || 'Fluxo Editorial'}
+                        </td>
+                        <td className="p-3 font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: st.stage_color || '#6366f1' }} />
+                          <span>{st.stage_name}</span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-slate-700 dark:text-slate-300">
+                          {projCount}
+                        </td>
+                        <td className="p-3 text-center text-slate-500">
+                          {slaDays} dias
+                        </td>
+                        <td className="p-3 text-center font-bold">
+                          {avgDays.toFixed(1)} dias
+                        </td>
+                        <td className="p-3 text-right">
+                          {isBottleneck ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-rose-50 text-rose-600 dark:bg-rose-950/60 dark:text-rose-400 inline-flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" />
+                              Gargalo Crítico (+{Math.max(0, avgDays - slaDays).toFixed(1)}d)
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-600 dark:bg-emerald-950/60 dark:text-emerald-400 inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              No Prazo
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -479,7 +485,7 @@ export default function EditorialReportsPage() {
               </p>
             </div>
 
-            {report.professionals_ranking.length === 0 ? (
+            {((report.professionals_ranking || (report as any).professionals || []).length === 0) ? (
               <p className="text-xs text-slate-400 py-6 text-center">
                 Nenhum prestador com custos registrados até o momento.
               </p>
@@ -496,22 +502,22 @@ export default function EditorialReportsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {report.professionals_ranking.map((prof, idx) => (
+                    {(report.professionals_ranking || (report as any).professionals || []).map((prof: any, idx: number) => (
                       <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/30 transition">
                         <td className="p-3 font-bold text-slate-900 dark:text-white">
                           {prof.name}
                         </td>
                         <td className="p-3 text-slate-600 dark:text-slate-400">
-                          {prof.specialty.replace('_', ' ')}
+                          {String(prof.specialty || 'GERAL').replace('_', ' ')}
                         </td>
                         <td className="p-3 text-center font-bold text-amber-500">
-                          ★ {prof.rating}.0
+                          ★ {Number(prof.rating ?? 5)}.0
                         </td>
                         <td className="p-3 text-center font-semibold text-slate-700 dark:text-slate-300">
-                          {prof.total_services} tarefas
+                          {Number(prof.total_services ?? prof.projects_count ?? 0)} tarefas
                         </td>
                         <td className="p-3 text-right font-extrabold text-emerald-600 dark:text-emerald-400">
-                          R$ {prof.total_paid.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          R$ {Number(prof.total_paid ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                         </td>
                       </tr>
                     ))}

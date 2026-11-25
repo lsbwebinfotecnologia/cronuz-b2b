@@ -1622,31 +1622,49 @@ def get_executive_editorial_report(
     overdue_count = sum(1 for p in projects if (p.due_date and p.due_date < today and p.status != 'COMPLETED'))
 
     # Custos e Tiragem
-    total_orcado = sum(p.custo_total_orcado for p in projects)
-    total_realizado = sum(p.custo_total_realizado for p in projects)
-    total_tiragem = sum(p.tiragem for p in projects)
+    total_orcado = sum(float(p.custo_total_orcado or 0.0) for p in projects)
+    total_realizado = sum(float(p.custo_total_realizado or 0.0) for p in projects)
+    total_tiragem = sum(int(p.tiragem or 0) for p in projects)
     custo_medio_por_livro = (total_orcado / total_projects) if total_projects > 0 else 0.0
+    custo_medio_exemplar = ((total_realizado or total_orcado) / total_tiragem) if total_tiragem > 0 else 0.0
+    desvio_orcamentario_percentual = (
+        round(((total_realizado - total_orcado) / total_orcado) * 100.0, 2)
+        if total_orcado > 0
+        else 0.0
+    )
 
     # Gargalos de Etapa (SLA médio e estouros)
-    stages = db.query(EditorialStage).filter(EditorialStage.company_id == company_id).all()
+    stages = db.query(EditorialStage).filter(EditorialStage.company_id == company_id).order_by(EditorialStage.pipeline_id, EditorialStage.order_index).all()
     bottlenecks = []
     for s in stages:
         projs_in_stage = [p for p in projects if p.stage_id == s.id and p.status == 'ACTIVE']
-        avg_days = 0
+        avg_days = 0.0
         overdue_in_stage = 0
         if projs_in_stage:
-            days_list = [(datetime.utcnow() - p.stage_entered_at).days for p in projs_in_stage if p.stage_entered_at]
-            avg_days = round(sum(days_list) / len(days_list), 1) if days_list else 0
-            overdue_in_stage = sum(1 for d in days_list if s.sla_days > 0 and d > s.sla_days)
+            days_list = []
+            for p in projs_in_stage:
+                if p.stage_entered_at:
+                    dt_ent = p.stage_entered_at.replace(tzinfo=None) if getattr(p.stage_entered_at, "tzinfo", None) else p.stage_entered_at
+                    days_list.append(max(0, (datetime.utcnow() - dt_ent).days))
+            avg_days = round(sum(days_list) / len(days_list), 1) if days_list else 0.0
+            overdue_in_stage = sum(1 for d in days_list if (s.sla_days or 0) > 0 and d > s.sla_days)
+
+        sla_val = int(s.sla_days or 0)
+        is_bottleneck = bool(sla_val > 0 and (avg_days > sla_val or overdue_in_stage > 0))
+        pipe_name = s.pipeline.name if getattr(s, "pipeline", None) else "Fluxo Principal"
 
         bottlenecks.append({
             "stage_id": s.id,
+            "pipeline_name": pipe_name,
             "stage_name": s.name,
-            "stage_color": s.color,
-            "sla_days": s.sla_days,
+            "stage_color": s.color or "#6366f1",
+            "sla_days": sla_val,
             "active_projects": len(projs_in_stage),
+            "projects_count": len(projs_in_stage),
             "average_days_in_stage": avg_days,
-            "overdue_projects_count": overdue_in_stage
+            "avg_days_in_stage": avg_days,
+            "overdue_projects_count": overdue_in_stage,
+            "is_bottleneck": is_bottleneck,
         })
 
     # Ranking de Prestadores
@@ -1658,28 +1676,40 @@ def get_executive_editorial_report(
             EditorialProjectCost.payment_status == 'PAGO'
         ).scalar() or 0.0
         p_count = db.query(func.count(func.distinct(EditorialProjectCost.project_id))).filter(EditorialProjectCost.professional_id == pr.id).scalar() or 0
+        s_count = db.query(func.count(EditorialProjectCost.id)).filter(EditorialProjectCost.professional_id == pr.id).scalar() or 0
         profs_ranking.append({
             "id": pr.id,
+            "professional_id": pr.id,
             "name": pr.name,
-            "specialty": pr.specialty,
-            "rating": pr.rating,
-            "projects_count": p_count,
+            "specialty": pr.specialty or "GERAL",
+            "rating": int(pr.rating or 5),
+            "projects_count": int(p_count),
+            "total_services": int(s_count or p_count),
             "total_paid": float(paid)
         })
+
+    sorted_bottlenecks = sorted(bottlenecks, key=lambda x: (x["overdue_projects_count"], x["avg_days_in_stage"]), reverse=True)
+    sorted_profs = sorted(profs_ranking, key=lambda x: x["total_paid"], reverse=True)
 
     return {
         "kpis": {
             "total_projects": total_projects,
             "active_count": active_count,
+            "active_projects": active_count,
             "completed_count": completed_count,
+            "completed_projects": completed_count,
             "overdue_count": overdue_count,
             "total_orcado": round(total_orcado, 2),
             "total_realizado": round(total_realizado, 2),
             "total_tiragem": total_tiragem,
-            "custo_medio_por_livro": round(custo_medio_por_livro, 2)
+            "custo_medio_por_livro": round(custo_medio_por_livro, 2),
+            "custo_medio_exemplar": round(custo_medio_exemplar, 2),
+            "desvio_orcamentario_percentual": desvio_orcamentario_percentual,
         },
-        "bottlenecks": sorted(bottlenecks, key=lambda x: x["overdue_projects_count"], reverse=True),
-        "professionals": sorted(profs_ranking, key=lambda x: x["total_paid"], reverse=True)
+        "bottlenecks": sorted_bottlenecks,
+        "stages_bottlenecks": sorted_bottlenecks,
+        "professionals": sorted_profs,
+        "professionals_ranking": sorted_profs,
     }
 
 
