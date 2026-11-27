@@ -189,6 +189,27 @@ const DEFAULT_VISIBLE_COLS: Record<ColumnKey, boolean> = {
   units_per_box: true,
 };
 
+const DEFAULT_COLUMN_WIDTHS: Record<ColumnKey, number> = {
+  cod_horus: 90,
+  isbn: 132,
+  name: 340,
+  brand: 150,
+  subject: 130,
+  situation: 124,
+  base_price: 112,
+  sold_unit_price: 122,
+  cost_price: 114,
+  stock_quantity: 112,
+  min_stock: 108,
+  consignment_stock: 114,
+  consigned_received: 114,
+  sales_365: 104,
+  sales_period: 138,
+  replenishment_suggestion: 122,
+  last_entry: 205,
+  units_per_box: 84,
+};
+
 function formatBrDate(iso?: string | null): string {
   if (!iso) return '—';
   const s = String(iso).slice(0, 10);
@@ -407,6 +428,24 @@ export default function HorusAnaliseItensPage() {
     }
     return DEFAULT_VISIBLE_COLS;
   });
+  const [columnWidths, setColumnWidths] = useState<Record<ColumnKey, number>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const k = `cronuz_analise_itens_widths_${u?.company_id || 'def'}_${u?.id || 'u'}`;
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') {
+            return { ...DEFAULT_COLUMN_WIDTHS, ...parsed };
+          }
+        }
+      } catch {}
+    }
+    return DEFAULT_COLUMN_WIDTHS;
+  });
+  const [resizingColKey, setResizingColKey] = useState<ColumnKey | null>(null);
+  const justResizedRef = useRef<boolean>(false);
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
 
   // Modal de Raio-X por Filial (sincronizado ao vivo pelo ID do produto)
@@ -1093,6 +1132,10 @@ export default function HorusAnaliseItensPage() {
   };
 
   const handleSortColumn = (colKey: ColumnKey) => {
+    if (justResizedRef.current) {
+      justResizedRef.current = false;
+      return;
+    }
     const isText = colKey === 'name' || colKey === 'brand' || colKey === 'subject' || colKey === 'isbn' || colKey === 'situation';
     setSortConfig((prev) => {
       if (!prev || prev.key !== colKey) {
@@ -1133,6 +1176,75 @@ export default function HorusAnaliseItensPage() {
       localStorage.setItem(k, JSON.stringify(newVis));
     }
   };
+
+  const saveColumnWidths = (newWidths: Record<ColumnKey, number>) => {
+    setColumnWidths(newWidths);
+    if (typeof window !== 'undefined') {
+      try {
+        const u = getUser();
+        const k = `cronuz_analise_itens_widths_${u?.company_id || 'def'}_${u?.id || 'u'}`;
+        localStorage.setItem(k, JSON.stringify(newWidths));
+      } catch {}
+    }
+  };
+
+  const startResizeColumn = (colKey: ColumnKey, startClientX: number) => {
+    const initialWidth = columnWidths[colKey] || DEFAULT_COLUMN_WIDTHS[colKey] || 110;
+    setResizingColKey(colKey);
+    justResizedRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    let latestWidth = initialWidth;
+
+    const onMove = (clientX: number) => {
+      const delta = clientX - startClientX;
+      latestWidth = Math.max(58, Math.min(950, Math.round(initialWidth + delta)));
+      setColumnWidths((prev) => ({ ...prev, [colKey]: latestWidth }));
+    };
+
+    const handleMouseMove = (ev: MouseEvent) => onMove(ev.clientX);
+    const handleTouchMove = (ev: TouchEvent) => {
+      if (ev.touches[0]) onMove(ev.touches[0].clientX);
+    };
+
+    const finishResize = () => {
+      setResizingColKey(null);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', finishResize);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', finishResize);
+      setColumnWidths((prev) => {
+        const updated = { ...prev, [colKey]: latestWidth };
+        if (typeof window !== 'undefined') {
+          try {
+            const u = getUser();
+            const k = `cronuz_analise_itens_widths_${u?.company_id || 'def'}_${u?.id || 'u'}`;
+            localStorage.setItem(k, JSON.stringify(updated));
+          } catch {}
+        }
+        return updated;
+      });
+      setTimeout(() => {
+        justResizedRef.current = false;
+      }, 120);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', finishResize);
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', finishResize);
+  };
+
+  const totalTableWidthPx = useMemo(() => {
+    const colsSum = activeVisibleColumns.reduce(
+      (acc, k) => acc + (columnWidths[k] || DEFAULT_COLUMN_WIDTHS[k] || 110),
+      0
+    );
+    return 56 + colsSum + 96;
+  }, [activeVisibleColumns, columnWidths]);
 
   const handleSaveStockAlertThreshold = async (newThreshold: number) => {
     const cleanVal = Math.max(0, Math.floor(Number(newThreshold) || 0));
@@ -2075,10 +2187,23 @@ export default function HorusAnaliseItensPage() {
       {/* GRADE PRINCIPAL DE ALTA DENSIDADE (COM TÍTULO LARGO E ESTOQUE MÍNIMO) */}
       {/* ══════════════════════════════════════════════════════════════════════ */}
       <div ref={tableContainerRef} className="flex-1 overflow-auto bg-white dark:bg-slate-900 relative">
-        <table className="w-full border-collapse text-left table-fixed min-w-[1960px]">
+        <table
+          style={{ width: `${totalTableWidthPx}px`, minWidth: '100%' }}
+          className="border-collapse text-left table-fixed"
+        >
+          <colgroup>
+            <col style={{ width: '56px' }} />
+            {activeVisibleColumns.map((colKey) => (
+              <col
+                key={`col-w-${colKey}`}
+                style={{ width: `${columnWidths[colKey] || DEFAULT_COLUMN_WIDTHS[colKey] || 110}px` }}
+              />
+            ))}
+            <col style={{ width: '96px' }} />
+          </colgroup>
           <thead className="sticky top-0 z-20 bg-slate-100/95 dark:bg-slate-800/95 backdrop-blur-xs border-b border-slate-300 dark:border-slate-700 text-[11px] font-extrabold text-slate-700 dark:text-slate-200 uppercase tracking-wider select-none">
             <tr>
-              <th className="w-14 py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">
+              <th className="py-2 px-1.5 border-r border-slate-200 dark:border-slate-700 text-center">
                 <div className="flex items-center justify-center gap-1">
                   <input
                     type="checkbox"
@@ -2101,57 +2226,73 @@ export default function HorusAnaliseItensPage() {
                 </div>
               </th>
               {activeVisibleColumns.map((colKey) => {
-                const widthClass =
-                  colKey === 'cod_horus'
-                    ? 'w-20'
-                    : colKey === 'isbn'
-                    ? 'w-32'
-                    : colKey === 'name'
-                    ? 'w-80 min-w-[300px]'
-                    : colKey === 'brand'
-                    ? 'w-36'
-                    : colKey === 'subject'
-                    ? 'w-28'
-                    : colKey === 'situation'
-                    ? 'w-28 text-center'
-                    : colKey === 'base_price'
-                    ? 'w-24 text-right'
-                    : colKey === 'sold_unit_price'
-                    ? 'w-24 text-right'
-                    : colKey === 'cost_price'
-                    ? 'w-24 text-right'
-                    : colKey === 'stock_quantity'
-                    ? 'w-28 text-right'
-                    : colKey === 'min_stock'
-                    ? 'w-24 text-right'
-                    : colKey === 'consignment_stock'
-                    ? 'w-24 text-right'
-                    : colKey === 'consigned_received'
-                    ? 'w-24 text-right'
-                    : colKey === 'sales_365'
-                    ? 'w-20 text-right'
-                    : colKey === 'sales_period'
-                    ? 'w-24 text-right'
-                    : colKey === 'replenishment_suggestion'
-                    ? 'w-24 text-right'
-                    : colKey === 'last_entry'
-                    ? 'w-48 text-center'
-                    : 'w-16 text-center';
+                const alignClass =
+                  colKey === 'situation' || colKey === 'last_entry' || colKey === 'units_per_box'
+                    ? 'text-center'
+                    : colKey === 'base_price' ||
+                        colKey === 'sold_unit_price' ||
+                        colKey === 'cost_price' ||
+                        colKey === 'stock_quantity' ||
+                        colKey === 'min_stock' ||
+                        colKey === 'consignment_stock' ||
+                        colKey === 'consigned_received' ||
+                        colKey === 'sales_365' ||
+                        colKey === 'sales_period' ||
+                        colKey === 'replenishment_suggestion'
+                      ? 'text-right'
+                      : '';
+                const isResizingThis = resizingColKey === colKey;
 
                 return (
                   <th
                     key={colKey}
                     onClick={() => handleSortColumn(colKey)}
-                    className={`group ${widthClass} py-2 px-2 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors`}
+                    title={`${getColumnLabel(colKey)} — arraste a borda direita para redimensionar`}
+                    className={`group relative ${alignClass} py-2 pl-2 pr-3 border-r border-slate-200 dark:border-slate-700 cursor-pointer hover:bg-slate-200/70 dark:hover:bg-slate-700/60 transition-colors`}
                   >
-                    <div className="flex items-center justify-between gap-1">
+                    <div className="flex items-center justify-between gap-1 overflow-hidden">
                       <span className="truncate">{getColumnLabel(colKey)}</span>
                       {renderSortIcon(colKey)}
+                    </div>
+
+                    {/* Alça estilo Excel para aumentar/diminuir largura da coluna (duplo clique restaura padrão) */}
+                    <div
+                      role="separator"
+                      aria-orientation="vertical"
+                      title="Arraste para ajustar a largura (duplo clique restaura)"
+                      onClick={(ev) => ev.stopPropagation()}
+                      onDoubleClick={(ev) => {
+                        ev.stopPropagation();
+                        saveColumnWidths({
+                          ...columnWidths,
+                          [colKey]: DEFAULT_COLUMN_WIDTHS[colKey] || 110,
+                        });
+                      }}
+                      onMouseDown={(ev) => {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        startResizeColumn(colKey, ev.clientX);
+                      }}
+                      onTouchStart={(ev) => {
+                        ev.stopPropagation();
+                        if (ev.touches[0]) startResizeColumn(colKey, ev.touches[0].clientX);
+                      }}
+                      className={`absolute top-0 right-0 bottom-0 w-2 cursor-col-resize z-30 flex items-center justify-end group/resizer ${
+                        isResizingThis ? 'bg-indigo-500/30' : 'hover:bg-indigo-500/20'
+                      }`}
+                    >
+                      <span
+                        className={`h-full w-[2px] transition-colors ${
+                          isResizingThis
+                            ? 'bg-indigo-600'
+                            : 'bg-transparent group-hover/resizer:bg-indigo-500'
+                        }`}
+                      />
                     </div>
                   </th>
                 );
               })}
-              <th className="w-24 py-2 px-2 text-center">Filiais</th>
+              <th className="py-2 px-2 text-center">Filiais</th>
             </tr>
           </thead>
 
@@ -3281,11 +3422,12 @@ export default function HorusAnaliseItensPage() {
                   onClick={() => {
                     saveColumnOrder(DEFAULT_COLUMNS);
                     saveVisibleColumns(DEFAULT_VISIBLE_COLS);
+                    saveColumnWidths(DEFAULT_COLUMN_WIDTHS);
                   }}
                   className="inline-flex items-center gap-1 text-xs font-semibold text-slate-500 hover:text-slate-800 cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  Restaurar Padrão
+                  Restaurar Padrão (Ordem e Larguras)
                 </button>
                 <button
                   type="button"

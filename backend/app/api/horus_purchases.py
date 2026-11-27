@@ -106,10 +106,12 @@ HORUS_TO_CRONUZ_STATUS = {
 }
 
 HORUS_STATUS_LABELS = {
-    "AB": "Em Aberto (AB)",
+    "AB": "Em Digitação (AB)",
     "AP": "Aprovado (AP)",
+    "IP": "Aprovado Parcial (IP)",
     "AE": "Aguardando Entrega (AE)",
     "AC": "Em Conferência (AC)",
+    "PT": "Em Conferência (PT)",
     "EE": "Finalizado (EE)",
     "FE": "Finalizado (FE)",
     "CA": "Cancelado (CA)",
@@ -243,6 +245,7 @@ class BranchPurchaseConfigPayload(BaseModel):
     cod_departamento_default: Optional[int] = None
     cod_centro_custo_default: Optional[int] = None
     compra_consig_default: str = "N"
+    gerar_pendencia_default: str = "S"
     email_enabled: bool = False
     sender_name: Optional[str] = None
     sender_email: Optional[str] = None
@@ -307,6 +310,7 @@ class RefreshCartItemsPayload(BaseModel):
 class CreatePurchaseOrderItemInput(BaseModel):
     cod_item: int
     quantity: int = Field(..., gt=0)
+    discount_pct: Optional[float] = Field(None, ge=0, le=100)
 
 
 class CreatePurchaseOrderPayload(BaseModel):
@@ -315,6 +319,8 @@ class CreatePurchaseOrderPayload(BaseModel):
     cod_grp_fornecedor: int
     cod_fornecedor: int
     compra_consig: str = "N"
+    gerar_pendencia: Optional[str] = None
+    initial_horus_status: str = "AP"
     cod_local: Optional[int] = None
     cod_departamento: Optional[int] = None
     cod_centro_custo: Optional[int] = None
@@ -322,10 +328,17 @@ class CreatePurchaseOrderPayload(BaseModel):
     items: List[CreatePurchaseOrderItemInput]
 
 
+class AppendPurchaseOrderItemsPayload(BaseModel):
+    company_id: Optional[int] = None
+    observations: Optional[str] = None
+    items: List[CreatePurchaseOrderItemInput]
+
+
 class ChangePurchaseOrderStatusPayload(BaseModel):
     company_id: Optional[int] = None
-    new_horus_status: str  # 'AE' ou 'CA'
+    new_horus_status: str  # 'AB', 'AP', 'AE' ou 'CA'
     notes: Optional[str] = None
+    reason: Optional[str] = None
 
 
 # ── 1. Filiais e Parametrização Individual por Filial (Opções + E-mail) ──────
@@ -375,6 +388,11 @@ def list_purchase_branches(
                 "cod_departamento_default": cfg.cod_departamento_default if cfg else None,
                 "cod_centro_custo_default": cfg.cod_centro_custo_default if cfg else None,
                 "compra_consig_default": cfg.compra_consig_default if cfg else "N",
+                "gerar_pendencia_default": (
+                    cfg.gerar_pendencia_default
+                    if cfg and getattr(cfg, "gerar_pendencia_default", None) in ("S", "N")
+                    else "S"
+                ),
                 "email_enabled": bool(cfg.email_enabled) if cfg else False,
                 "sender_name": cfg.sender_name if cfg else b["nome"],
                 "sender_email": cfg.sender_email if cfg else "",
@@ -447,6 +465,11 @@ def get_branch_purchase_config(
             "cod_departamento_default": cfg.cod_departamento_default if cfg else None,
             "cod_centro_custo_default": cfg.cod_centro_custo_default if cfg else None,
             "compra_consig_default": cfg.compra_consig_default if cfg else "N",
+            "gerar_pendencia_default": (
+                cfg.gerar_pendencia_default
+                if cfg and getattr(cfg, "gerar_pendencia_default", None) in ("S", "N")
+                else "S"
+            ),
             "email_enabled": bool(cfg.email_enabled) if cfg else False,
             "sender_name": cfg.sender_name if cfg else branch["nome"],
             "sender_email": cfg.sender_email if cfg else "",
@@ -492,6 +515,7 @@ def save_branch_purchase_config(
     cfg.cod_departamento_default = payload.cod_departamento_default
     cfg.cod_centro_custo_default = payload.cod_centro_custo_default
     cfg.compra_consig_default = "S" if str(payload.compra_consig_default or "N").upper() == "S" else "N"
+    cfg.gerar_pendencia_default = "N" if str(payload.gerar_pendencia_default or "S").upper() == "N" else "S"
     cfg.email_enabled = bool(payload.email_enabled)
     cfg.sender_name = (payload.sender_name or "").strip() or None
     cfg.sender_email = (payload.sender_email or "").strip() or None
@@ -1558,8 +1582,9 @@ def _enrich_purchase_items_for_branch_and_supplier(
     items_map: Dict[int, Dict[str, Any]] = {}
 
     cfop_vendas_in = _build_sargable_cfop_in((
-        "5101", "5102", "5108", "5113", "5114", "5115", "5403", "5405",
-        "6101", "6102", "6108", "6113", "6114", "6115", "6403", "6405",
+        "5101", "5102", "5103", "5104", "5107", "5108", "5113", "5114", "5115", "5118", "5119", "5120", "5401", "5403", "5405",
+        "6101", "6102", "6103", "6104", "6107", "6108", "6113", "6114", "6115", "6118", "6119", "6120", "6401", "6403", "6405",
+        "7101", "7102",
     ))
     cfop_ent_in = _build_sargable_cfop_in((
         "1101", "1102", "2101", "2102", "3101", "3102", "1917", "2917", "1113", "2113", "1114", "2114",
@@ -2085,14 +2110,17 @@ def create_horus_purchase_order(
         )
     disc_by_ed = {int(d.cod_editora): Decimal(str(d.desconto_percentual or 0)) for d in disc_rows}
 
-    # Consolida quantidades por cod_item
+    # Consolida quantidades e eventuais descontos customizados por cod_item
     req_qty_by_item: Dict[int, int] = {}
+    req_disc_override_by_item: Dict[int, Decimal] = {}
     for it in payload.items:
         ci = int(it.cod_item)
         qt = int(it.quantity)
         if ci <= 0 or qt <= 0:
             raise HTTPException(status_code=400, detail="Todos os itens devem ter código válido e quantidade maior que zero.")
         req_qty_by_item[ci] = req_qty_by_item.get(ci, 0) + qt
+        if it.discount_pct is not None:
+            req_disc_override_by_item[ci] = Decimal(str(it.discount_pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     sql_ro = HorusSQLClient(db, seller_id)
     enriched_items = _enrich_purchase_items_for_branch_and_supplier(
@@ -2131,7 +2159,7 @@ def create_horus_purchase_order(
             detail=f"Existem itens com Preço de Capa zerado no Horus ({sample_zp}). Regularize antes de gerar o pedido.",
         )
 
-    # Resolve configuração da filial
+    # Resolve configuração da filial (incluindo Gerar Pendência = SIM por padrão)
     branch_cfg = (
         db.query(HorusPurchaseBranchConfig)
         .filter(HorusPurchaseBranchConfig.company_id == seller_id, HorusPurchaseBranchConfig.branch_id == bid)
@@ -2143,6 +2171,16 @@ def create_horus_purchase_order(
         else (branch_cfg.cod_local_default if branch_cfg and branch_cfg.cod_local_default is not None else branch.get("cod_local"))
     )
     eff_compra_consig = "S" if str(payload.compra_consig or "N").upper() == "S" else "N"
+    if payload.gerar_pendencia is not None and str(payload.gerar_pendencia).strip().upper() in ("S", "N"):
+        eff_gerar_pend = str(payload.gerar_pendencia).strip().upper()
+    elif branch_cfg and getattr(branch_cfg, "gerar_pendencia_default", None) in ("S", "N"):
+        eff_gerar_pend = branch_cfg.gerar_pendencia_default
+    else:
+        eff_gerar_pend = "S"
+
+    init_hs = "AB" if str(payload.initial_horus_status or "AP").strip().upper() == "AB" else "AP"
+    init_sta_aprov = "N" if init_hs == "AB" else "S"
+    init_cronuz_status = HORUS_TO_CRONUZ_STATUS.get(init_hs, "APPROVED")
 
     # Cálculos financeiros exatos em Decimal (padrão Horus PEDIDOS_COMPRA + ITENS_PEDIDO_COMPRA)
     prepared_lines = []
@@ -2154,7 +2192,10 @@ def create_horus_purchase_order(
         ci = int(x["cod_item"])
         qty = int(x["quantity"])
         ce = int(x["cod_editora"])
-        disc_pct = disc_by_ed[ce].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        disc_pct = req_disc_override_by_item.get(
+            ci,
+            disc_by_ed[ce].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        )
         cover_dec = Decimal(str(x["vlr_capa"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         unit_net_dec = (cover_dec * (Decimal("100") - disc_pct) / Decimal("100")).quantize(
             Decimal("0.0001"), rounding=ROUND_HALF_UP
@@ -2279,7 +2320,7 @@ def create_horus_purchase_order(
             next_row = cur.fetchone()
             horus_cod_pedido = int(next_row["next_ped"]) if next_row else 1
 
-            # Insere cabeçalho em PEDIDOS_COMPRA com STATUS_PEDIDO_COMPRA = 'AP' (Aprovado)
+            # Insere cabeçalho em PEDIDOS_COMPRA respeitando GERAR_PEND e status inicial (AP ou AB)
             cur.execute(
                 """
                 INSERT INTO PEDIDOS_COMPRA (
@@ -2313,8 +2354,8 @@ def create_horus_purchase_order(
                     %s, %s, %s, %s, %s,
                     'C', 1, %s, %s, GETDATE(),
                     %s, %s, %s, %s, 0,
-                    'S', GETDATE(), 'AP', GETDATE(), %s,
-                    %s, 'N', %s, %s, 'N', 0
+                    %s, GETDATE(), %s, GETDATE(), %s,
+                    %s, %s, %s, %s, 'N', 0
                 )
                 """,
                 (
@@ -2329,9 +2370,12 @@ def create_horus_purchase_order(
                     total_gross,
                     total_discount,
                     avg_disc_pct,
+                    init_sta_aprov,
+                    init_hs,
                     horus_user_upper,
                     eff_compra_consig,
-                    horus_user_upper,
+                    eff_gerar_pend,
+                    horus_user_upper if init_hs == "AP" else None,
                     int(eff_local) if eff_local is not None else None,
                 ),
             )
@@ -2434,8 +2478,9 @@ def create_horus_purchase_order(
         email_fornecedor=sup_email[:255] or None,
         horus_cod_pedido=horus_cod_pedido,
         compra_consig=eff_compra_consig,
-        status="APPROVED",
-        horus_status="AP",
+        gerar_pendencia=eff_gerar_pend,
+        status=init_cronuz_status,
+        horus_status=init_hs,
         total_skus=len(prepared_lines),
         total_quantity=total_qty,
         total_gross=total_gross,
@@ -2469,16 +2514,17 @@ def create_horus_purchase_order(
             consigned_at_order=ln["consigned_received"],
         ))
 
+    pend_lbl = "SIM" if eff_gerar_pend == "S" else "NÃO"
     db.add(HorusPurchaseOrderLog(
         order_id=new_order.id,
-        action="CREATED_AP",
+        action=f"CREATED_{init_hs}",
         old_status=None,
-        new_status="APPROVED",
+        new_status=init_cronuz_status,
         old_horus_status=None,
-        new_horus_status="AP",
+        new_horus_status=init_hs,
         details=(
-            f"Pedido #{horus_cod_pedido} gerado no Horus SQL com status AP (Aprovado) na filial "
-            f"'{branch['nome']}' ({len(prepared_lines)} títulos, {total_qty} exemplares, líquido R$ {total_net})."
+            f"Pedido #{horus_cod_pedido} gerado no Horus SQL com status {init_hs} ({HORUS_STATUS_LABELS.get(init_hs, init_hs)}) "
+            f"e Gerar Pendência={pend_lbl} na filial '{branch['nome']}' ({len(prepared_lines)} títulos, {total_qty} exemplares, líquido R$ {total_net})."
         ),
         user_id=uid,
         user_name=uname,
@@ -2492,12 +2538,142 @@ def create_horus_purchase_order(
         "horus_cod_pedido": horus_cod_pedido,
         "status": new_order.status,
         "horus_status": new_order.horus_status,
+        "gerar_pendencia": new_order.gerar_pendencia,
         "total_skus": new_order.total_skus,
         "total_quantity": new_order.total_quantity,
         "total_gross": float(new_order.total_gross),
         "total_net": float(new_order.total_net),
-        "message": f"Pedido de Compra #{horus_cod_pedido} gerado com sucesso no Horus com status AP (Aprovado)!",
+        "message": f"Pedido de Compra #{horus_cod_pedido} gerado com sucesso no Horus com status {init_hs} ({HORUS_STATUS_LABELS.get(init_hs, init_hs)})!",
     }
+
+
+_HORUS_ORDER_SAFETY_SQL = """
+    SELECT TOP 1
+        RTRIM(LTRIM(ISNULL(PC.STATUS_PEDIDO_COMPRA, ''))) AS live_status,
+        RTRIM(LTRIM(ISNULL(PC.GERAR_PEND, 'S'))) AS gerar_pend,
+        PC.DAT_ENCERRAMENTO AS dat_encerramento,
+        ISNULL(PC.QTD_ITENS_ATENDIDOS, 0) AS hdr_atendidos,
+        (
+            SELECT ISNULL(SUM(ISNULL(IPC.QTD_ATENDIDA, 0)), 0)
+            FROM ITENS_PEDIDO_COMPRA IPC WITH (NOLOCK)
+            WHERE IPC.COD_EMPRESA = PC.COD_EMPRESA
+              AND IPC.COD_FILIAL = PC.COD_FILIAL
+              AND IPC.COD_PEDIDO = PC.COD_PEDIDO
+        ) AS itens_atendidos_sum,
+        (
+            SELECT COUNT(1)
+            FROM DIVERGENCIAS_PEDIDO_COMPRA DPC WITH (NOLOCK)
+            WHERE DPC.COD_EMPRESA = PC.COD_EMPRESA
+              AND DPC.COD_FILIAL = PC.COD_FILIAL
+              AND DPC.COD_PEDIDO = PC.COD_PEDIDO
+        ) AS divergencias_cnt,
+        (
+            SELECT COUNT(1)
+            FROM NF_ENTRADA NE WITH (NOLOCK)
+            WHERE NE.COD_EMPRESA = PC.COD_EMPRESA
+              AND NE.COD_FILIAL = PC.COD_FILIAL
+              AND NE.COD_PEDIDO = PC.COD_PEDIDO
+              AND ISNULL(NE.SIT_NF, '') NOT IN ('C', 'CAN')
+        ) AS nf_entrada_cnt,
+        (
+            SELECT COUNT(1)
+            FROM VINC_NF_EMIT_PED_COMP VN WITH (NOLOCK)
+            WHERE VN.COD_EMPRESA_PED = PC.COD_EMPRESA
+              AND VN.COD_FILIAL_PED = PC.COD_FILIAL
+              AND VN.COD_PEDIDO = PC.COD_PEDIDO
+        ) AS vinc_nf_cnt
+    FROM PEDIDOS_COMPRA PC
+    WHERE PC.COD_EMPRESA = %s AND PC.COD_FILIAL = %s AND PC.COD_PEDIDO = %s
+"""
+
+
+def _evaluate_horus_safety_row(row: Optional[Dict[str, Any]], fallback_status: str = "AP") -> Dict[str, Any]:
+    if not row:
+        return {
+            "exists_in_horus": False,
+            "live_horus_status": fallback_status,
+            "gerar_pendencia": "S",
+            "is_finalized": fallback_status in ("EE", "FE"),
+            "conferred_qty": 0,
+            "divergences_count": 0,
+            "has_conferred_items": False,
+            "linked_nf_count": 0,
+            "has_linked_nf": False,
+            "has_blocking_movement": fallback_status in ("EE", "FE"),
+            "can_modify": fallback_status in ("AB", "AP", "AE"),
+            "can_cancel": fallback_status in ("AB", "AP", "AE"),
+            "can_reopen": fallback_status == "CA",
+            "can_append_items": fallback_status in ("AB", "AP", "AE", "AC", "IP"),
+            "block_reason": (
+                "Pedido finalizado/encerrado (EE) não permite alterações."
+                if fallback_status in ("EE", "FE")
+                else None
+            ),
+        }
+
+    live_st = str(row.get("live_status") or fallback_status).strip().upper()
+    gp = "N" if str(row.get("gerar_pend") or "S").strip().upper() == "N" else "S"
+    is_fin = live_st in ("EE", "FE") or (row.get("dat_encerramento") is not None)
+    conf_qty = max(
+        int(float(row.get("hdr_atendidos") or 0)),
+        int(float(row.get("itens_atendidos_sum") or 0)),
+    )
+    div_cnt = int(row.get("divergencias_cnt") or 0)
+    has_conf = conf_qty > 0 or div_cnt > 0
+    nf_cnt = int(row.get("nf_entrada_cnt") or 0) + int(row.get("vinc_nf_cnt") or 0)
+    has_nf = nf_cnt > 0
+    blocked_mov = is_fin or has_conf or has_nf
+
+    reason: Optional[str] = None
+    if is_fin:
+        reason = "Operação bloqueada: este pedido já está Finalizado/Encerrado (EE) no Horus com movimentação gerada."
+    elif has_nf:
+        reason = (
+            f"Operação bloqueada por segurança: este pedido já possui {nf_cnt} Nota(s) Fiscal(is) de Entrada vinculada(s) no Horus."
+        )
+    elif has_conf:
+        reason = (
+            f"Operação bloqueada por segurança: este pedido já possui itens conferidos/atendidos no Horus "
+            f"({conf_qty} exemplar(es) conferido(s))."
+        )
+    elif live_st not in ("AB", "AP", "AE", "CA"):
+        reason = (
+            f"Pedido com status '{live_st}' ({HORUS_STATUS_LABELS.get(live_st, live_st)}) no Horus não permite edição direta de status."
+        )
+
+    return {
+        "exists_in_horus": True,
+        "live_horus_status": live_st,
+        "gerar_pendencia": gp,
+        "is_finalized": is_fin,
+        "conferred_qty": conf_qty,
+        "divergences_count": div_cnt,
+        "has_conferred_items": has_conf,
+        "linked_nf_count": nf_cnt,
+        "has_linked_nf": has_nf,
+        "has_blocking_movement": blocked_mov,
+        "can_modify": (not blocked_mov) and (live_st in ("AB", "AP", "AE")),
+        "can_cancel": (not blocked_mov) and (live_st in ("AB", "AP", "AE")),
+        "can_reopen": (not blocked_mov) and (live_st == "CA"),
+        "can_append_items": (not blocked_mov) and (live_st in ("AB", "AP", "AE", "AC", "IP")),
+        "block_reason": reason,
+    }
+
+
+def _inspect_order_horus_safety_ro(db: Session, seller_id: int, order: HorusPurchaseOrder) -> Dict[str, Any]:
+    if not order.horus_cod_pedido:
+        return _evaluate_horus_safety_row(None, order.horus_status or "AP")
+    try:
+        sql_client = HorusSQLClient(db, seller_id)
+        rows = sql_client.query(
+            _HORUS_ORDER_SAFETY_SQL,
+            (int(order.cod_empresa), int(order.cod_filial), int(order.horus_cod_pedido)),
+            max_rows=1,
+        )
+        return _evaluate_horus_safety_row(rows[0] if rows else None, order.horus_status or "AP")
+    except Exception as e:
+        log.debug(f"[HorusPurchases] Aviso ao inspecionar segurança do pedido #{order.horus_cod_pedido}: {e}")
+        return _evaluate_horus_safety_row(None, order.horus_status or "AP")
 
 
 def _transition_order_status_in_horus_and_cronuz(
@@ -2509,39 +2685,83 @@ def _transition_order_status_in_horus_and_cronuz(
     notes: Optional[str] = None,
 ) -> None:
     target_hs = _to_upper_horus(new_horus_status, 2)
-    if target_hs not in ("AE", "AP", "CA"):
-        raise HTTPException(status_code=400, detail=f"Status de destino '{target_hs}' inválido para transição.")
+    if target_hs not in ("AB", "AP", "AE", "CA"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Status de destino '{target_hs}' inválido. Permitidos pelo Cronuz: AB (Digitação), AP (Aprovado), AE (Aguardando Entrega) ou CA (Cancelado).",
+        )
 
     uid, uname, horus_user_upper = _user_meta(current_user)
     old_hs = order.horus_status
     old_st = order.status
-    new_st = HORUS_TO_CRONUZ_STATUS.get(target_hs, "AWAITING_DELIVERY")
+    new_st = HORUS_TO_CRONUZ_STATUS.get(target_hs, "APPROVED")
 
     conn = _open_horus_tx_connection(db, seller_id)
     try:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                SELECT TOP 1 RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st
-                FROM PEDIDOS_COMPRA
-                WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
-                """,
+                _HORUS_ORDER_SAFETY_SQL,
                 (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
             )
             cur_row = cur.fetchone()
             if not cur_row:
                 conn.rollback()
-                raise HTTPException(status_code=404, detail=f"Pedido #{order.horus_cod_pedido} não encontrado em PEDIDOS_COMPRA no Horus.")
-            live_st = str(cur_row["st"] or "")
-            if live_st in ("EE", "FE"):
-                conn.rollback()
-                raise HTTPException(status_code=400, detail="Este pedido já consta como Encerrado/Recebido (EE) no Horus e não pode ser alterado.")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Pedido #{order.horus_cod_pedido} não encontrado em PEDIDOS_COMPRA no Horus.",
+                )
 
-            if target_hs == "AE":
+            safety = _evaluate_horus_safety_row(cur_row, old_hs)
+            live_st = safety["live_horus_status"]
+
+            if safety["has_blocking_movement"]:
+                conn.rollback()
+                raise HTTPException(status_code=400, detail=safety["block_reason"])
+
+            if target_hs == "CA":
+                if live_st not in ("AB", "AP", "AE"):
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Somente pedidos com status AB, AP ou AE podem ser cancelados (status atual no Horus: {live_st}).",
+                    )
+            else:
+                if live_st == "CA":
+                    if target_hs not in ("AB", "AP"):
+                        conn.rollback()
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Pedidos cancelados (CA) devem ser reativados primeiro para Digitação (AB) ou Aprovado (AP).",
+                        )
+                elif live_st not in ("AB", "AP", "AE"):
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Somente pedidos em AB, AP ou AE podem ter o status alterado pelo Cronuz (status atual no Horus: {live_st}).",
+                    )
+
+            if target_hs == "AB":
+                cur.execute(
+                    """
+                    UPDATE PEDIDOS_COMPRA
+                    SET STATUS_PEDIDO_COMPRA = 'AB',
+                        STA_APROVACAO = 'N',
+                        DAT_CANCELAMENTO = NULL,
+                        DAT_AE = NULL,
+                        DAT_STATUS = GETDATE(),
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                    """,
+                    (horus_user_upper, order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+            elif target_hs == "AE":
                 cur.execute(
                     """
                     UPDATE PEDIDOS_COMPRA
                     SET STATUS_PEDIDO_COMPRA = 'AE',
+                        STA_APROVACAO = 'S',
+                        DAT_CANCELAMENTO = NULL,
                         DAT_AE = GETDATE(),
                         DAT_STATUS = GETDATE(),
                         DAT_ULT_ATL = GETDATE(),
@@ -2570,6 +2790,8 @@ def _transition_order_status_in_horus_and_cronuz(
                     SET STATUS_PEDIDO_COMPRA = 'AP',
                         STA_APROVACAO = 'S',
                         USU_APROVACAO = %s,
+                        DAT_CANCELAMENTO = NULL,
+                        DAT_AE = NULL,
                         DAT_STATUS = GETDATE(),
                         DAT_ULT_ATL = GETDATE(),
                         NOM_USUARIO = %s
@@ -2597,14 +2819,19 @@ def _transition_order_status_in_horus_and_cronuz(
     order.updated_by_user_id = uid
     order.updated_by_name = uname
 
+    action_code = (
+        "REOPENED_FROM_CA"
+        if old_hs == "CA" and target_hs in ("AB", "AP")
+        else ("ORDER_CANCELLED_CA" if target_hs == "CA" else f"STATUS_CHANGED_{target_hs}")
+    )
     db.add(HorusPurchaseOrderLog(
         order_id=order.id,
-        action=f"STATUS_CHANGED_{target_hs}",
+        action=action_code,
         old_status=old_st,
         new_status=new_st,
         old_horus_status=old_hs,
         new_horus_status=target_hs,
-        details=notes or f"Status alterado de {old_hs} para {target_hs} ({HORUS_STATUS_LABELS.get(target_hs, target_hs)}).",
+        details=notes or f"Status alterado de {old_hs} para {target_hs} ({HORUS_STATUS_LABELS.get(target_hs, target_hs)}) por {uname}.",
         user_id=uid,
         user_name=uname,
     ))
@@ -2614,7 +2841,11 @@ def _transition_order_status_in_horus_and_cronuz(
 
 class UpdatePurchaseOrderPayload(BaseModel):
     company_id: Optional[int] = None
+    cod_grp_fornecedor: Optional[int] = None
+    cod_fornecedor: Optional[int] = None
     compra_consig: Optional[str] = None
+    gerar_pendencia: Optional[str] = None
+    target_horus_status: Optional[str] = None
     observations: Optional[str] = None
     items: List[CreatePurchaseOrderItemInput]
 
@@ -2639,13 +2870,14 @@ def list_horus_purchase_orders(
             db.query(HorusPurchaseOrder)
             .filter(
                 HorusPurchaseOrder.company_id == seller_id,
-                HorusPurchaseOrder.horus_status.notin_(["EE", "FE", "CA"]),
+                HorusPurchaseOrder.horus_status.notin_(["EE", "FE"]),
                 *(
                     [HorusPurchaseOrder.branch_id == int(branch_id)]
                     if branch_id is not None
                     else []
                 ),
             )
+            .order_by(HorusPurchaseOrder.created_at.desc())
             .limit(120)
             .all()
         )
@@ -2662,16 +2894,26 @@ def list_horus_purchase_orders(
                     peds_in = ", ".join(str(int(o.horus_cod_pedido)) for o in o_list)
                     st_rows = sql_client.query(
                         f"""
-                        SELECT COD_PEDIDO AS cod_pedido, RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st
+                        SELECT
+                            COD_PEDIDO AS cod_pedido,
+                            RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st,
+                            RTRIM(LTRIM(ISNULL(GERAR_PEND, 'S'))) AS gp
                         FROM PEDIDOS_COMPRA WITH (NOLOCK)
                         WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO IN ({peds_in})
                         """,
                         (emp, fil),
                         max_rows=len(o_list) + 5,
                     )
-                    live_map = {int(r["cod_pedido"]): str(r["st"] or "") for r in (st_rows or [])}
+                    live_map = {int(r["cod_pedido"]): r for r in (st_rows or [])}
                     for o in o_list:
-                        live_hs = live_map.get(int(o.horus_cod_pedido or 0))
+                        lr = live_map.get(int(o.horus_cod_pedido or 0))
+                        if not lr:
+                            continue
+                        live_hs = str(lr.get("st") or "").strip().upper()
+                        live_gp = "N" if str(lr.get("gp") or "S").strip().upper() == "N" else "S"
+                        if getattr(o, "gerar_pendencia", None) != live_gp:
+                            o.gerar_pendencia = live_gp
+                            changed_any = True
                         if live_hs and live_hs != o.horus_status:
                             old_hs = o.horus_status
                             old_st = o.status
@@ -2710,8 +2952,10 @@ def list_horus_purchase_orders(
     if st_up == "ACTIVE":
         # Por padrão exibe apenas pedidos ativos (oculta Finalizados EE/FE e Cancelados CA)
         q_db = q_db.filter(HorusPurchaseOrder.horus_status.notin_(["EE", "FE", "CA"]))
-    elif st_up == "FINALIZED" or st_up == "EE":
+    elif st_up in ("FINALIZED", "EE"):
         q_db = q_db.filter(HorusPurchaseOrder.horus_status.in_(["EE", "FE"]))
+    elif st_up in ("CANCELLED", "CA"):
+        q_db = q_db.filter(HorusPurchaseOrder.horus_status == "CA")
     elif st_up != "ALL":
         q_db = q_db.filter(
             (HorusPurchaseOrder.status == st_up)
@@ -2751,6 +2995,7 @@ def list_horus_purchase_orders(
                 "email_fornecedor": o.email_fornecedor,
                 "horus_cod_pedido": o.horus_cod_pedido,
                 "compra_consig": o.compra_consig,
+                "gerar_pendencia": getattr(o, "gerar_pendencia", "S") or "S",
                 "status": o.status,
                 "horus_status": o.horus_status,
                 "status_label": HORUS_STATUS_LABELS.get(o.horus_status, o.status),
@@ -2781,17 +3026,71 @@ def list_horus_purchase_orders(
     }
 
 
-@router.put("/orders/{order_id}")
-def update_horus_purchase_order_items(
-    order_id: int,
-    payload: UpdatePurchaseOrderPayload,
+@router.get("/orders/open-candidates")
+def list_open_mergeable_orders_for_supplier(
+    branch_id: int = Query(...),
+    cod_grp_fornecedor: int = Query(...),
+    cod_fornecedor: int = Query(...),
+    company_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Permite editar itens/quantidades, modalidade e observações de um Pedido de Compra
-    enquanto ele ainda estiver com status 'AP' (Aprovado), refletindo atomicamente
-    em PEDIDOS_COMPRA + ITENS_PEDIDO_COMPRA no Horus SQL Server e no Cronuz.
+    Detecta pedidos em aberto (AB), aprovados (AP), aguardando entrega (AE) ou em conferência (AC)
+    do mesmo Fornecedor + Filial que NÃO possuam itens conferidos nem NF vinculada no Horus,
+    permitindo ao comprador escolher acrescentar os novos itens a um pedido existente ou criar novo pedido.
+    """
+    seller_id = _resolve_seller_id(current_user, company_id)
+    rows = (
+        db.query(HorusPurchaseOrder)
+        .filter(
+            HorusPurchaseOrder.company_id == seller_id,
+            HorusPurchaseOrder.branch_id == int(branch_id),
+            HorusPurchaseOrder.cod_grp_fornecedor == int(cod_grp_fornecedor),
+            HorusPurchaseOrder.cod_fornecedor == int(cod_fornecedor),
+            HorusPurchaseOrder.horus_status.notin_(["EE", "FE", "CA"]),
+        )
+        .order_by(HorusPurchaseOrder.created_at.desc())
+        .limit(20)
+        .all()
+    )
+
+    candidates: List[Dict[str, Any]] = []
+    for o in rows:
+        safety = _inspect_order_horus_safety_ro(db, seller_id, o)
+        live_hs = safety["live_horus_status"]
+        if live_hs and live_hs != o.horus_status:
+            o.horus_status = live_hs
+            o.status = HORUS_TO_CRONUZ_STATUS.get(live_hs, o.status)
+        if not safety["can_append_items"]:
+            continue
+        candidates.append({
+            "id": o.id,
+            "horus_cod_pedido": o.horus_cod_pedido,
+            "horus_status": live_hs,
+            "status_label": HORUS_STATUS_LABELS.get(live_hs, live_hs),
+            "compra_consig": o.compra_consig,
+            "gerar_pendencia": getattr(o, "gerar_pendencia", "S") or "S",
+            "total_skus": o.total_skus,
+            "total_quantity": o.total_quantity,
+            "total_net": float(o.total_net or 0.0),
+            "created_at": _fmt_dt(o.created_at),
+            "created_by_name": o.created_by_name,
+        })
+    db.commit()
+    return {"candidates": candidates}
+
+
+@router.post("/orders/{order_id}/append-items")
+def append_items_to_existing_purchase_order(
+    order_id: int,
+    payload: AppendPurchaseOrderItemsPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Acrescenta novos itens (somando quantidades caso o item já exista) a um pedido de compra
+    existente (AB, AP, AE ou AC) que ainda não possua itens conferidos nem NF vinculada no Horus.
     """
     seller_id = _resolve_seller_id(current_user, payload.company_id)
     uid, uname, horus_user_upper = _user_meta(current_user)
@@ -2802,14 +3101,106 @@ def update_horus_purchase_order_items(
         .first()
     )
     if not order:
-        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
-    if order.horus_status not in ("AP", "AB"):
+        raise HTTPException(status_code=404, detail="Pedido de compra destino não encontrado.")
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Informe ao menos 1 item para acrescentar ao pedido.")
+
+    safety_pre = _inspect_order_horus_safety_ro(db, seller_id, order)
+    if not safety_pre["can_append_items"]:
         raise HTTPException(
             status_code=400,
-            detail=f"Somente pedidos em status AP (Aprovado) podem ter itens alterados (status atual: {order.horus_status}).",
+            detail=safety_pre["block_reason"] or "Este pedido não pode receber novos itens no momento.",
         )
-    if not payload.items:
+
+    # Monta mapa mesclado: itens já existentes no pedido + novos itens enviados
+    merged_qty: Dict[int, int] = {}
+    disc_override_map: Dict[int, Decimal] = {}
+    for ex_it in order.items:
+        ci = int(ex_it.cod_item)
+        merged_qty[ci] = merged_qty.get(ci, 0) + int(ex_it.quantity or 0)
+        if ex_it.discount_pct is not None:
+            disc_override_map[ci] = Decimal(str(ex_it.discount_pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    added_skus_count = 0
+    added_units_count = 0
+    for inp in payload.items:
+        ci = int(inp.cod_item)
+        qt = int(inp.quantity)
+        if ci not in merged_qty:
+            added_skus_count += 1
+        added_units_count += qt
+        merged_qty[ci] = merged_qty.get(ci, 0) + qt
+        if inp.discount_pct is not None:
+            disc_override_map[ci] = Decimal(str(inp.discount_pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    merged_inputs = [
+        CreatePurchaseOrderItemInput(
+            cod_item=ci,
+            quantity=qt,
+            discount_pct=float(disc_override_map[ci]) if ci in disc_override_map else None,
+        )
+        for ci, qt in merged_qty.items()
+    ]
+
+    combined_obs = order.observations
+    if payload.observations and payload.observations.strip():
+        combined_obs = (
+            f"{order.observations} | {payload.observations.strip()}"
+            if order.observations
+            else payload.observations.strip()
+        )
+
+    res = _execute_purchase_order_full_update(
+        db=db,
+        seller_id=seller_id,
+        order=order,
+        current_user=current_user,
+        items_input=merged_inputs,
+        new_cod_grp_fornecedor=None,
+        new_cod_fornecedor=None,
+        new_compra_consig=None,
+        new_gerar_pendencia=None,
+        new_target_horus_status=None,
+        new_observations=combined_obs,
+        allow_ac_append=True,
+        custom_log_action="ITEMS_APPENDED",
+        custom_log_details=(
+            f"Acrescentados +{added_units_count} exemplar(es) ({added_skus_count} título(s) novo(s)) ao pedido "
+            f"#{order.horus_cod_pedido or order.id} por {uname}."
+        ),
+    )
+    res["order_id"] = order.id
+    res["horus_cod_pedido"] = order.horus_cod_pedido
+    res["message"] = (
+        f"Itens acrescentados com sucesso ao Pedido #{order.horus_cod_pedido or order.id} "
+        f"(Total agora: {order.total_skus} títulos / {order.total_quantity} exemplares)!"
+    )
+    return res
+
+
+def _execute_purchase_order_full_update(
+    db: Session,
+    seller_id: int,
+    order: HorusPurchaseOrder,
+    current_user: Any,
+    items_input: List[CreatePurchaseOrderItemInput],
+    new_cod_grp_fornecedor: Optional[int],
+    new_cod_fornecedor: Optional[int],
+    new_compra_consig: Optional[str],
+    new_gerar_pendencia: Optional[str],
+    new_target_horus_status: Optional[str],
+    new_observations: Optional[str],
+    allow_ac_append: bool = False,
+    custom_log_action: Optional[str] = None,
+    custom_log_details: Optional[str] = None,
+) -> Dict[str, Any]:
+    uid, uname, horus_user_upper = _user_meta(current_user)
+    if not items_input:
         raise HTTPException(status_code=400, detail="O pedido deve possuir ao menos 1 item.")
+
+    target_grp = int(new_cod_grp_fornecedor) if new_cod_grp_fornecedor is not None else int(order.cod_grp_fornecedor)
+    target_forn = int(new_cod_fornecedor) if new_cod_fornecedor is not None else int(order.cod_fornecedor)
+    supplier_changed = (target_grp != int(order.cod_grp_fornecedor)) or (target_forn != int(order.cod_fornecedor))
 
     branch = _get_branch_or_404(db, seller_id, int(order.branch_id))
     disc_rows = (
@@ -2817,19 +3208,29 @@ def update_horus_purchase_order_items(
         .filter(
             HorusSupplierPublisherDiscount.company_id == seller_id,
             HorusSupplierPublisherDiscount.branch_id == int(order.branch_id),
-            HorusSupplierPublisherDiscount.cod_grp_fornecedor == int(order.cod_grp_fornecedor),
-            HorusSupplierPublisherDiscount.cod_fornecedor == int(order.cod_fornecedor),
+            HorusSupplierPublisherDiscount.cod_grp_fornecedor == target_grp,
+            HorusSupplierPublisherDiscount.cod_fornecedor == target_forn,
             HorusSupplierPublisherDiscount.active == True,
         )
         .all()
     )
     if not disc_rows:
-        raise HTTPException(status_code=400, detail="Fornecedor sem descontos configurados nesta filial.")
+        raise HTTPException(
+            status_code=400,
+            detail="O fornecedor selecionado não possui descontos por selo/editora configurados nesta filial.",
+        )
     disc_by_ed = {int(d.cod_editora): Decimal(str(d.desconto_percentual or 0)) for d in disc_rows}
 
     merged_qty: Dict[int, int] = {}
-    for inp in payload.items:
-        merged_qty[int(inp.cod_item)] = merged_qty.get(int(inp.cod_item), 0) + int(inp.quantity)
+    disc_override_by_item: Dict[int, Decimal] = {}
+    for inp in items_input:
+        ci = int(inp.cod_item)
+        merged_qty[ci] = merged_qty.get(ci, 0) + int(inp.quantity)
+        if inp.discount_pct is not None and not supplier_changed:
+            disc_override_by_item[ci] = Decimal(str(inp.discount_pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        elif inp.discount_pct is not None and supplier_changed:
+            # Se trocou de fornecedor e o usuário informou explicitamente um desconto, aceita; senão aplica o desconto do novo fornecedor
+            disc_override_by_item[ci] = Decimal(str(inp.discount_pct)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     sql_ro = HorusSQLClient(db, seller_id)
     enriched_items = _enrich_purchase_items_for_branch_and_supplier(
@@ -2837,8 +3238,8 @@ def update_horus_purchase_order_items(
         sql_client=sql_ro,
         seller_id=seller_id,
         branch=branch,
-        cod_grp_fornecedor=int(order.cod_grp_fornecedor),
-        cod_fornecedor=int(order.cod_fornecedor),
+        cod_grp_fornecedor=target_grp,
+        cod_fornecedor=target_forn,
         cod_items_qty=merged_qty,
     )
     if len(enriched_items) != len(merged_qty):
@@ -2846,10 +3247,15 @@ def update_horus_purchase_order_items(
 
     invalid_pub = [x for x in enriched_items if not x["publisher_configured"]]
     if invalid_pub:
+        sample = ", ".join(f"{x['isbn'] or x['cod_item']} ({x['nome_editora']})" for x in invalid_pub[:4])
         raise HTTPException(
             status_code=400,
-            detail=f"Item '{invalid_pub[0]['nome_item']}' possui editora sem desconto configurado para este fornecedor.",
+            detail=f"Editora(s) sem desconto configurado para este fornecedor nesta filial: {sample}.",
         )
+
+    zero_price = [x for x in enriched_items if float(x["vlr_capa"] or 0) <= 0]
+    if zero_price:
+        raise HTTPException(status_code=400, detail="Existem itens com Preço de Capa R$ 0,00 no Horus.")
 
     prepared_lines = []
     total_qty = 0
@@ -2860,7 +3266,10 @@ def update_horus_purchase_order_items(
         ci = int(x["cod_item"])
         qty = int(x["quantity"])
         ce = int(x["cod_editora"])
-        disc_pct = disc_by_ed[ce].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        disc_pct = disc_override_by_item.get(
+            ci,
+            disc_by_ed[ce].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
+        )
         cover_dec = Decimal(str(x["vlr_capa"])).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         unit_net_dec = (cover_dec * (Decimal("100") - disc_pct) / Decimal("100")).quantize(
             Decimal("0.0001"), rounding=ROUND_HALF_UP
@@ -2894,42 +3303,134 @@ def update_horus_purchase_order_items(
         else Decimal("0.0000")
     )
     eff_consig = (
-        ("S" if str(payload.compra_consig).upper() == "S" else "N")
-        if payload.compra_consig is not None
+        ("S" if str(new_compra_consig).upper() == "S" else "N")
+        if new_compra_consig is not None
         else order.compra_consig
     )
+    cur_gp = getattr(order, "gerar_pendencia", "S") or "S"
+    eff_gerar_pend = (
+        ("N" if str(new_gerar_pendencia).strip().upper() == "N" else "S")
+        if new_gerar_pendencia is not None
+        else cur_gp
+    )
+
+    old_sup_name = order.nome_fornecedor
+    new_sup_nom = order.nome_fornecedor
+    new_sup_cnpj = order.cnpj_fornecedor
+    new_sup_email = order.email_fornecedor
+    old_hs = order.horus_status
+    final_hs = order.horus_status
+
+    if new_target_horus_status and str(new_target_horus_status).strip().upper() in ("AB", "AP", "AE"):
+        final_hs = str(new_target_horus_status).strip().upper()
 
     if order.horus_cod_pedido:
         conn = _open_horus_tx_connection(db, seller_id)
         try:
             with conn.cursor() as cur:
                 cur.execute(
+                    _HORUS_ORDER_SAFETY_SQL,
+                    (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+                safety_row = cur.fetchone()
+                if not safety_row:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Pedido #{order.horus_cod_pedido} não encontrado em PEDIDOS_COMPRA no Horus.",
+                    )
+                safety = _evaluate_horus_safety_row(safety_row, order.horus_status)
+                if safety["has_blocking_movement"]:
+                    conn.rollback()
+                    raise HTTPException(status_code=400, detail=safety["block_reason"])
+
+                allowed_live = ("AB", "AP", "AE", "AC", "IP") if allow_ac_append else ("AB", "AP", "AE")
+                if safety["live_horus_status"] not in allowed_live:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"O pedido #{order.horus_cod_pedido} está com status '{safety['live_horus_status']}' no Horus "
+                            "e não pode ser alterado."
+                        ),
+                    )
+                if not new_target_horus_status:
+                    final_hs = safety["live_horus_status"]
+
+                if supplier_changed:
+                    cur.execute(
+                        """
+                        SELECT TOP 1
+                            RTRIM(LTRIM(ISNULL(FG.NOM_FORNECEDOR, ''))) AS nom_fornecedor,
+                            RTRIM(LTRIM(ISNULL(FG.CNPF_CNPJ, ISNULL(FG.CPF, '')))) AS cnpj,
+                            RTRIM(LTRIM(ISNULL(FG.END_EMAIL_PED_COMPRAS, ISNULL(FG.END_EMAIL, '')))) AS email
+                        FROM FORNECEDORES_GERAL FG WITH (NOLOCK)
+                        WHERE FG.COD_EMPRESA = %s AND FG.COD_FILIAL = %s
+                          AND FG.COD_GRP_FORNECEDOR = %s AND FG.COD_FORNECEDOR = %s
+                        """,
+                        (order.cod_empresa, order.cod_filial, target_grp, target_forn),
+                    )
+                    sup_db = cur.fetchone()
+                    if not sup_db:
+                        conn.rollback()
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Novo fornecedor não encontrado em FORNECEDORES_GERAL para esta Empresa/Filial no Horus.",
+                        )
+                    new_sup_nom = str(sup_db.get("nom_fornecedor") or "")[:150] or f"FORNECEDOR #{target_forn}"
+                    new_sup_cnpj = _clean_digits(sup_db.get("cnpj")) or None
+                    new_sup_email = str(sup_db.get("email") or "")[:255] or None
+
+                # Remove itens e observações anteriores pelo PK do pedido na filial (seguro mesmo trocando fornecedor)
+                cur.execute(
                     """
-                    SELECT TOP 1 RTRIM(LTRIM(ISNULL(STATUS_PEDIDO_COMPRA, ''))) AS st
-                    FROM PEDIDOS_COMPRA
+                    DELETE FROM ITENS_PEDIDO_COMPRA
                     WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
                     """,
                     (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
                 )
-                live_row = cur.fetchone()
-                if live_row and str(live_row["st"] or "") not in ("AP", "AB"):
-                    conn.rollback()
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"O pedido #{order.horus_cod_pedido} já mudou para '{live_row['st']}' no Horus e não pode ter itens editados.",
+
+                if new_observations is not None or supplier_changed:
+                    cur.execute(
+                        """
+                        DELETE FROM OBS_PEDIDO_COMPRA
+                        WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                        """,
+                        (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
                     )
 
+                sta_aprov_sql = "N" if final_hs == "AB" else "S"
                 cur.execute(
                     """
-                    DELETE FROM ITENS_PEDIDO_COMPRA
-                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s
-                      AND COD_GRP_FORNECEDOR = %s AND COD_FORNECEDOR = %s AND COD_PEDIDO = %s
+                    UPDATE PEDIDOS_COMPRA
+                    SET COD_GRP_FORNECEDOR = %s,
+                        COD_FORNECEDOR = %s,
+                        QTD_ITENS = %s,
+                        VLR_TOTAL_PEDIDO = %s,
+                        VLR_TOTAL_DESCONTO = %s,
+                        PER_TOTAL_DESCONTO = %s,
+                        COMPRA_CONSIG = %s,
+                        GERAR_PEND = %s,
+                        STATUS_PEDIDO_COMPRA = %s,
+                        STA_APROVACAO = %s,
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
                     """,
                     (
+                        target_grp,
+                        target_forn,
+                        total_qty,
+                        total_gross,
+                        total_discount,
+                        avg_disc_pct,
+                        eff_consig,
+                        eff_gerar_pend,
+                        final_hs,
+                        sta_aprov_sql,
+                        horus_user_upper,
                         order.cod_empresa,
                         order.cod_filial,
-                        order.cod_grp_fornecedor,
-                        order.cod_fornecedor,
                         order.horus_cod_pedido,
                     ),
                 )
@@ -2950,8 +3451,8 @@ def update_horus_purchase_order_items(
                         (
                             order.cod_empresa,
                             order.cod_filial,
-                            order.cod_grp_fornecedor,
-                            order.cod_fornecedor,
+                            target_grp,
+                            target_forn,
                             order.horus_cod_pedido,
                             ln["cod_item"],
                             ln["quantity"],
@@ -2962,30 +3463,28 @@ def update_horus_purchase_order_items(
                         ),
                     )
 
-                cur.execute(
-                    """
-                    UPDATE PEDIDOS_COMPRA
-                    SET QTD_ITENS = %s,
-                        VLR_TOTAL_PEDIDO = %s,
-                        VLR_TOTAL_DESCONTO = %s,
-                        PER_TOTAL_DESCONTO = %s,
-                        COMPRA_CONSIG = %s,
-                        DAT_ULT_ATL = GETDATE(),
-                        NOM_USUARIO = %s
-                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
-                    """,
-                    (
-                        total_qty,
-                        total_gross,
-                        total_discount,
-                        avg_disc_pct,
-                        eff_consig,
-                        horus_user_upper,
-                        order.cod_empresa,
-                        order.cod_filial,
-                        order.horus_cod_pedido,
-                    ),
-                )
+                eff_obs_str = new_observations if new_observations is not None else order.observations
+                obs_upper = _to_upper_horus(eff_obs_str, 250)
+                if (new_observations is not None or supplier_changed) and obs_upper:
+                    cur.execute(
+                        """
+                        INSERT INTO OBS_PEDIDO_COMPRA (
+                            DAT_OBS, COD_EMPRESA, COD_FILIAL, COD_GRP_FORNECEDOR,
+                            COD_FORNECEDOR, COD_PEDIDO, TIP_SITUACAO, COD_SITUACAO, OBS
+                        ) VALUES (
+                            GETDATE(), %s, %s, %s, %s, %s, 'C', 1, %s
+                        )
+                        """,
+                        (
+                            order.cod_empresa,
+                            order.cod_filial,
+                            target_grp,
+                            target_forn,
+                            order.horus_cod_pedido,
+                            obs_upper,
+                        ),
+                    )
+
                 conn.commit()
         except HTTPException:
             raise
@@ -2994,7 +3493,7 @@ def update_horus_purchase_order_items(
                 conn.rollback()
             except Exception:
                 pass
-            raise HTTPException(status_code=500, detail=f"Falha ao atualizar itens do pedido no Horus SQL: {e}")
+            raise HTTPException(status_code=500, detail=f"Falha ao atualizar pedido no Horus SQL: {e}")
         finally:
             try:
                 conn.close()
@@ -3020,9 +3519,20 @@ def update_horus_purchase_order_items(
             consigned_at_order=ln["consigned_received"],
         ))
 
+    if supplier_changed:
+        order.cod_grp_fornecedor = target_grp
+        order.cod_fornecedor = target_forn
+        order.nome_fornecedor = new_sup_nom
+        order.cnpj_fornecedor = new_sup_cnpj
+        order.email_fornecedor = new_sup_email
+
+    old_st = order.status
+    order.horus_status = final_hs
+    order.status = HORUS_TO_CRONUZ_STATUS.get(final_hs, order.status)
     order.compra_consig = eff_consig
-    if payload.observations is not None:
-        order.observations = payload.observations.strip() or None
+    order.gerar_pendencia = eff_gerar_pend
+    if new_observations is not None:
+        order.observations = new_observations.strip() or None
     order.total_skus = len(prepared_lines)
     order.total_quantity = total_qty
     order.total_gross = total_gross
@@ -3032,14 +3542,19 @@ def update_horus_purchase_order_items(
     order.updated_by_user_id = uid
     order.updated_by_name = uname
 
+    sup_msg = f" Fornecedor alterado de '{old_sup_name}' para '{new_sup_nom}'." if supplier_changed else ""
+    pend_lbl = "SIM" if eff_gerar_pend == "S" else "NÃO"
     db.add(HorusPurchaseOrderLog(
         order_id=order.id,
-        action="ORDER_EDITED",
-        old_status=order.status,
+        action=custom_log_action or ("SUPPLIER_AND_ORDER_EDITED" if supplier_changed else "ORDER_EDITED"),
+        old_status=old_st,
         new_status=order.status,
-        old_horus_status=order.horus_status,
-        new_horus_status=order.horus_status,
-        details=f"Pedido editado por {uname}: {len(prepared_lines)} título(s), {total_qty} exemplar(es), líquido R$ {total_net}.",
+        old_horus_status=old_hs,
+        new_horus_status=final_hs,
+        details=custom_log_details or (
+            f"Pedido editado por {uname}:{sup_msg} {len(prepared_lines)} título(s), {total_qty} exemplar(es), "
+            f"líquido R$ {total_net}, Pendência={pend_lbl}, Status={final_hs}."
+        ),
         user_id=uid,
         user_name=uname,
     ))
@@ -3048,6 +3563,43 @@ def update_horus_purchase_order_items(
         "success": True,
         "message": f"Pedido #{order.horus_cod_pedido or order.id} atualizado com sucesso no Horus e no Cronuz!",
     }
+
+
+@router.put("/orders/{order_id}")
+def update_horus_purchase_order_items(
+    order_id: int,
+    payload: UpdatePurchaseOrderPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Edita itens/quantidades/descontos, troca fornecedor, ajusta Gerar Pendência (SIM/NÃO),
+    modalidade e status (AB/AP/AE) de um Pedido de Compra, bloqueando com segurança total caso
+    já esteja finalizado, possua itens conferidos ou notas fiscais vinculadas no Horus.
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    order = (
+        db.query(HorusPurchaseOrder)
+        .filter(HorusPurchaseOrder.id == int(order_id), HorusPurchaseOrder.company_id == seller_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
+
+    return _execute_purchase_order_full_update(
+        db=db,
+        seller_id=seller_id,
+        order=order,
+        current_user=current_user,
+        items_input=payload.items,
+        new_cod_grp_fornecedor=payload.cod_grp_fornecedor,
+        new_cod_fornecedor=payload.cod_fornecedor,
+        new_compra_consig=payload.compra_consig,
+        new_gerar_pendencia=payload.gerar_pendencia,
+        new_target_horus_status=payload.target_horus_status,
+        new_observations=payload.observations,
+        allow_ac_append=False,
+    )
 
 
 @router.get("/orders/{order_id}")
@@ -3066,6 +3618,39 @@ def get_horus_purchase_order_detail(
     if not order:
         raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
 
+    safety = _inspect_order_horus_safety_ro(db, seller_id, order)
+    live_hs = safety.get("live_horus_status")
+    live_gp = safety.get("gerar_pendencia")
+    dirty = False
+    if live_gp in ("S", "N") and getattr(order, "gerar_pendencia", None) != live_gp:
+        order.gerar_pendencia = live_gp
+        dirty = True
+    if live_hs and live_hs != order.horus_status:
+        old_hs = order.horus_status
+        old_st = order.status
+        order.horus_status = live_hs
+        if live_hs in ("EE", "FE", "CA") or order.status not in (
+            "XML_OK",
+            "XML_DIVERGENT",
+            "XML_ACCEPTED_DIV",
+            "XML_REJECTED",
+        ):
+            order.status = HORUS_TO_CRONUZ_STATUS.get(live_hs, order.status)
+        db.add(HorusPurchaseOrderLog(
+            order_id=order.id,
+            action="STATUS_SYNCED_FROM_HORUS",
+            old_status=old_st,
+            new_status=order.status,
+            old_horus_status=old_hs,
+            new_horus_status=live_hs,
+            details=f"Status sincronizado automaticamente do Horus SQL ({old_hs} -> {live_hs}).",
+            user_name="Horus Sync",
+        ))
+        dirty = True
+    if dirty:
+        db.commit()
+        db.refresh(order)
+
     return {
         "order": {
             "id": order.id,
@@ -3082,6 +3667,7 @@ def get_horus_purchase_order_detail(
             "email_fornecedor": order.email_fornecedor,
             "horus_cod_pedido": order.horus_cod_pedido,
             "compra_consig": order.compra_consig,
+            "gerar_pendencia": getattr(order, "gerar_pendencia", "S") or "S",
             "status": order.status,
             "horus_status": order.horus_status,
             "status_label": HORUS_STATUS_LABELS.get(order.horus_status, order.status),
@@ -3106,6 +3692,7 @@ def get_horus_purchase_order_detail(
             "updated_by_name": order.updated_by_name,
             "created_at": _fmt_dt(order.created_at),
             "updated_at": _fmt_dt(order.updated_at),
+            "safety": safety,
         },
         "items": [
             {
@@ -3165,7 +3752,7 @@ def change_horus_purchase_order_status(
         order=order,
         new_horus_status=payload.new_horus_status,
         current_user=current_user,
-        notes=payload.notes,
+        notes=payload.notes or payload.reason,
     )
     db.commit()
     db.refresh(order)

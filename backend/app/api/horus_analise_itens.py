@@ -62,8 +62,9 @@ MAX_SHEET_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # ── CFOPs Oficiais para Vendas, Compras e Recebimento em Consignação ──────────
 CFOP_VENDAS_TUPLE = (
-    "5101", "5102", "5108", "5113", "5114", "5115", "5403", "5405",
-    "6101", "6102", "6108", "6113", "6114", "6115", "6403", "6405",
+    "5101", "5102", "5103", "5104", "5107", "5108", "5113", "5114", "5115", "5118", "5119", "5120", "5401", "5403", "5405",
+    "6101", "6102", "6103", "6104", "6107", "6108", "6113", "6114", "6115", "6118", "6119", "6120", "6401", "6403", "6405",
+    "7101", "7102",
 )
 
 CFOP_ENTRADA_COMPRA_TUPLE = (
@@ -87,6 +88,8 @@ def _build_sargable_cfop_in(cfop_codes: Tuple[str, ...]) -> str:
             variants.add(f"{c[0]}.{c[1:]}")
             variants.add(f"{c[0]},{c[1:]}")
             variants.add(f"{c[0]}.{c[1:]}.")
+            variants.add(f"{c}-")
+            variants.add(f"{c[0]}.{c[1:]}-")
             variants.add(f"{c} ")
     return ", ".join(f"'{v}'" for v in sorted(variants))
 
@@ -1712,14 +1715,21 @@ def _enrich_cod_items_multibranch(
             }
         result[c_int] = {"by_branch": by_b}
 
+    lookback_days = max(366, int(sales_days or 90) + 1)
     custom_date_clause = f"NF.DAT_EMISSAO_NF >= DATEADD(day, -{max(1, int(sales_days))}, GETDATE())"
+    where_sales_min_dt_clause = f"DATEADD(day, -{lookback_days}, GETDATE())"
     if sales_start_date and re.match(r"^\d{4}-\d{2}-\d{2}$", sales_start_date.strip()):
         s_dt = sales_start_date.strip()
+        s_conv = f"CONVERT(DATETIME, '{s_dt} 00:00:00', 120)"
+        where_sales_min_dt_clause = (
+            f"CASE WHEN {s_conv} < DATEADD(day, -366, GETDATE()) THEN {s_conv} ELSE DATEADD(day, -366, GETDATE()) END"
+        )
         if sales_end_date and re.match(r"^\d{4}-\d{2}-\d{2}$", sales_end_date.strip()):
             e_dt = sales_end_date.strip()
-            custom_date_clause = f"(NF.DAT_EMISSAO_NF >= '{s_dt} 00:00:00' AND NF.DAT_EMISSAO_NF <= '{e_dt} 23:59:59')"
+            e_conv = f"CONVERT(DATETIME, '{e_dt} 23:59:59', 120)"
+            custom_date_clause = f"(NF.DAT_EMISSAO_NF >= {s_conv} AND NF.DAT_EMISSAO_NF <= {e_conv})"
         else:
-            custom_date_clause = f"NF.DAT_EMISSAO_NF >= '{s_dt} 00:00:00'"
+            custom_date_clause = f"NF.DAT_EMISSAO_NF >= {s_conv}"
 
     for chunk_start in range(0, len(clean_cods), 200):
         chunk = clean_cods[chunk_start:chunk_start + 200]
@@ -1801,7 +1811,6 @@ def _enrich_cod_items_multibranch(
                 log.warning(f"[HorusAnaliseItens] Aviso em TABELA_SALDO_ITENS por local: {e}")
 
         # 3. Vendas por Filial (365 dias + Período filtrado + Preço Líquido Unitário Vendido) em NF_ITENS + NF_MESTRE
-        sales_lookback_days = 740 if (sales_start_date or int(sales_days or 90) > 365) else 366
         try:
             sql_sales = f"""
                 SELECT
@@ -1826,7 +1835,7 @@ def _enrich_cod_items_multibranch(
                     AND NF.COD_EMPRESA = NFI.COD_EMPRESA
                 WHERE NFI.COD_ITEM IN ({cods_in})
                   AND ({nfi_pair_conds})
-                  AND NF.DAT_EMISSAO_NF >= DATEADD(day, -{sales_lookback_days}, GETDATE())
+                  AND NF.DAT_EMISSAO_NF >= ({where_sales_min_dt_clause})
                   AND ISNULL(NF.SIT_NF, '') NOT IN ('C', 'CAN')
                   AND NFI.COD_NATUREZA IN ({SARGABLE_CFOP_VENDAS})
                 GROUP BY NFI.COD_EMPRESA, NFI.COD_FILIAL, NFI.COD_ITEM

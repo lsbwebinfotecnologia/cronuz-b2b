@@ -33,6 +33,7 @@ class HorusPurchaseBranchConfig(Base):
     cod_departamento_default = Column(Integer, nullable=True)
     cod_centro_custo_default = Column(Integer, nullable=True)
     compra_consig_default = Column(String(1), nullable=False, default="N")  # 'N'=Compra Firme, 'S'=Consignação
+    gerar_pendencia_default = Column(String(1), nullable=False, default="S", server_default="S")  # 'S'=SIM, 'N'=NÃO
 
     # Parametrização de E-mail exclusiva desta Filial (para envio futuro ao fornecedor)
     email_enabled = Column(Boolean, nullable=False, default=False)
@@ -165,6 +166,7 @@ class HorusPurchaseOrder(Base):
     # Identificador gerado em PEDIDOS_COMPRA no Horus SQL
     horus_cod_pedido = Column(Integer, nullable=True, index=True)
     compra_consig = Column(String(1), nullable=False, default="N")  # 'N'=Compra Firme, 'S'=Consignação
+    gerar_pendencia = Column(String(1), nullable=False, default="S", server_default="S")  # 'S'=SIM, 'N'=NÃO (GERAR_PEND)
 
     # Status no Cronuz: APPROVED, AWAITING_DELIVERY, XML_OK, XML_DIVERGENT, XML_ACCEPTED_DIV, XML_REJECTED, IN_CONFERENCE, COMPLETED, CANCELLED
     status = Column(String(40), nullable=False, default="APPROVED", index=True)

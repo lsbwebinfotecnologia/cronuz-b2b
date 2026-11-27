@@ -46,6 +46,7 @@ interface BranchConfigData {
   cod_departamento_default: number | null;
   cod_centro_custo_default: number | null;
   compra_consig_default: string;
+  gerar_pendencia_default: string;
   email_enabled: boolean;
   sender_name: string;
   sender_email: string;
@@ -182,6 +183,37 @@ interface CartPurchaseItem {
   validation_warning: string | null;
 }
 
+interface OrderSafetyInfo {
+  exists_in_horus: boolean;
+  live_horus_status: string;
+  gerar_pendencia: string;
+  is_finalized: boolean;
+  has_conferred_items: boolean;
+  conferred_qty: number;
+  divergences_count: number;
+  linked_nf_count: number;
+  has_linked_nf: boolean;
+  has_blocking_movement: boolean;
+  can_modify: boolean;
+  can_cancel: boolean;
+  can_reopen: boolean;
+  can_append_items: boolean;
+  block_reason: string | null;
+}
+
+interface OpenOrderCandidate {
+  id: number;
+  horus_cod_pedido: number | null;
+  horus_status: string;
+  status_label: string;
+  compra_consig: string;
+  gerar_pendencia: string;
+  total_skus: number;
+  total_quantity: number;
+  total_net: number;
+  created_at: string | null;
+}
+
 interface SavedPurchaseOrder {
   id: number;
   branch_id: number;
@@ -196,6 +228,7 @@ interface SavedPurchaseOrder {
   email_fornecedor: string | null;
   horus_cod_pedido: number | null;
   compra_consig: string;
+  gerar_pendencia?: string;
   status: string;
   horus_status: string;
   status_label: string;
@@ -220,6 +253,7 @@ interface SavedPurchaseOrder {
   updated_by_name: string | null;
   created_at: string | null;
   updated_at: string | null;
+  safety?: OrderSafetyInfo;
 }
 
 interface OrderWorkspaceItem {
@@ -237,6 +271,7 @@ interface OrderWorkspaceItem {
   stock_at_order: number;
   consigned_at_order: number;
   publisher_configured?: boolean;
+  validation_warning?: string | null;
 }
 
 interface OrderLogRow {
@@ -378,6 +413,8 @@ function formatCnpj(raw?: string | null): string {
 
 function getHorusStatusBadgeClass(horusStatus?: string | null): string {
   switch (horusStatus) {
+    case 'AB':
+      return 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-800';
     case 'AP':
       return 'bg-indigo-50 text-indigo-800 border-indigo-200 dark:bg-indigo-950/50 dark:text-indigo-300 dark:border-indigo-800';
     case 'AE':
@@ -460,7 +497,22 @@ export default function HorusDirectComprasPage() {
   const [loadingOrderDetail, setLoadingOrderDetail] = useState<boolean>(false);
   const [orderEditDirty, setOrderEditDirty] = useState<boolean>(false);
   const [orderEditConsig, setOrderEditConsig] = useState<'N' | 'S'>('N');
+  const [orderEditGerarPend, setOrderEditGerarPend] = useState<'S' | 'N'>('S');
   const [orderEditObs, setOrderEditObs] = useState<string>('');
+  const [orderEditSupplier, setOrderEditSupplier] = useState<{
+    cod_grp_fornecedor: number;
+    cod_fornecedor: number;
+    nome_fornecedor: string;
+    cnpj_fornecedor?: string | null;
+  } | null>(null);
+  const [showOrderSupplierSwap, setShowOrderSupplierSwap] = useState<boolean>(false);
+  const [orderSwapSupplierMode, setOrderSwapSupplierMode] = useState<'SAVED' | 'HORUS'>('SAVED');
+  const [orderSwapSupplierQuery, setOrderSwapSupplierQuery] = useState<string>('');
+  const [orderSwapSuppliersList, setOrderSwapSuppliersList] = useState<SupplierSummary[]>([]);
+  const [loadingOrderSwapSuppliers, setLoadingOrderSwapSuppliers] = useState<boolean>(false);
+  const [showCancelOrderBar, setShowCancelOrderBar] = useState<boolean>(false);
+  const [cancelOrderReason, setCancelOrderReason] = useState<string>('');
+  const [changingOrderStatus, setChangingOrderStatus] = useState<boolean>(false);
   const [savingOrderEdit, setSavingOrderEdit] = useState<boolean>(false);
   const [exportingExcel, setExportingExcel] = useState<boolean>(false);
 
@@ -544,8 +596,16 @@ export default function HorusDirectComprasPage() {
   const [checkedCartCods, setCheckedCartCods] = useState<Record<number, boolean>>({});
   const [gridFilterTerm, setGridFilterTerm] = useState<string>('');
   const [compraConsig, setCompraConsig] = useState<'N' | 'S'>('N');
+  const [gerarPendencia, setGerarPendencia] = useState<'S' | 'N'>('S');
+  const [initialHorusStatus, setInitialHorusStatus] = useState<'AP' | 'AB'>('AP');
+  const [savingQuickPendDefault, setSavingQuickPendDefault] = useState<boolean>(false);
   const [orderObservations, setOrderObservations] = useState<string>('');
   const [creatingOrder, setCreatingOrder] = useState<boolean>(false);
+  const [openMergePrompt, setOpenMergePrompt] = useState<{
+    candidates: OpenOrderCandidate[];
+    selectedOrderId: number;
+  } | null>(null);
+  const [appendingToExisting, setAppendingToExisting] = useState<boolean>(false);
 
   // Conciliação rápida inline de Editora no Horus (ITENS_ESTOQUE_GERAL)
   const [reconcileTargetCods, setReconcileTargetCods] = useState<number[]>([]);
@@ -582,6 +642,7 @@ export default function HorusDirectComprasPage() {
     cod_departamento_default: null,
     cod_centro_custo_default: null,
     compra_consig_default: 'N',
+    gerar_pendencia_default: 'S',
     email_enabled: false,
     sender_name: '',
     sender_email: '',
@@ -647,8 +708,13 @@ export default function HorusDirectComprasPage() {
           setSelectedBranchId(nextId);
           const chosen = list.find((b) => b.id === nextId);
           if (chosen) {
-            setBranchConfigForm(chosen.config);
-            setCompraConsig(chosen.config.compra_consig_default === 'S' ? 'S' : 'N');
+            const cfgWithPend: BranchConfigData = {
+              ...chosen.config,
+              gerar_pendencia_default: chosen.config.gerar_pendencia_default === 'N' ? 'N' : 'S',
+            };
+            setBranchConfigForm(cfgWithPend);
+            setCompraConsig(cfgWithPend.compra_consig_default === 'S' ? 'S' : 'N');
+            setGerarPendencia(cfgWithPend.gerar_pendencia_default === 'N' ? 'N' : 'S');
           }
         }
       } catch (e: any) {
@@ -804,8 +870,13 @@ export default function HorusDirectComprasPage() {
       fetchXmlAuditsList(true);
       const b = branches.find((x) => x.id === selectedBranchId);
       if (b) {
-        setBranchConfigForm(b.config);
-        setCompraConsig(b.config.compra_consig_default === 'S' ? 'S' : 'N');
+        const cfgWithPend: BranchConfigData = {
+          ...b.config,
+          gerar_pendencia_default: b.config.gerar_pendencia_default === 'N' ? 'N' : 'S',
+        };
+        setBranchConfigForm(cfgWithPend);
+        setCompraConsig(cfgWithPend.compra_consig_default === 'S' ? 'S' : 'N');
+        setGerarPendencia(cfgWithPend.gerar_pendencia_default === 'N' ? 'N' : 'S');
       }
     }
   }, [selectedBranchId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -825,7 +896,12 @@ export default function HorusDirectComprasPage() {
         .then((d) => {
           if (d) {
             setBranchDepartments(d.horus_departments || []);
-            if (d.config) setBranchConfigForm(d.config);
+            if (d.config) {
+              setBranchConfigForm({
+                ...d.config,
+                gerar_pendencia_default: d.config.gerar_pendencia_default === 'N' ? 'N' : 'S',
+              });
+            }
           }
         })
         .catch(() => {});
@@ -879,11 +955,24 @@ export default function HorusDirectComprasPage() {
           isbn: it.isbn || '',
           nome_editora: it.nome_editora || '—',
           publisher_configured: true,
+          validation_warning: null,
         })),
         logs: data.logs || [],
       });
       setOrderEditConsig(ord.compra_consig === 'S' ? 'S' : 'N');
+      setOrderEditGerarPend(ord.gerar_pendencia === 'N' ? 'N' : 'S');
       setOrderEditObs(ord.observations || '');
+      setOrderEditSupplier({
+        cod_grp_fornecedor: ord.cod_grp_fornecedor,
+        cod_fornecedor: ord.cod_fornecedor,
+        nome_fornecedor: ord.nome_fornecedor,
+        cnpj_fornecedor: ord.cnpj_fornecedor,
+      });
+      setShowOrderSupplierSwap(false);
+      setOrderSwapSupplierQuery('');
+      setOrderSwapSuppliersList([]);
+      setShowCancelOrderBar(false);
+      setCancelOrderReason('');
       setOrderEditDirty(false);
       setOrderAddLookupResults([]);
       setShowOrderSheetBar(false);
@@ -901,7 +990,7 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  // ── Edição Inline de Pedido AP (Salva em Horus + Cronuz) ───────────────────
+  // ── Edição Inline de Pedido em AB / AP / AE (Salva em Horus + Cronuz c/ Travas) ──
   const updateOrderWorkspaceQty = (codItem: number, rawQty: number) => {
     const q = Math.max(1, Math.floor(Number(rawQty) || 1));
     setOpenOrderWorkspace((prev) => {
@@ -921,6 +1010,128 @@ export default function HorusDirectComprasPage() {
       };
     });
     setOrderEditDirty(true);
+  };
+
+  const updateOrderWorkspaceDiscount = (codItem: number, rawPct: number) => {
+    const pct = Math.min(100, Math.max(0, Number(rawPct) || 0));
+    setOpenOrderWorkspace((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map((it) => {
+          if (it.cod_item !== codItem) return it;
+          const unitNet = Number((it.unit_cover_price * (1 - pct / 100)).toFixed(4));
+          return {
+            ...it,
+            discount_pct: pct,
+            unit_net_price: unitNet,
+            subtotal_gross: Number((it.unit_cover_price * it.quantity).toFixed(2)),
+            subtotal_net: Number((unitNet * it.quantity).toFixed(2)),
+          };
+        }),
+      };
+    });
+    setOrderEditDirty(true);
+  };
+
+  const searchSuppliersForOrderSwap = async (
+    qStr = orderSwapSupplierQuery,
+    modeOverride?: 'SAVED' | 'HORUS'
+  ) => {
+    if (!openOrderWorkspace) return;
+    const effMode = modeOverride || orderSwapSupplierMode;
+    setLoadingOrderSwapSuppliers(true);
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        branch_id: String(openOrderWorkspace.order.branch_id),
+        company_id: String(companyId),
+        only_configured: effMode === 'SAVED' ? 'true' : 'false',
+        limit: '60',
+      });
+      if (qStr.trim()) params.append('q', qStr.trim());
+      const res = await fetch(`${apiUrl}/horus-purchases/suppliers/search?${params.toString()}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const d = await res.json();
+        setOrderSwapSuppliersList(d.suppliers || []);
+      }
+    } catch {
+      toast.error('Erro ao buscar fornecedores para troca.');
+    } finally {
+      setLoadingOrderSwapSuppliers(false);
+    }
+  };
+
+  const handleSelectNewSupplierForOrder = async (sup: SupplierSummary) => {
+    if (!openOrderWorkspace) return;
+    const ord = openOrderWorkspace.order;
+    try {
+      const token = getToken();
+      const res = await fetch(`${apiUrl}/horus-purchases/items/refresh-cart`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          branch_id: ord.branch_id,
+          cod_grp_fornecedor: sup.cod_grp_fornecedor,
+          cod_fornecedor: sup.cod_fornecedor,
+          items: openOrderWorkspace.items.map((x) => ({
+            cod_item: x.cod_item,
+            quantity: x.quantity,
+          })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Erro ao revalidar itens para o novo fornecedor.');
+      const refreshed: CartPurchaseItem[] = data.items || [];
+      const refMap = new Map<number, CartPurchaseItem>();
+      refreshed.forEach((r) => refMap.set(r.cod_item, r));
+
+      let uncfgCount = 0;
+      setOpenOrderWorkspace((prev) => {
+        if (!prev) return prev;
+        const nextItems = prev.items.map((it) => {
+          const rf = refMap.get(it.cod_item);
+          if (!rf) return it;
+          if (!rf.publisher_configured) uncfgCount += 1;
+          return {
+            ...it,
+            unit_cover_price: rf.vlr_capa,
+            discount_pct: rf.discount_pct,
+            unit_net_price: rf.unit_net_price,
+            subtotal_gross: rf.subtotal_gross,
+            subtotal_net: rf.subtotal_net,
+            publisher_configured: rf.publisher_configured,
+            validation_warning: rf.validation_warning,
+          };
+        });
+        return { ...prev, items: nextItems };
+      });
+      setOrderEditSupplier({
+        cod_grp_fornecedor: sup.cod_grp_fornecedor,
+        cod_fornecedor: sup.cod_fornecedor,
+        nome_fornecedor: sup.nom_fornecedor,
+        cnpj_fornecedor: sup.cnpj,
+      });
+      setShowOrderSupplierSwap(false);
+      setOrderEditDirty(true);
+      if (uncfgCount > 0) {
+        toast.warning(
+          `Fornecedor alterado para '${sup.nom_fornecedor}', porém ${uncfgCount} item(ns) são de editoras sem desconto configurado neste fornecedor.`
+        );
+      } else {
+        toast.success(
+          `Fornecedor alterado para '${sup.nom_fornecedor}'. Clique em Salvar Alterações para gravar no Horus.`
+        );
+      }
+    } catch (e: any) {
+      toast.error(e?.message || 'Erro ao trocar fornecedor do pedido.');
+    }
   };
 
   const removeOrderWorkspaceItem = (codItem: number) => {
@@ -988,6 +1199,8 @@ export default function HorusDirectComprasPage() {
     e.preventDefault();
     if (!openOrderWorkspace || !orderAddItemQuery.trim()) return;
     const ord = openOrderWorkspace.order;
+    const effGrp = orderEditSupplier?.cod_grp_fornecedor ?? ord.cod_grp_fornecedor;
+    const effForn = orderEditSupplier?.cod_fornecedor ?? ord.cod_fornecedor;
     setSearchingOrderAddItem(true);
     try {
       const token = getToken();
@@ -1000,8 +1213,8 @@ export default function HorusDirectComprasPage() {
         body: JSON.stringify({
           company_id: companyId,
           branch_id: ord.branch_id,
-          cod_grp_fornecedor: ord.cod_grp_fornecedor,
-          cod_fornecedor: ord.cod_fornecedor,
+          cod_grp_fornecedor: effGrp,
+          cod_fornecedor: effForn,
           query: orderAddItemQuery.trim(),
           default_qty: Math.max(1, orderAddItemQty),
           limit: 20,
@@ -1033,13 +1246,15 @@ export default function HorusDirectComprasPage() {
       return;
     }
     const ord = openOrderWorkspace.order;
+    const effGrp = orderEditSupplier?.cod_grp_fornecedor ?? ord.cod_grp_fornecedor;
+    const effForn = orderEditSupplier?.cod_fornecedor ?? ord.cod_fornecedor;
     setImportingOrderSheet(true);
     try {
       const token = getToken();
       const fd = new FormData();
       fd.append('branch_id', String(ord.branch_id));
-      fd.append('cod_grp_fornecedor', String(ord.cod_grp_fornecedor));
-      fd.append('cod_fornecedor', String(ord.cod_fornecedor));
+      fd.append('cod_grp_fornecedor', String(effGrp));
+      fd.append('cod_fornecedor', String(effForn));
       fd.append('company_id', String(companyId));
       fd.append('file', orderSheetFile);
       const res = await fetch(`${apiUrl}/horus-purchases/items/import-sheet`, {
@@ -1060,12 +1275,21 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  const handleSaveOrderEdits = async () => {
+  const handleSaveOrderEdits = async (targetHorusStatus?: 'AB' | 'AP' | 'AE') => {
     if (!openOrderWorkspace) return;
     const ord = openOrderWorkspace.order;
+    const uncfg = openOrderWorkspace.items.find((x) => x.publisher_configured === false);
+    if (uncfg) {
+      toast.error(
+        `A editora '${uncfg.nome_editora}' não possui desconto configurado para o fornecedor selecionado nesta filial.`
+      );
+      return;
+    }
     setSavingOrderEdit(true);
     try {
       const token = getToken();
+      const effGrp = orderEditSupplier?.cod_grp_fornecedor ?? ord.cod_grp_fornecedor;
+      const effForn = orderEditSupplier?.cod_fornecedor ?? ord.cod_fornecedor;
       const res = await fetch(`${apiUrl}/horus-purchases/orders/${ord.id}`, {
         method: 'PUT',
         headers: {
@@ -1074,11 +1298,16 @@ export default function HorusDirectComprasPage() {
         },
         body: JSON.stringify({
           company_id: companyId,
+          cod_grp_fornecedor: effGrp,
+          cod_fornecedor: effForn,
           compra_consig: orderEditConsig,
+          gerar_pendencia: orderEditGerarPend,
           observations: orderEditObs,
+          ...(targetHorusStatus ? { target_horus_status: targetHorusStatus } : {}),
           items: openOrderWorkspace.items.map((x) => ({
             cod_item: x.cod_item,
             quantity: x.quantity,
+            discount_pct: x.discount_pct,
           })),
         }),
       });
@@ -1153,7 +1382,12 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  const handleManualStatusTransition = async (orderId: number, newHorusStatus: 'AE' | 'CA') => {
+  const handleManualStatusTransition = async (
+    orderId: number,
+    newHorusStatus: 'AB' | 'AP' | 'AE' | 'CA',
+    reasonText?: string
+  ) => {
+    setChangingOrderStatus(true);
     try {
       const token = getToken();
       const res = await fetch(`${apiUrl}/horus-purchases/orders/${orderId}/status`, {
@@ -1165,21 +1399,26 @@ export default function HorusDirectComprasPage() {
         body: JSON.stringify({
           company_id: companyId,
           new_horus_status: newHorusStatus,
+          reason: reasonText?.trim() || undefined,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.detail || 'Erro ao alterar status.');
       toast.success(data.message);
+      setShowCancelOrderBar(false);
+      setCancelOrderReason('');
       fetchOrdersList(false);
       if (openOrderWorkspace?.order.id === orderId) {
         await openOrderInline(orderId, orderWorkspaceSubTab);
       }
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao alterar status.');
+    } finally {
+      setChangingOrderStatus(false);
     }
   };
 
-  // ── Selecionar Fornecedor no Novo Pedido (Rápido / Sintetizado) ────────────
+  // ── Selecionar / Trocar Fornecedor no Novo Pedido (Preserva Digitação!) ────
   const loadSupplierOverview = async (
     bid: number,
     codGrp: number,
@@ -1187,6 +1426,7 @@ export default function HorusDirectComprasPage() {
     preserveCart = false
   ) => {
     setIsSupplierPickerOpen(false);
+    setOpenMergePrompt(null);
     setLoadingOverview(true);
     if (!preserveCart) {
       setCartItems([]);
@@ -1213,11 +1453,23 @@ export default function HorusDirectComprasPage() {
       if (!preserveCart) {
         // Só abre painel de descontos automaticamente se o fornecedor ainda não tiver selo vinculado
         setDeskExpandedPanel(data.is_ready_for_purchase ? 'NONE' : 'DISCOUNTS');
+      } else if (!data.is_ready_for_purchase) {
+        setDeskExpandedPanel('DISCOUNTS');
       }
     } catch (e: any) {
       toast.error(e?.message || 'Erro ao carregar fornecedor.');
     } finally {
       setLoadingOverview(false);
+    }
+  };
+
+  const handleSelectSupplierOnDesk = async (bid: number, codGrp: number, codForn: number) => {
+    const hadItems = cartItems.length > 0;
+    const prevSnapshot = [...cartItems];
+    await loadSupplierOverview(bid, codGrp, codForn, hadItems);
+    if (hadItems) {
+      await refreshCurrentCart(bid, codGrp, codForn, prevSnapshot);
+      toast.info('Fornecedor alterado! Itens em digitação mantidos e descontos recalculados.');
     }
   };
 
@@ -1506,6 +1758,59 @@ export default function HorusDirectComprasPage() {
     );
   };
 
+  const updateCartItemDiscount = (codItem: number, rawPct: number) => {
+    const pct = Math.min(100, Math.max(0, Number(rawPct) || 0));
+    setCartItems((prev) =>
+      prev.map((it) => {
+        if (it.cod_item !== codItem) return it;
+        const unitNet = Number((it.vlr_capa * (1 - pct / 100)).toFixed(4));
+        return {
+          ...it,
+          discount_pct: pct,
+          unit_net_price: unitNet,
+          subtotal_gross: Number((it.vlr_capa * it.quantity).toFixed(2)),
+          subtotal_net: Number((unitNet * it.quantity).toFixed(2)),
+        };
+      })
+    );
+  };
+
+  const handleQuickSaveGerarPendDefault = async (val: 'S' | 'N') => {
+    if (selectedBranchId === null) return;
+    setSavingQuickPendDefault(true);
+    try {
+      const token = getToken();
+      const nextCfg: BranchConfigData = {
+        ...branchConfigForm,
+        gerar_pendencia_default: val,
+      };
+      const res = await fetch(`${apiUrl}/horus-purchases/branches/${selectedBranchId}/config`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          ...nextCfg,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Erro ao salvar padrão de pendência.');
+      setBranchConfigForm(nextCfg);
+      setBranches((prev) =>
+        prev.map((b) => (b.id === selectedBranchId ? { ...b, config: nextCfg } : b))
+      );
+      toast.success(
+        `Padrão da filial atualizado: Gerar Pendência = ${val === 'S' ? 'SIM' : 'NÃO'}.`
+      );
+    } catch (e: any) {
+      toast.error(e?.message || 'Erro ao salvar padrão de pendência.');
+    } finally {
+      setSavingQuickPendDefault(false);
+    }
+  };
+
   const handleQtyKeyDown = (
     e: React.KeyboardEvent<HTMLInputElement>,
     rowIndex: number,
@@ -1656,7 +1961,95 @@ export default function HorusDirectComprasPage() {
     }
   };
 
-  // ── Criar Pedido AP e Abrir Direto na Ficha Inline de Pedidos ──────────────
+  // ── Criar Pedido (com detecção automática de pedidos em aberto sem conferência) ──
+  const executeCreateNewPurchaseOrder = async () => {
+    if (!supplierOverview || selectedBranchId === null) return;
+    setCreatingOrder(true);
+    try {
+      const token = getToken();
+      const sup = supplierOverview.supplier;
+      const res = await fetch(`${apiUrl}/horus-purchases/orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          branch_id: selectedBranchId,
+          cod_grp_fornecedor: sup.cod_grp_fornecedor,
+          cod_fornecedor: sup.cod_fornecedor,
+          compra_consig: compraConsig,
+          gerar_pendencia: gerarPendencia,
+          initial_horus_status: initialHorusStatus,
+          observations: orderObservations,
+          items: cartItems.map((x) => ({
+            cod_item: x.cod_item,
+            quantity: x.quantity,
+            discount_pct: x.discount_pct,
+          })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Falha ao gravar pedido no Horus.');
+
+      toast.success(
+        data.message || `Pedido #${data.horus_cod_pedido} gerado no Horus!`
+      );
+      setOpenMergePrompt(null);
+      setCartItems([]);
+      setCheckedCartCods({});
+      setOrderObservations('');
+      await fetchOrdersList(true);
+      setActiveMainTab('ORDERS');
+      await openOrderInline(data.order_id, 'ITEMS');
+    } catch (e: any) {
+      toast.error(e?.message || 'Erro ao gerar pedido.');
+    } finally {
+      setCreatingOrder(false);
+    }
+  };
+
+  const handleAppendToCandidateOrder = async () => {
+    if (!openMergePrompt || !openMergePrompt.selectedOrderId) return;
+    setAppendingToExisting(true);
+    try {
+      const token = getToken();
+      const targetId = openMergePrompt.selectedOrderId;
+      const res = await fetch(`${apiUrl}/horus-purchases/orders/${targetId}/append-items`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          company_id: companyId,
+          observations: orderObservations.trim() || undefined,
+          items: cartItems.map((x) => ({
+            cod_item: x.cod_item,
+            quantity: x.quantity,
+            discount_pct: x.discount_pct,
+          })),
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || 'Erro ao acrescentar itens ao pedido existente.');
+
+      toast.success(data.message || 'Itens acrescentados ao pedido existente com sucesso!');
+      setOpenMergePrompt(null);
+      setCartItems([]);
+      setCheckedCartCods({});
+      setOrderObservations('');
+      await fetchOrdersList(true);
+      setActiveMainTab('ORDERS');
+      await openOrderInline(targetId, 'ITEMS');
+    } catch (e: any) {
+      toast.error(e?.message || 'Erro ao mesclar itens no pedido existente.');
+    } finally {
+      setAppendingToExisting(false);
+    }
+  };
+
   const handleCreatePurchaseOrder = async () => {
     if (!supplierOverview || selectedBranchId === null) {
       toast.error('Selecione o fornecedor antes de gerar o pedido.');
@@ -1675,41 +2068,41 @@ export default function HorusDirectComprasPage() {
       toast.error('Resolva os itens sem selo/preço antes de gravar o pedido.');
       return;
     }
+
+    // Verifica se já existe pedido em aberto/aprovado/aguardando conferência SEM itens conferidos
     setCreatingOrder(true);
     try {
       const token = getToken();
       const sup = supplierOverview.supplier;
-      const res = await fetch(`${apiUrl}/horus-purchases/orders`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({
-          company_id: companyId,
-          branch_id: selectedBranchId,
-          cod_grp_fornecedor: sup.cod_grp_fornecedor,
-          cod_fornecedor: sup.cod_fornecedor,
-          compra_consig: compraConsig,
-          observations: orderObservations,
-          items: cartItems.map((x) => ({ cod_item: x.cod_item, quantity: x.quantity })),
-        }),
+      const params = new URLSearchParams({
+        company_id: String(companyId),
+        branch_id: String(selectedBranchId),
+        cod_grp_fornecedor: String(sup.cod_grp_fornecedor),
+        cod_fornecedor: String(sup.cod_fornecedor),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.detail || 'Falha ao gravar pedido no Horus.');
-
-      toast.success(data.message || `Pedido #${data.horus_cod_pedido} gerado como AP (Aprovado)!`);
-      setCartItems([]);
-      setCheckedCartCods({});
-      setOrderObservations('');
-      await fetchOrdersList(true);
-      setActiveMainTab('ORDERS');
-      await openOrderInline(data.order_id, 'ITEMS');
-    } catch (e: any) {
-      toast.error(e?.message || 'Erro ao gerar pedido.');
-    } finally {
-      setCreatingOrder(false);
+      const candRes = await fetch(
+        `${apiUrl}/horus-purchases/orders/open-candidates?${params.toString()}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+      if (candRes.ok) {
+        const candData = await candRes.json();
+        const candidates: OpenOrderCandidate[] = candData.candidates || [];
+        if (candidates.length > 0) {
+          setOpenMergePrompt({
+            candidates,
+            selectedOrderId: candidates[0].id,
+          });
+          setCreatingOrder(false);
+          return;
+        }
+      }
+    } catch {
+      // Se falhar a consulta preventiva, segue fluxo normal de criação
     }
+
+    await executeCreateNewPurchaseOrder();
   };
 
   // ── Upload & Análise de XML da NF-e (Inline no Pedido ou na Aba XML) ───────
@@ -2272,8 +2665,10 @@ export default function HorusDirectComprasPage() {
                   <div className="flex flex-wrap items-center gap-1">
                     {[
                       { id: 'ACTIVE', label: 'Em Andamento' },
+                      { id: 'AB', label: 'Digitação (AB)' },
                       { id: 'AP', label: 'Aprovados (AP)' },
                       { id: 'AE', label: 'Aguard. Entrega (AE)' },
+                      { id: 'CA', label: 'Cancelados (CA)' },
                       { id: 'XML_OK', label: 'XML OK' },
                       { id: 'XML_PENDING', label: 'XML Divergente' },
                       { id: 'FINALIZED', label: 'Finalizados (EE)' },
@@ -2418,7 +2813,11 @@ export default function HorusDirectComprasPage() {
                                     }}
                                     className="px-2 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-indigo-500 hover:text-indigo-700 text-[10px] font-bold cursor-pointer"
                                   >
-                                    {ord.horus_status === 'AP' ? 'Editar / Ver' : 'Abrir'}
+                                    {ord.horus_status === 'AB' ||
+                                    ord.horus_status === 'AP' ||
+                                    ord.horus_status === 'AE'
+                                      ? 'Editar / Ver'
+                                      : 'Abrir'}
                                   </button>
                                   {(ord.horus_status === 'AE' || ord.horus_status === 'AP') && (
                                     <button
@@ -2495,444 +2894,759 @@ export default function HorusDirectComprasPage() {
             </>
           ) : (
             /* ── FICHA INLINE DO PEDIDO SELECIONADO (SEM MODAL!) ── */
-            <div className="space-y-2.5">
-              {/* Cabeçalho Compacto da Ficha do Pedido */}
-              <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 flex flex-col lg:flex-row lg:items-center justify-between gap-2 shadow-2xs">
-                <div className="flex flex-wrap items-center gap-2 min-w-0">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenOrderWorkspace(null);
-                      setActiveXmlDetail(null);
-                    }}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
-                  >
-                    <ArrowLeft className="w-3.5 h-3.5" />
-                    Voltar
-                  </button>
+            (() => {
+              const ord = openOrderWorkspace.order;
+              const safety = ord.safety;
+              const canModifyOrder = safety
+                ? safety.can_modify
+                : ['AB', 'AP', 'AE'].includes(ord.horus_status);
+              const canCancelOrder = safety
+                ? safety.can_cancel
+                : ['AB', 'AP', 'AE'].includes(ord.horus_status);
+              const canReopenOrder = safety ? safety.can_reopen : ord.horus_status === 'CA';
+              const displaySupplierName =
+                orderEditSupplier?.nome_fornecedor || ord.nome_fornecedor;
+              const displaySupplierCode =
+                orderEditSupplier?.cod_fornecedor ?? ord.cod_fornecedor;
+              const supplierWasChanged =
+                Boolean(orderEditSupplier) &&
+                (orderEditSupplier!.cod_fornecedor !== ord.cod_fornecedor ||
+                  orderEditSupplier!.cod_grp_fornecedor !== ord.cod_grp_fornecedor);
 
-                  <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
-
-                  <span className="font-mono font-bold text-sm text-indigo-700 dark:text-indigo-300">
-                    Pedido #{openOrderWorkspace.order.horus_cod_pedido || openOrderWorkspace.order.id}
-                  </span>
-                  <span className="font-bold text-slate-900 dark:text-white truncate max-w-md">
-                    {openOrderWorkspace.order.nome_fornecedor}
-                  </span>
-                  <span className="text-[11px] text-slate-500">
-                    ({openOrderWorkspace.order.branch_name})
-                  </span>
-
-                  <span
-                    className={`px-2 py-0.5 rounded border text-[10px] font-bold ${getHorusStatusBadgeClass(
-                      openOrderWorkspace.order.horus_status
-                    )}`}
-                  >
-                    {openOrderWorkspace.order.status_label}
-                  </span>
-
-                  <span
-                    className={`px-2 py-0.5 rounded border text-[10px] font-bold ${getXmlDecisionBadgeClass(
-                      openOrderWorkspace.order.xml_status
-                    )}`}
-                  >
-                    {openOrderWorkspace.order.xml_status_label}
-                  </span>
-                </div>
-
-                {/* Ações Contextuais em Linha Única */}
-                <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                  {openOrderWorkspace.order.horus_status === 'AP' && (
-                    <>
+              return (
+                <div className="space-y-2.5">
+                  {/* Cabeçalho Compacto da Ficha do Pedido */}
+                  <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 flex flex-col xl:flex-row xl:items-center justify-between gap-2 shadow-2xs">
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
                       <button
                         type="button"
-                        disabled={savingOrderEdit || !orderEditDirty}
-                        onClick={handleSaveOrderEdits}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-bold cursor-pointer"
+                        onClick={() => {
+                          setOpenOrderWorkspace(null);
+                          setActiveXmlDetail(null);
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 hover:bg-slate-100 dark:bg-slate-800 text-[11px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
                       >
-                        <Save className="w-3.5 h-3.5" />
-                        {savingOrderEdit ? 'Salvando...' : 'Salvar Alterações'}
+                        <ArrowLeft className="w-3.5 h-3.5" />
+                        Voltar
                       </button>
-                      <button
-                        type="button"
-                        disabled={exportingExcel}
-                        onClick={() => handleExportOrderExcel(openOrderWorkspace.order.id, false)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold cursor-pointer"
+
+                      <div className="h-4 w-px bg-slate-300 dark:bg-slate-700" />
+
+                      <span className="font-mono font-bold text-sm text-indigo-700 dark:text-indigo-300">
+                        Pedido #{ord.horus_cod_pedido || ord.id}
+                      </span>
+
+                      <span className="font-bold text-slate-900 dark:text-white truncate max-w-md">
+                        #{displaySupplierCode} — {displaySupplierName}
+                      </span>
+                      {supplierWasChanged && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 border border-amber-300 text-[10px] font-bold">
+                          Fornecedor trocado (não salvo)
+                        </span>
+                      )}
+
+                      {canModifyOrder && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = !showOrderSupplierSwap;
+                            setShowOrderSupplierSwap(next);
+                            if (next) searchSuppliersForOrderSwap('', orderSwapSupplierMode);
+                          }}
+                          className="px-2 py-0.5 rounded border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[10px] font-bold cursor-pointer"
+                          title="Trocar o fornecedor deste pedido e recalcular descontos"
+                        >
+                          Trocar Fornecedor
+                        </button>
+                      )}
+
+                      <span className="text-[11px] text-slate-500">({ord.branch_name})</span>
+
+                      <span
+                        className={`px-2 py-0.5 rounded border text-[10px] font-bold ${getHorusStatusBadgeClass(
+                          ord.horus_status
+                        )}`}
                       >
-                        <FileSpreadsheet className="w-3.5 h-3.5" />
-                        Excel (Manter AP)
-                      </button>
-                      <button
-                        type="button"
-                        disabled={exportingExcel}
-                        onClick={() => handleExportOrderExcel(openOrderWorkspace.order.id, true)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer"
+                        {ord.status_label}
+                      </span>
+
+                      <span className="px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-[10px] font-semibold text-slate-600 dark:text-slate-300">
+                        Pendência: {orderEditGerarPend === 'N' ? 'NÃO' : 'SIM'}
+                      </span>
+
+                      <span
+                        className={`px-2 py-0.5 rounded border text-[10px] font-bold ${getXmlDecisionBadgeClass(
+                          ord.xml_status
+                        )}`}
                       >
-                        <Download className="w-3.5 h-3.5" />
-                        Excel + Mudar p/ AE
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleManualStatusTransition(openOrderWorkspace.order.id, 'AE')}
-                        className="px-2 py-1 rounded-lg border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-[11px] font-bold cursor-pointer"
-                      >
-                        Mudar p/ AE
-                      </button>
-                    </>
-                  )}
+                        {ord.xml_status_label}
+                      </span>
+                    </div>
 
-                  {openOrderWorkspace.order.horus_status === 'AE' && (
-                    <button
-                      type="button"
-                      disabled={exportingExcel}
-                      onClick={() => handleExportOrderExcel(openOrderWorkspace.order.id, false)}
-                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold cursor-pointer"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      Baixar Excel
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Abas Internas Inline do Pedido: Itens | Validar XML da NF-e | Histórico */}
-              <div className="flex items-center justify-between gap-2 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl px-2.5 py-1.5">
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => setOrderWorkspaceSubTab('ITEMS')}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
-                      orderWorkspaceSubTab === 'ITEMS'
-                        ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                  >
-                    <ClipboardList className="w-3.5 h-3.5" />
-                    Itens do Pedido ({orderWorkspaceTotals.skus} tít / {orderWorkspaceTotals.qty} pçs)
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setOrderWorkspaceSubTab('XML')}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
-                      orderWorkspaceSubTab === 'XML'
-                        ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                  >
-                    <FileCheck2 className="w-3.5 h-3.5" />
-                    Validar XML da NF-e
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setOrderWorkspaceSubTab('LOGS')}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
-                      orderWorkspaceSubTab === 'LOGS'
-                        ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
-                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                    }`}
-                  >
-                    <History className="w-3.5 h-3.5" />
-                    Histórico ({openOrderWorkspace.logs.length})
-                  </button>
-                </div>
-
-                <div className="font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                  Bruto: <strong>{formatMoney(orderWorkspaceTotals.gross)}</strong> • Líquido:{' '}
-                  <strong className="text-indigo-700 dark:text-indigo-300">
-                    {formatMoney(orderWorkspaceTotals.net)}
-                  </strong>
-                </div>
-              </div>
-
-              {/* SUB-ABA 1: ITENS DO PEDIDO (EDITÁVEL SE AP, LEITURA SE AE/EE) */}
-              {orderWorkspaceSubTab === 'ITEMS' && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
-                  {openOrderWorkspace.order.horus_status === 'AP' && (
-                    <div className="p-2.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <form onSubmit={handleOrderWorkspaceAddItem} className="flex items-center gap-1.5 flex-1 min-w-[260px] max-w-xl">
-                          <input
-                            type="text"
-                            value={orderAddItemQuery}
-                            onChange={(e) => setOrderAddItemQuery(e.target.value)}
-                            placeholder="Adicionar item ao pedido AP (ISBN, Cód. ou Título)..."
-                            className="flex-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] focus:outline-none focus:border-indigo-500"
-                          />
-                          <input
-                            type="number"
-                            min={1}
-                            value={orderAddItemQty}
-                            onChange={(e) => setOrderAddItemQty(Math.max(1, Number(e.target.value) || 1))}
-                            className="w-16 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] text-center font-mono"
-                          />
+                    {/* Ações Contextuais em Linha Única (Salvar | Status AB/AP/AE | Excel | Cancelar / Reativar) */}
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      {canModifyOrder && (
+                        <>
                           <button
-                            type="submit"
-                            disabled={searchingOrderAddItem}
-                            className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold cursor-pointer"
+                            type="button"
+                            disabled={savingOrderEdit || !orderEditDirty}
+                            onClick={() => handleSaveOrderEdits()}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-bold cursor-pointer"
                           >
-                            {searchingOrderAddItem ? '...' : 'Inserir'}
+                            <Save className="w-3.5 h-3.5" />
+                            {savingOrderEdit ? 'Salvando...' : 'Salvar Alterações'}
+                          </button>
+
+                          {/* Transições seguras de Status entre AB (Digitação), AP (Aprovado) e AE (Aguard. Entrega) */}
+                          <div className="inline-flex items-center rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950 p-0.5 gap-0.5">
+                            {(['AB', 'AP', 'AE'] as const).map((stCode) => {
+                              const isCurrent = ord.horus_status === stCode;
+                              const labelMap = {
+                                AB: 'Digitação (AB)',
+                                AP: 'Aprovado (AP)',
+                                AE: 'Aguard. (AE)',
+                              };
+                              return (
+                                <button
+                                  key={stCode}
+                                  type="button"
+                                  disabled={isCurrent || changingOrderStatus}
+                                  onClick={() =>
+                                    orderEditDirty
+                                      ? handleSaveOrderEdits(stCode)
+                                      : handleManualStatusTransition(ord.id, stCode)
+                                  }
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold transition cursor-pointer ${
+                                    isCurrent
+                                      ? 'bg-slate-900 text-white dark:bg-indigo-600 cursor-default'
+                                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/80 dark:hover:bg-slate-800'
+                                  }`}
+                                  title={
+                                    isCurrent
+                                      ? `Status atual: ${stCode}`
+                                      : `Mudar status deste pedido para ${labelMap[stCode]} no Horus`
+                                  }
+                                >
+                                  {labelMap[stCode]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+
+                      {ord.horus_status !== 'CA' && (
+                        <button
+                          type="button"
+                          disabled={exportingExcel}
+                          onClick={() => handleExportOrderExcel(ord.id, false)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold cursor-pointer"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5" />
+                          Excel
+                        </button>
+                      )}
+
+                      {canModifyOrder && (ord.horus_status === 'AP' || ord.horus_status === 'AB') && (
+                        <button
+                          type="button"
+                          disabled={exportingExcel}
+                          onClick={() => handleExportOrderExcel(ord.id, true)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          <Download className="w-3.5 h-3.5" />
+                          Excel + AE
+                        </button>
+                      )}
+
+                      {canCancelOrder && (
+                        <button
+                          type="button"
+                          disabled={changingOrderStatus}
+                          onClick={() => setShowCancelOrderBar((v) => !v)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-800 text-[11px] font-bold cursor-pointer"
+                          title="Cancelar pedido no Horus mantendo histórico no Cronuz"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          Cancelar (CA)
+                        </button>
+                      )}
+
+                      {canReopenOrder && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={changingOrderStatus}
+                            onClick={() =>
+                              handleManualStatusTransition(
+                                ord.id,
+                                'AB',
+                                'Pedido reativado para Em Digitação (AB) via Cronuz B2B'
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Voltar p/ Digitação (AB)
                           </button>
                           <button
                             type="button"
-                            onClick={() => setShowOrderSheetBar((v) => !v)}
-                            className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer"
+                            disabled={changingOrderStatus}
+                            onClick={() =>
+                              handleManualStatusTransition(
+                                ord.id,
+                                'AP',
+                                'Pedido reativado como Aprovado (AP) via Cronuz B2B'
+                              )
+                            }
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer"
                           >
-                            Planilha/TXT
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Reativar Aprovado (AP)
                           </button>
-                        </form>
+                        </>
+                      )}
+                    </div>
+                  </div>
 
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={orderEditConsig}
-                            onChange={(e) => {
-                              setOrderEditConsig(e.target.value as 'N' | 'S');
-                              setOrderEditDirty(true);
-                            }}
-                            className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold"
-                          >
-                            <option value="N">Compra Firme</option>
-                            <option value="S">Consignação</option>
-                          </select>
-                          <input
-                            type="text"
-                            value={orderEditObs}
-                            onChange={(e) => {
-                              setOrderEditObs(e.target.value);
-                              setOrderEditDirty(true);
-                            }}
-                            placeholder="Observação do pedido..."
-                            className="w-56 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
-                          />
-                        </div>
+                  {/* Alerta de Segurança caso o pedido tenha itens conferidos, NF vinculada ou esteja finalizado */}
+                  {safety?.block_reason && ord.horus_status !== 'CA' && (
+                    <div className="px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/35 border border-rose-300 dark:border-rose-800 flex flex-wrap items-center justify-between gap-2 text-[11px] text-rose-900 dark:text-rose-200">
+                      <div className="flex items-center gap-2 font-semibold">
+                        <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>
+                          <strong>Trava de Segurança:</strong> {safety.block_reason}
+                        </span>
                       </div>
-
-                      {showOrderSheetBar && (
-                        <form onSubmit={handleOrderWorkspaceImportSheet} className="flex items-center gap-2 pt-1">
-                          <input
-                            type="file"
-                            accept=".xlsx,.csv,.txt"
-                            onChange={(e) => setOrderSheetFile(e.target.files?.[0] || null)}
-                            className="text-[11px] text-slate-600"
-                          />
-                          <button
-                            type="submit"
-                            disabled={importingOrderSheet || !orderSheetFile}
-                            className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold disabled:opacity-40 cursor-pointer"
-                          >
-                            {importingOrderSheet ? 'Importando...' : 'Carregar no Pedido'}
-                          </button>
-                        </form>
-                      )}
-
-                      {orderAddLookupResults.length > 1 && (
-                        <div className="border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 max-h-40 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
-                          {orderAddLookupResults.map((cand) => (
-                            <div
-                              key={cand.cod_item}
-                              onClick={() => {
-                                mergeItemsIntoOrderWorkspace([cand]);
-                                setOrderAddLookupResults([]);
-                                setOrderAddItemQuery('');
-                              }}
-                              className="px-2.5 py-1.5 hover:bg-indigo-50 dark:hover:bg-slate-800 flex items-center justify-between cursor-pointer text-[11px]"
-                            >
-                              <span>
-                                <strong className="font-mono">{cand.isbn || cand.cod_item}</strong> — {cand.nome_item} ({cand.nome_editora})
-                              </span>
-                              <span className="font-mono font-bold text-indigo-700">
-                                {formatMoney(cand.vlr_capa)} (-{cand.discount_pct}%)
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
+                      <div className="flex items-center gap-2 font-mono text-[10px]">
+                        {safety.conferred_qty > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/60 font-bold">
+                            Conferidos: {safety.conferred_qty} pçs
+                          </span>
+                        )}
+                        {safety.linked_nf_count > 0 && (
+                          <span className="px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/60 font-bold">
+                            NFs vinculadas: {safety.linked_nf_count}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-[11px]">
-                      <thead>
-                        <tr className="bg-slate-100 dark:bg-slate-800/90 border-b border-slate-300 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                          <th className="py-1.5 px-2.5 w-28">ISBN</th>
-                          <th className="py-1.5 px-2 w-16">Cód.</th>
-                          <th className="py-1.5 px-2.5">Título</th>
-                          <th className="py-1.5 px-2.5 w-36">Editora / Selo</th>
-                          <th className="py-1.5 px-2 text-right w-20">Est. Ped</th>
-                          <th className="py-1.5 px-2 text-center w-20">Qtd</th>
-                          <th className="py-1.5 px-2 text-right w-24">Capa</th>
-                          <th className="py-1.5 px-2 text-right w-20">Desc %</th>
-                          <th className="py-1.5 px-2 text-right w-24">Líq. Unit</th>
-                          <th className="py-1.5 px-2.5 text-right w-28">Subtotal Líq.</th>
-                          {openOrderWorkspace.order.horus_status === 'AP' && (
-                            <th className="py-1.5 px-2 w-10 text-center" />
-                          )}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                        {openOrderWorkspace.items.map((it, idx) => (
-                          <tr
-                            key={it.cod_item}
-                            className={idx % 2 === 1 ? 'bg-slate-50/50 dark:bg-slate-900/40' : ''}
-                          >
-                            <td className="py-1.5 px-2.5 font-mono text-slate-700 dark:text-slate-300">
-                              {it.isbn || '—'}
-                            </td>
-                            <td className="py-1.5 px-2 font-mono text-slate-500">{it.cod_item}</td>
-                            <td className="py-1.5 px-2.5 font-medium text-slate-900 dark:text-slate-100">
-                              {it.nome_item}
-                            </td>
-                            <td className="py-1.5 px-2.5 text-slate-600 dark:text-slate-300 truncate max-w-[140px]">
-                              {it.nome_editora}
-                            </td>
-                            <td className="py-1.5 px-2 text-right font-mono text-slate-500">
-                              {it.stock_at_order}
-                            </td>
-                            <td className="py-1.5 px-2 text-center">
-                              {openOrderWorkspace.order.horus_status === 'AP' ? (
-                                <input
-                                  id={`order-edit-qty-${idx}`}
-                                  type="number"
-                                  min={1}
-                                  value={it.quantity}
-                                  onChange={(e) => updateOrderWorkspaceQty(it.cod_item, Number(e.target.value))}
-                                  onKeyDown={(e) =>
-                                    handleQtyKeyDown(e, idx, openOrderWorkspace.items.length, 'order-edit-qty')
-                                  }
-                                  className="w-16 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-center font-mono font-bold focus:border-indigo-500 focus:outline-none"
-                                />
-                              ) : (
-                                <strong className="font-mono">{it.quantity}</strong>
-                              )}
-                            </td>
-                            <td className="py-1.5 px-2 text-right font-mono">
-                              {formatMoney(it.unit_cover_price)}
-                            </td>
-                            <td className="py-1.5 px-2 text-right font-mono text-emerald-700 dark:text-emerald-400">
-                              {it.discount_pct.toFixed(2)}%
-                            </td>
-                            <td className="py-1.5 px-2 text-right font-mono">
-                              {formatMoney(it.unit_net_price)}
-                            </td>
-                            <td className="py-1.5 px-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
-                              {formatMoney(it.subtotal_net)}
-                            </td>
-                            {openOrderWorkspace.order.horus_status === 'AP' && (
-                              <td className="py-1.5 px-2 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => removeOrderWorkspaceItem(it.cod_item)}
-                                  className="p-1 rounded text-slate-400 hover:text-rose-600 cursor-pointer"
-                                  title="Remover item do pedido"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                </button>
-                              </td>
-                            )}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {/* SUB-ABA 2: VALIDAR XML DA NF-e DIRETO DENTRO DO PEDIDO */}
-              {orderWorkspaceSubTab === 'XML' && (
-                <div className="space-y-2.5">
-                  <form
-                    onSubmit={(e) =>
-                      handleUploadAndAnalyzeXml(
-                        e,
-                        openOrderWorkspace.order.id,
-                        openOrderWorkspace.order.branch_id
-                      )
-                    }
-                    className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200 inline-flex items-center gap-1">
-                        <Upload className="w-3.5 h-3.5 text-indigo-600" />
-                        XML da NF-e deste Pedido:
-                      </span>
-                      <input
-                        ref={orderXmlInputRef}
-                        type="file"
-                        accept=".xml,text/xml,application/xml"
-                        onChange={(e) => setXmlUploadFile(e.target.files?.[0] || null)}
-                        className="text-[11px] text-slate-600"
-                      />
-                      <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer">
+                  {/* Barra Inline de Confirmação de Cancelamento (CA) */}
+                  {showCancelOrderBar && canCancelOrder && (
+                    <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-300 dark:border-rose-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="flex-1 flex flex-col sm:flex-row sm:items-center gap-2">
+                        <span className="text-[11px] font-bold text-rose-900 dark:text-rose-200 shrink-0">
+                          Cancelar Pedido #{ord.horus_cod_pedido || ord.id} (mantém histórico p/ reativar):
+                        </span>
                         <input
-                          type="checkbox"
-                          checked={xmlAutoAcceptIfOk}
-                          onChange={(e) => setXmlAutoAcceptIfOk(e.target.checked)}
-                          className="rounded border-slate-300 text-indigo-600"
+                          type="text"
+                          value={cancelOrderReason}
+                          onChange={(e) => setCancelOrderReason(e.target.value)}
+                          placeholder="Motivo do cancelamento (opcional)..."
+                          className="flex-1 px-2.5 py-1 rounded-lg border border-rose-300 bg-white dark:bg-slate-900 text-[11px]"
                         />
-                        Aceitar auto se 100% OK
-                      </label>
-                      {openOrderWorkspace.order.horus_status === 'AP' && (
-                        <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer">
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={changingOrderStatus}
+                          onClick={() =>
+                            handleManualStatusTransition(
+                              ord.id,
+                              'CA',
+                              cancelOrderReason || 'Cancelado pelo usuário via Cronuz B2B'
+                            )
+                          }
+                          className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          {changingOrderStatus ? 'Cancelando...' : 'Confirmar Cancelamento (CA)'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowCancelOrderBar(false)}
+                          className="px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-[11px] font-semibold cursor-pointer"
+                        >
+                          Voltar
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Barra Inline de Troca de Fornecedor no Pedido */}
+                  {showOrderSupplierSwap && canModifyOrder && (
+                    <div className="p-2.5 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/25 border border-indigo-200 dark:border-indigo-800 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-bold text-indigo-900 dark:text-indigo-200">
+                            Trocar Fornecedor do Pedido (recalcula descontos automaticamente):
+                          </span>
+                          <div className="inline-flex p-0.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOrderSwapSupplierMode('SAVED');
+                                searchSuppliersForOrderSwap(orderSwapSupplierQuery, 'SAVED');
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                                orderSwapSupplierMode === 'SAVED'
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'text-slate-600'
+                              }`}
+                            >
+                              Salvos na Filial
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOrderSwapSupplierMode('HORUS');
+                                searchSuppliersForOrderSwap(orderSwapSupplierQuery, 'HORUS');
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                                orderSwapSupplierMode === 'HORUS'
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'text-slate-600'
+                              }`}
+                            >
+                              Horus SQL
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
                           <input
-                            type="checkbox"
-                            checked={xmlAdvanceHorusToAe}
-                            onChange={(e) => setXmlAdvanceHorusToAe(e.target.checked)}
-                            className="rounded border-slate-300 text-indigo-600"
+                            type="text"
+                            value={orderSwapSupplierQuery}
+                            onChange={(e) => setOrderSwapSupplierQuery(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                searchSuppliersForOrderSwap(orderSwapSupplierQuery);
+                              }
+                            }}
+                            placeholder="Nome, CNPJ ou código..."
+                            className="w-52 px-2.5 py-1 rounded-lg border border-indigo-300 bg-white dark:bg-slate-900 text-[11px]"
                           />
-                          Mudar AP ➔ AE
-                        </label>
-                      )}
+                          <button
+                            type="button"
+                            disabled={loadingOrderSwapSuppliers}
+                            onClick={() => searchSuppliersForOrderSwap(orderSwapSupplierQuery)}
+                            className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold cursor-pointer"
+                          >
+                            {loadingOrderSwapSuppliers ? '...' : 'Buscar'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setShowOrderSupplierSwap(false)}
+                            className="px-2 py-1 rounded-lg border border-slate-300 bg-white text-[11px] cursor-pointer"
+                          >
+                            Fechar
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="max-h-36 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+                        {orderSwapSuppliersList.map((sup) => (
+                          <button
+                            key={`${sup.cod_grp_fornecedor}-${sup.cod_fornecedor}`}
+                            type="button"
+                            onClick={() => handleSelectNewSupplierForOrder(sup)}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-indigo-500 text-left flex items-center justify-between gap-2 cursor-pointer"
+                          >
+                            <span className="truncate text-[11px] font-semibold text-slate-800 dark:text-slate-100">
+                              #{sup.cod_fornecedor} — {sup.nom_fornecedor}
+                            </span>
+                            <span className="text-[10px] font-mono text-emerald-700 shrink-0">
+                              {sup.configured_publishers_count || 0} selo(s)
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Abas Internas Inline do Pedido: Itens | Validar XML da NF-e | Histórico */}
+                  <div className="flex items-center justify-between gap-2 bg-slate-100 dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl px-2.5 py-1.5">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setOrderWorkspaceSubTab('ITEMS')}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                          orderWorkspaceSubTab === 'ITEMS'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        }`}
+                      >
+                        <ClipboardList className="w-3.5 h-3.5" />
+                        Itens do Pedido ({orderWorkspaceTotals.skus} tít / {orderWorkspaceTotals.qty} pçs)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOrderWorkspaceSubTab('XML')}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                          orderWorkspaceSubTab === 'XML'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        }`}
+                      >
+                        <FileCheck2 className="w-3.5 h-3.5" />
+                        Validar XML da NF-e
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setOrderWorkspaceSubTab('LOGS')}
+                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer ${
+                          orderWorkspaceSubTab === 'LOGS'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-700 dark:text-indigo-300 shadow-2xs border border-slate-200 dark:border-slate-700'
+                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                        }`}
+                      >
+                        <History className="w-3.5 h-3.5" />
+                        Histórico ({openOrderWorkspace.logs.length})
+                      </button>
                     </div>
 
-                    <button
-                      type="submit"
-                      disabled={analyzingXml || !xmlUploadFile}
-                      className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-bold cursor-pointer"
-                    >
-                      <FileCheck2 className="w-3.5 h-3.5" />
-                      {analyzingXml ? 'Validando XML...' : 'Validar XML contra Pedido'}
-                    </button>
-                  </form>
+                    <div className="font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                      Bruto: <strong>{formatMoney(orderWorkspaceTotals.gross)}</strong> • Líquido:{' '}
+                      <strong className="text-indigo-700 dark:text-indigo-300">
+                        {formatMoney(orderWorkspaceTotals.net)}
+                      </strong>
+                    </div>
+                  </div>
 
-                  {renderInlineXmlComparisonPanel()}
-                </div>
-              )}
+                  {/* SUB-ABA 1: ITENS DO PEDIDO (EDITÁVEL SE AB/AP/AE SEM CONFERÊNCIA/NF; LEITURA CASO CONTRÁRIO) */}
+                  {orderWorkspaceSubTab === 'ITEMS' && (
+                    <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
+                      {canModifyOrder && (
+                        <div className="p-2.5 bg-slate-50 dark:bg-slate-950 border-b border-slate-200 dark:border-slate-800 space-y-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <form onSubmit={handleOrderWorkspaceAddItem} className="flex items-center gap-1.5 flex-1 min-w-[260px] max-w-xl">
+                              <input
+                                type="text"
+                                value={orderAddItemQuery}
+                                onChange={(e) => setOrderAddItemQuery(e.target.value)}
+                                placeholder="Adicionar item ao pedido (ISBN, Cód. ou Título)..."
+                                className="flex-1 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] focus:outline-none focus:border-indigo-500"
+                              />
+                              <input
+                                type="number"
+                                min={1}
+                                value={orderAddItemQty}
+                                onChange={(e) => setOrderAddItemQty(Math.max(1, Number(e.target.value) || 1))}
+                                className="w-16 px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] text-center font-mono"
+                              />
+                              <button
+                                type="submit"
+                                disabled={searchingOrderAddItem}
+                                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold cursor-pointer"
+                              >
+                                {searchingOrderAddItem ? '...' : 'Inserir'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setShowOrderSheetBar((v) => !v)}
+                                className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer"
+                              >
+                                Planilha/TXT
+                              </button>
+                            </form>
 
-              {/* SUB-ABA 3: HISTÓRICO DO PEDIDO */}
-              {orderWorkspaceSubTab === 'LOGS' && (
-                <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl overflow-hidden">
-                  <table className="w-full text-left border-collapse text-[11px]">
-                    <thead>
-                      <tr className="bg-slate-100 dark:bg-slate-800 border-b border-slate-300 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600">
-                        <th className="py-1.5 px-2.5 w-36">Data / Hora</th>
-                        <th className="py-1.5 px-2.5 w-36">Usuário</th>
-                        <th className="py-1.5 px-2.5 w-40">Ação</th>
-                        <th className="py-1.5 px-2.5">Detalhes</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-                      {openOrderWorkspace.logs.map((lg) => (
-                        <tr key={lg.id}>
-                          <td className="py-1.5 px-2.5 font-mono text-slate-500">
-                            {formatDateTimeBr(lg.created_at)}
-                          </td>
-                          <td className="py-1.5 px-2.5 font-semibold text-slate-800 dark:text-slate-200">
-                            {lg.user_name || 'Sistema'}
-                          </td>
-                          <td className="py-1.5 px-2.5 font-mono text-[10px] text-indigo-700 dark:text-indigo-300">
-                            {lg.action}
-                          </td>
-                          <td className="py-1.5 px-2.5 text-slate-700 dark:text-slate-300">
-                            {lg.details}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <select
+                                value={orderEditConsig}
+                                onChange={(e) => {
+                                  setOrderEditConsig(e.target.value as 'N' | 'S');
+                                  setOrderEditDirty(true);
+                                }}
+                                className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold"
+                              >
+                                <option value="N">Compra Firme</option>
+                                <option value="S">Consignação</option>
+                              </select>
+
+                              <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]">
+                                <span className="text-[10px] font-bold uppercase text-slate-500">
+                                  Pendência:
+                                </span>
+                                <select
+                                  value={orderEditGerarPend}
+                                  onChange={(e) => {
+                                    setOrderEditGerarPend(e.target.value as 'S' | 'N');
+                                    setOrderEditDirty(true);
+                                  }}
+                                  className="bg-transparent font-bold text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                                >
+                                  <option value="S">SIM</option>
+                                  <option value="N">NÃO</option>
+                                </select>
+                              </div>
+
+                              <input
+                                type="text"
+                                value={orderEditObs}
+                                onChange={(e) => {
+                                  setOrderEditObs(e.target.value);
+                                  setOrderEditDirty(true);
+                                }}
+                                placeholder="Observação do pedido..."
+                                className="w-52 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
+                              />
+                            </div>
+                          </div>
+
+                          {showOrderSheetBar && (
+                            <form onSubmit={handleOrderWorkspaceImportSheet} className="flex items-center gap-2 pt-1">
+                              <input
+                                type="file"
+                                accept=".xlsx,.csv,.txt"
+                                onChange={(e) => setOrderSheetFile(e.target.files?.[0] || null)}
+                                className="text-[11px] text-slate-600"
+                              />
+                              <button
+                                type="submit"
+                                disabled={importingOrderSheet || !orderSheetFile}
+                                className="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-[11px] font-bold disabled:opacity-40 cursor-pointer"
+                              >
+                                {importingOrderSheet ? 'Importando...' : 'Carregar no Pedido'}
+                              </button>
+                            </form>
+                          )}
+
+                          {orderAddLookupResults.length > 1 && (
+                            <div className="border border-slate-200 dark:border-slate-700 rounded-lg bg-white dark:bg-slate-900 max-h-40 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800">
+                              {orderAddLookupResults.map((cand) => (
+                                <div
+                                  key={cand.cod_item}
+                                  onClick={() => {
+                                    mergeItemsIntoOrderWorkspace([cand]);
+                                    setOrderAddLookupResults([]);
+                                    setOrderAddItemQuery('');
+                                  }}
+                                  className="px-2.5 py-1.5 hover:bg-indigo-50 dark:hover:bg-slate-800 flex items-center justify-between cursor-pointer text-[11px]"
+                                >
+                                  <span>
+                                    <strong className="font-mono">{cand.isbn || cand.cod_item}</strong> — {cand.nome_item} ({cand.nome_editora})
+                                  </span>
+                                  <span className="font-mono font-bold text-indigo-700">
+                                    {formatMoney(cand.vlr_capa)} (-{cand.discount_pct}%)
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-[11px]">
+                          <thead>
+                            <tr className="bg-slate-100 dark:bg-slate-800/90 border-b border-slate-300 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                              <th className="py-1.5 px-2.5 w-28">ISBN</th>
+                              <th className="py-1.5 px-2 w-16">Cód.</th>
+                              <th className="py-1.5 px-2.5">Título</th>
+                              <th className="py-1.5 px-2.5 w-36">Editora / Selo</th>
+                              <th className="py-1.5 px-2 text-right w-20">Est. Ped</th>
+                              <th className="py-1.5 px-2 text-center w-20">Qtd</th>
+                              <th className="py-1.5 px-2 text-right w-24">Capa</th>
+                              <th className="py-1.5 px-2 text-right w-24">Desc %</th>
+                              <th className="py-1.5 px-2 text-right w-24">Líq. Unit</th>
+                              <th className="py-1.5 px-2.5 text-right w-28">Subtotal Líq.</th>
+                              {canModifyOrder && <th className="py-1.5 px-2 w-10 text-center" />}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                            {openOrderWorkspace.items.map((it, idx) => (
+                              <tr
+                                key={it.cod_item}
+                                className={
+                                  it.publisher_configured === false
+                                    ? 'bg-rose-50/60 dark:bg-rose-950/25'
+                                    : idx % 2 === 1
+                                      ? 'bg-slate-50/50 dark:bg-slate-900/40'
+                                      : ''
+                                }
+                              >
+                                <td className="py-1.5 px-2.5 font-mono text-slate-700 dark:text-slate-300">
+                                  {it.isbn || '—'}
+                                </td>
+                                <td className="py-1.5 px-2 font-mono text-slate-500">{it.cod_item}</td>
+                                <td className="py-1.5 px-2.5 font-medium text-slate-900 dark:text-slate-100">
+                                  {it.nome_item}
+                                </td>
+                                <td
+                                  className={`py-1.5 px-2.5 truncate max-w-[140px] ${
+                                    it.publisher_configured === false
+                                      ? 'text-rose-700 font-bold'
+                                      : 'text-slate-600 dark:text-slate-300'
+                                  }`}
+                                  title={it.validation_warning || it.nome_editora}
+                                >
+                                  {it.nome_editora}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-mono text-slate-500">
+                                  {it.stock_at_order}
+                                </td>
+                                <td className="py-1.5 px-2 text-center">
+                                  {canModifyOrder ? (
+                                    <input
+                                      id={`order-edit-qty-${idx}`}
+                                      type="number"
+                                      min={1}
+                                      value={it.quantity}
+                                      onChange={(e) => updateOrderWorkspaceQty(it.cod_item, Number(e.target.value))}
+                                      onKeyDown={(e) =>
+                                        handleQtyKeyDown(e, idx, openOrderWorkspace.items.length, 'order-edit-qty')
+                                      }
+                                      className="w-16 px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-center font-mono font-bold focus:border-indigo-500 focus:outline-none"
+                                    />
+                                  ) : (
+                                    <strong className="font-mono">{it.quantity}</strong>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-mono">
+                                  {formatMoney(it.unit_cover_price)}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-mono">
+                                  {canModifyOrder ? (
+                                    <div className="w-20 ml-auto">
+                                      <CurrencyInput
+                                        value={it.discount_pct}
+                                        onChangeValue={(val) =>
+                                          updateOrderWorkspaceDiscount(it.cod_item, val)
+                                        }
+                                        suffixStr="%"
+                                        max={100}
+                                        className="w-full px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 focus:border-indigo-500 focus:outline-none"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <span className="text-emerald-700 dark:text-emerald-400">
+                                      {it.discount_pct.toFixed(2)}%
+                                    </span>
+                                  )}
+                                </td>
+                                <td className="py-1.5 px-2 text-right font-mono">
+                                  {formatMoney(it.unit_net_price)}
+                                </td>
+                                <td className="py-1.5 px-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
+                                  {formatMoney(it.subtotal_net)}
+                                </td>
+                                {canModifyOrder && (
+                                  <td className="py-1.5 px-2 text-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => removeOrderWorkspaceItem(it.cod_item)}
+                                      className="p-1 rounded text-slate-400 hover:text-rose-600 cursor-pointer"
+                                      title="Remover item do pedido"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </td>
+                                )}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* SUB-ABA 2: VALIDAR XML DA NF-e DIRETO DENTRO DO PEDIDO */}
+                  {orderWorkspaceSubTab === 'XML' && (
+                    <div className="space-y-2.5">
+                      <form
+                        onSubmit={(e) =>
+                          handleUploadAndAnalyzeXml(e, ord.id, ord.branch_id)
+                        }
+                        className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 flex flex-wrap items-center justify-between gap-2"
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200 inline-flex items-center gap-1">
+                            <Upload className="w-3.5 h-3.5 text-indigo-600" />
+                            XML da NF-e deste Pedido:
+                          </span>
+                          <input
+                            ref={orderXmlInputRef}
+                            type="file"
+                            accept=".xml,text/xml,application/xml"
+                            onChange={(e) => setXmlUploadFile(e.target.files?.[0] || null)}
+                            className="text-[11px] text-slate-600"
+                          />
+                          <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={xmlAutoAcceptIfOk}
+                              onChange={(e) => setXmlAutoAcceptIfOk(e.target.checked)}
+                              className="rounded border-slate-300 text-indigo-600"
+                            />
+                            Aceitar auto se 100% OK
+                          </label>
+                          {ord.horus_status === 'AP' && (
+                            <label className="inline-flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={xmlAdvanceHorusToAe}
+                                onChange={(e) => setXmlAdvanceHorusToAe(e.target.checked)}
+                                className="rounded border-slate-300 text-indigo-600"
+                              />
+                              Mudar AP ➔ AE
+                            </label>
+                          )}
+                        </div>
+
+                        <button
+                          type="submit"
+                          disabled={analyzingXml || !xmlUploadFile}
+                          className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-bold cursor-pointer"
+                        >
+                          <FileCheck2 className="w-3.5 h-3.5" />
+                          {analyzingXml ? 'Validando XML...' : 'Validar XML contra Pedido'}
+                        </button>
+                      </form>
+
+                      {renderInlineXmlComparisonPanel()}
+                    </div>
+                  )}
+
+                  {/* SUB-ABA 3: HISTÓRICO DO PEDIDO */}
+                  {orderWorkspaceSubTab === 'LOGS' && (
+                    <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl overflow-hidden">
+                      <table className="w-full text-left border-collapse text-[11px]">
+                        <thead>
+                          <tr className="bg-slate-100 dark:bg-slate-800 border-b border-slate-300 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                            <th className="py-1.5 px-2.5 w-36">Data / Hora</th>
+                            <th className="py-1.5 px-2.5 w-36">Usuário</th>
+                            <th className="py-1.5 px-2.5 w-40">Ação</th>
+                            <th className="py-1.5 px-2.5">Detalhes</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                          {openOrderWorkspace.logs.map((lg) => (
+                            <tr key={lg.id}>
+                              <td className="py-1.5 px-2.5 font-mono text-slate-500">
+                                {formatDateTimeBr(lg.created_at)}
+                              </td>
+                              <td className="py-1.5 px-2.5 font-semibold text-slate-800 dark:text-slate-200">
+                                {lg.user_name || 'Sistema'}
+                              </td>
+                              <td className="py-1.5 px-2.5 font-mono text-[10px] text-indigo-700 dark:text-indigo-300">
+                                {lg.action}
+                              </td>
+                              <td className="py-1.5 px-2.5 text-slate-700 dark:text-slate-300">
+                                {lg.details}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+              );
+            })()
           )}
         </div>
       )}
@@ -3011,15 +3725,17 @@ export default function HorusDirectComprasPage() {
                       <span
                         onClick={(ev) => {
                           ev.stopPropagation();
-                          setSupplierOverview(null);
-                          setCartItems([]);
-                          setCheckedCartCods({});
+                          if (cartItems.length === 0) {
+                            setSupplierOverview(null);
+                            setCheckedCartCods({});
+                          }
                           setIsSupplierPickerOpen(true);
+                          setTimeout(() => supplierSearchInputRef.current?.focus(), 40);
                         }}
-                        className="p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-400 hover:text-slate-700"
-                        title="Trocar fornecedor"
+                        className="px-1.5 py-0.5 rounded bg-slate-200/70 hover:bg-indigo-100 dark:bg-slate-800 text-[10px] font-bold text-slate-600 hover:text-indigo-700"
+                        title="Trocar fornecedor (mantém os itens já digitados e recalcula descontos)"
                       >
-                        <X className="w-3 h-3" />
+                        Trocar
                       </span>
                     )}
                     <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -3100,7 +3816,7 @@ export default function HorusDirectComprasPage() {
                             type="button"
                             onClick={() => {
                               if (selectedBranchId !== null) {
-                                loadSupplierOverview(
+                                handleSelectSupplierOnDesk(
                                   selectedBranchId,
                                   sup.cod_grp_fornecedor,
                                   sup.cod_fornecedor
@@ -3908,7 +4624,19 @@ export default function HorusDirectComprasPage() {
                           </td>
                           <td className="py-1.5 px-2 text-right font-mono">{it.vlr_capa.toFixed(2)}</td>
                           <td className="py-1.5 px-2 text-right font-mono text-emerald-700 dark:text-emerald-400">
-                            {it.publisher_configured ? `${it.discount_pct.toFixed(1)}%` : '—'}
+                            {it.publisher_configured ? (
+                              <div className="w-20 ml-auto">
+                                <CurrencyInput
+                                  value={it.discount_pct}
+                                  onChangeValue={(val) => updateCartItemDiscount(it.cod_item, val)}
+                                  suffixStr="%"
+                                  max={100}
+                                  className="w-full px-1.5 py-0.5 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-right font-mono font-bold text-emerald-700 dark:text-emerald-400 focus:border-indigo-500 focus:outline-none"
+                                />
+                              </div>
+                            ) : (
+                              '—'
+                            )}
                           </td>
                           <td className="py-1.5 px-2 text-right font-mono">
                             {it.unit_net_price.toFixed(2)}
@@ -3935,8 +4663,103 @@ export default function HorusDirectComprasPage() {
               </table>
             </div>
 
-            {/* Rodapé Compacto de Fechamento do Pedido (Grava como AP no Horus) */}
-            <div className="bg-slate-100 dark:bg-slate-950 border-t border-slate-300 dark:border-slate-800 px-3 py-2 flex flex-col lg:flex-row lg:items-center justify-between gap-2 text-[11px]">
+            {/* Alerta Interativo: Pedido em Aberto Detectado sem Conferência -> Acrescentar vs Criar Novo */}
+            {openMergePrompt && (
+              <div className="p-3 bg-amber-50/90 dark:bg-amber-950/35 border-t border-amber-300 dark:border-amber-800 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-amber-950 dark:text-amber-200 text-xs font-bold">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      Já existe(m) {openMergePrompt.candidates.length} pedido(s) em andamento para este fornecedor nesta filial sem itens conferidos. Como deseja prosseguir?
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setOpenMergePrompt(null)}
+                    className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 cursor-pointer"
+                  >
+                    Fechar
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
+                  {openMergePrompt.candidates.map((cand) => {
+                    const checked = openMergePrompt.selectedOrderId === cand.id;
+                    return (
+                      <label
+                        key={cand.id}
+                        className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] cursor-pointer ${
+                          checked
+                            ? 'bg-white dark:bg-slate-900 border-indigo-500 ring-1 ring-indigo-500/30 font-semibold'
+                            : 'bg-white/70 dark:bg-slate-900/60 border-amber-200 dark:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <input
+                            type="radio"
+                            name="mergeTargetOrder"
+                            checked={checked}
+                            onChange={() =>
+                              setOpenMergePrompt((prev) =>
+                                prev ? { ...prev, selectedOrderId: cand.id } : null
+                              )
+                            }
+                            className="text-indigo-600"
+                          />
+                          <span className="font-mono font-bold text-indigo-700 dark:text-indigo-300">
+                            Pedido #{cand.horus_cod_pedido || cand.id}
+                          </span>
+                          <span
+                            className={`px-1.5 py-0.2 rounded border text-[9px] font-bold ${getHorusStatusBadgeClass(
+                              cand.horus_status
+                            )}`}
+                          >
+                            {cand.status_label}
+                          </span>
+                          <span className="text-slate-500 font-mono">
+                            ({formatDateBr(cand.created_at)})
+                          </span>
+                        </div>
+                        <span className="font-mono text-slate-800 dark:text-slate-200 shrink-0">
+                          {cand.total_skus} tít / {cand.total_quantity} pçs •{' '}
+                          <strong>{formatMoney(cand.total_net)}</strong>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={appendingToExisting || creatingOrder}
+                    onClick={handleAppendToCandidateOrder}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    {appendingToExisting
+                      ? 'Acrescentando Itens...'
+                      : `Acrescentar Itens ao Pedido #${
+                          openMergePrompt.candidates.find(
+                            (c) => c.id === openMergePrompt.selectedOrderId
+                          )?.horus_cod_pedido || openMergePrompt.selectedOrderId
+                        }`}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={creatingOrder || appendingToExisting}
+                    onClick={executeCreateNewPurchaseOrder}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    {creatingOrder ? 'Criando Novo...' : 'Criar Novo Pedido Separado'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Rodapé Compacto de Fechamento do Pedido (Grava no Horus c/ Pendência SIM/NÃO) */}
+            <div className="bg-slate-100 dark:bg-slate-950 border-t border-slate-300 dark:border-slate-800 px-3 py-2 flex flex-col xl:flex-row xl:items-center justify-between gap-2 text-[11px]">
               <div className="flex flex-wrap items-center gap-2">
                 <select
                   value={compraConsig}
@@ -3946,12 +4769,64 @@ export default function HorusDirectComprasPage() {
                   <option value="N">Compra Firme</option>
                   <option value="S">Consignação</option>
                 </select>
+
+                {/* Controle Gerar Pendência (SIM / NÃO — Padrão SIM) + Config Rápida da Filial */}
+                <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900">
+                  <span className="text-[10px] font-bold uppercase text-slate-500">
+                    Gerar Pendência:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setGerarPendencia('S')}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                      gerarPendencia === 'S'
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100'
+                    }`}
+                  >
+                    SIM
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGerarPendencia('N')}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                      gerarPendencia === 'N'
+                        ? 'bg-slate-700 text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100'
+                    }`}
+                  >
+                    NÃO
+                  </button>
+                  {branchConfigForm.gerar_pendencia_default !== gerarPendencia && (
+                    <button
+                      type="button"
+                      disabled={savingQuickPendDefault}
+                      onClick={() => handleQuickSaveGerarPendDefault(gerarPendencia)}
+                      className="ml-0.5 px-1.5 py-0.5 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[9px] font-bold border border-indigo-200 cursor-pointer"
+                      title="Salvar esta escolha como padrão para novos pedidos desta filial"
+                    >
+                      {savingQuickPendDefault ? '...' : 'Fixar padrão'}
+                    </button>
+                  )}
+                </div>
+
+                {/* Status Inicial no Horus: AP (Aprovado) ou AB (Em Digitação) */}
+                <select
+                  value={initialHorusStatus}
+                  onChange={(e) => setInitialHorusStatus(e.target.value as 'AP' | 'AB')}
+                  className="px-2 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px] font-semibold"
+                  title="Status inicial em que o pedido será gravado no Horus"
+                >
+                  <option value="AP">Gravar Aprovado (AP)</option>
+                  <option value="AB">Gravar em Digitação (AB)</option>
+                </select>
+
                 <input
                   type="text"
                   value={orderObservations}
                   onChange={(e) => setOrderObservations(e.target.value)}
                   placeholder="Observações para OBS_PEDIDO_COMPRA no Horus..."
-                  className="w-64 sm:w-80 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
+                  className="w-56 sm:w-64 px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-[11px]"
                 />
               </div>
 
@@ -3968,6 +4843,7 @@ export default function HorusDirectComprasPage() {
                   type="button"
                   disabled={
                     creatingOrder ||
+                    appendingToExisting ||
                     cartItems.length === 0 ||
                     cartSummary.invalidCount > 0 ||
                     !supplierOverview?.is_ready_for_purchase
@@ -3976,7 +4852,9 @@ export default function HorusDirectComprasPage() {
                   className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-[11px] font-bold shadow-2xs cursor-pointer"
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
-                  {creatingOrder ? 'Gravando no Horus...' : 'Gerar Pedido (AP)'}
+                  {creatingOrder
+                    ? 'Gravando no Horus...'
+                    : `Gerar Pedido (${initialHorusStatus})`}
                 </button>
               </div>
             </div>
@@ -4275,7 +5153,7 @@ export default function HorusDirectComprasPage() {
             </select>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
             <div>
               <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
                 Cód. Local Padrão
@@ -4346,6 +5224,25 @@ export default function HorusDirectComprasPage() {
               >
                 <option value="N">Compra Firme (N)</option>
                 <option value="S">Consignação (S)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-[10px] font-bold uppercase text-slate-500 mb-1">
+                Gerar Pendência Padrão
+              </label>
+              <select
+                value={branchConfigForm.gerar_pendencia_default || 'S'}
+                onChange={(e) =>
+                  setBranchConfigForm((p) => ({
+                    ...p,
+                    gerar_pendencia_default: e.target.value === 'N' ? 'N' : 'S',
+                  }))
+                }
+                className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-[11px] font-semibold"
+              >
+                <option value="S">SIM (S) — Padrão</option>
+                <option value="N">NÃO (N)</option>
               </select>
             </div>
           </div>

@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 from app.api.horus_purchases import (  # noqa: E402
     _compare_xml_with_purchase_order,
+    _evaluate_horus_safety_row,
     _parse_supplier_nfe_xml,
 )
 
@@ -124,7 +125,103 @@ def test_xml_divergences_cover_discount_qty_extra_missing():
     assert comp["divergent_items_count"] == 3
 
 
+def test_horus_order_safety_locks():
+    # 1. Pedido AP sem conferência e sem NF -> liberado para editar, trocar fornecedor, mudar status e cancelar
+    clean_ap = _evaluate_horus_safety_row(
+        {
+            "live_status": "AP",
+            "gerar_pend": "S",
+            "dat_encerramento": None,
+            "hdr_atendidos": 0,
+            "itens_atendidos_sum": 0,
+            "divergencias_cnt": 0,
+            "nf_entrada_cnt": 0,
+            "vinc_nf_cnt": 0,
+        },
+        "AP",
+    )
+    assert clean_ap["can_modify"] is True
+    assert clean_ap["can_cancel"] is True
+    assert clean_ap["can_append_items"] is True
+    assert clean_ap["block_reason"] is None
+
+    # 2. Pedido AE com itens conferidos -> bloqueado!
+    conferred_ae = _evaluate_horus_safety_row(
+        {
+            "live_status": "AE",
+            "gerar_pend": "S",
+            "dat_encerramento": None,
+            "hdr_atendidos": 12,
+            "itens_atendidos_sum": 12,
+            "divergencias_cnt": 0,
+            "nf_entrada_cnt": 0,
+            "vinc_nf_cnt": 0,
+        },
+        "AE",
+    )
+    assert conferred_ae["has_conferred_items"] is True
+    assert conferred_ae["can_modify"] is False
+    assert conferred_ae["can_cancel"] is False
+    assert conferred_ae["can_append_items"] is False
+    assert "conferido" in (conferred_ae["block_reason"] or "").lower()
+
+    # 3. Pedido AP com NF vinculada -> bloqueado!
+    linked_nf_ap = _evaluate_horus_safety_row(
+        {
+            "live_status": "AP",
+            "gerar_pend": "S",
+            "dat_encerramento": None,
+            "hdr_atendidos": 0,
+            "itens_atendidos_sum": 0,
+            "divergencias_cnt": 0,
+            "nf_entrada_cnt": 1,
+            "vinc_nf_cnt": 0,
+        },
+        "AP",
+    )
+    assert linked_nf_ap["linked_nf_count"] == 1
+    assert linked_nf_ap["can_modify"] is False
+    assert linked_nf_ap["can_cancel"] is False
+    assert "nota" in (linked_nf_ap["block_reason"] or "").lower()
+
+    # 4. Pedido EE finalizado -> bloqueado!
+    finalized_ee = _evaluate_horus_safety_row(
+        {
+            "live_status": "EE",
+            "gerar_pend": "S",
+            "dat_encerramento": "2026-11-24",
+            "hdr_atendidos": 50,
+            "itens_atendidos_sum": 50,
+            "divergencias_cnt": 0,
+            "nf_entrada_cnt": 1,
+            "vinc_nf_cnt": 1,
+        },
+        "EE",
+    )
+    assert finalized_ee["is_finalized"] is True
+    assert finalized_ee["can_modify"] is False
+    assert finalized_ee["can_cancel"] is False
+
+    # 5. Pedido CA cancelado sem movimentação -> permite reativar!
+    cancelled_ca = _evaluate_horus_safety_row(
+        {
+            "live_status": "CA",
+            "gerar_pend": "S",
+            "dat_encerramento": None,
+            "hdr_atendidos": 0,
+            "itens_atendidos_sum": 0,
+            "divergencias_cnt": 0,
+            "nf_entrada_cnt": 0,
+            "vinc_nf_cnt": 0,
+        },
+        "CA",
+    )
+    assert cancelled_ca["can_reopen"] is True
+    assert cancelled_ca["can_modify"] is False
+
+
 if __name__ == "__main__":
     test_xml_100_percent_match()
     test_xml_divergences_cover_discount_qty_extra_missing()
-    print("ALL XML AUDIT TESTS PASSED!")
+    test_horus_order_safety_locks()
+    print("ALL XML AUDIT & SAFETY LOCK TESTS PASSED!")
