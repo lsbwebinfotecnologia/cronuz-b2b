@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors, Layers, BarChart3, Download, Users, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { FileText, Plus, Search, DollarSign, ExternalLink, Calendar, Receipt, X, CheckCircle, RefreshCw, Code, Eye, Trash2, QrCode, Mail, Scissors, Layers, BarChart3, Download, Users, ChevronDown, ChevronUp, Loader2, AlertTriangle, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
@@ -1772,11 +1772,37 @@ export default function ServiceOrdersPage() {
                                                             REC
                                                         </span>
                                                     )}
-                                                    {order.email_sent_at && (
-                                                        <span className="text-emerald-500" title={`E-mail enviado em: ${new Date(order.email_sent_at).toLocaleString('pt-BR')}`}>
-                                                            <Mail className="w-3 h-3" />
-                                                        </span>
-                                                    )}
+                                                    {order.email_sent_at && (() => {
+                                                        const logs = Array.isArray((order as any).email_logs) ? (order as any).email_logs : [];
+                                                        const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
+                                                        const st = String(lastLog?.status || 'SENT').toUpperCase();
+                                                        if (st === 'BOUNCED') {
+                                                            return (
+                                                                <span className="px-1 py-0.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 text-[9px] font-sans font-extrabold inline-flex items-center gap-0.5" title={`E-mail bloqueado/bounce: ${lastLog?.bounce_reason || 'Verifique o endereço'}`}>
+                                                                    <AlertTriangle className="w-2.5 h-2.5" /> Bounce
+                                                                </span>
+                                                            );
+                                                        }
+                                                        if (st === 'DOWNLOADED') {
+                                                            return (
+                                                                <span className="px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[9px] font-sans font-extrabold inline-flex items-center gap-0.5" title={`Cliente baixou o PDF da Fatura em: ${new Date(lastLog?.downloaded_at || order.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                                    <Download className="w-2.5 h-2.5" /> Baixou
+                                                                </span>
+                                                            );
+                                                        }
+                                                        if (st === 'VIEWED_PORTAL' || st === 'OPENED') {
+                                                            return (
+                                                                <span className="px-1 py-0.5 rounded bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 text-[9px] font-sans font-extrabold inline-flex items-center gap-0.5" title={`Cliente abriu o e-mail/fatura em: ${new Date(lastLog?.portal_viewed_at || lastLog?.opened_at || order.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                                    <Check className="w-2.5 h-2.5" /> Lido
+                                                                </span>
+                                                            );
+                                                        }
+                                                        return (
+                                                            <span className="text-emerald-500" title={`E-mail enviado em: ${new Date(order.email_sent_at).toLocaleString('pt-BR')}`}>
+                                                                <Mail className="w-3 h-3" />
+                                                            </span>
+                                                        );
+                                                    })()}
                                                 </div>
                                             </td>
 

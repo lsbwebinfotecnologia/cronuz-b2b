@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import and_
 from sqlalchemy.orm import Session, joinedload
@@ -1445,6 +1445,7 @@ class SendEmailRequest(BaseModel):
 async def send_service_order_email(
     order_id: int,
     payload: SendEmailRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -1532,9 +1533,50 @@ async def send_service_order_email(
                             print(f"Erro ao baixar boleto {inst.id}: {str(e)}")
                             pass
                             
+    import uuid
+    import json
+    from app.api.billing_portal import (
+        create_billing_token,
+        resolve_public_urls,
+        build_trackable_billing_email_html,
+    )
+    from app.models.company import Company
+
+    company = db.query(Company).filter(Company.id == current_user.company_id).first()
+    company_display_name = (company.name if company else "Financeiro").strip()
+
+    tracking_id = uuid.uuid4().hex[:12]
+    portal_token = create_billing_token("os", order.id, order.company_id, tracking_id=tracking_id)
+    front_base, api_base = resolve_public_urls(request)
+    portal_url = f"{front_base}/public/fatura/{portal_token}"
+    pixel_url = f"{api_base}/public/billing-track/{portal_token}/pixel.gif"
+
+    val_fmt = f"R$ {float(order.negotiated_value or 0.0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    ref_label = f"OS #{order.local_id or order.id}"
+
+    html_body = build_trackable_billing_email_html(
+        raw_body_text=payload.body,
+        portal_url=portal_url,
+        pixel_url=pixel_url,
+        company_name=company_display_name,
+        reference_label=ref_label,
+        total_formatted=val_fmt,
+    )
+    plain_body = (
+        f"{payload.body.strip()}\n\n"
+        f"---\n"
+        f"Acesse sua fatura, Nota Fiscal (NFS-e) e Boleto Bancário online:\n"
+        f"{portal_url}"
+    )
+    brevo_custom_header = json.dumps({
+        "entity_type": "os",
+        "entity_id": order.id,
+        "company_id": order.company_id,
+        "tracking_id": tracking_id,
+    })
+
     try:
-        html_body = payload.body.replace('\n', '<br>')
-        send_smtp_email(
+        message_id = send_smtp_email(
             smtp_host=settings.smtp_host,
             smtp_port=settings.smtp_port,
             smtp_username=settings.smtp_username,
@@ -1545,13 +1587,17 @@ async def send_service_order_email(
             html_content=html_body,
             use_ssl=settings.smtp_use_ssl,
             bcc_email=settings.smtp_bcc_email,
-            attachments=attachments
+            attachments=attachments,
+            sender_name=f"{company_display_name} - Financeiro",
+            plain_text=plain_body,
+            custom_headers={"X-Mailin-custom": brevo_custom_header},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao enviar o e-mail: {str(e)}")
         
     from datetime import datetime
     import copy
+    from sqlalchemy.orm.attributes import flag_modified
     
     now = datetime.utcnow()
     order.email_sent_at = now
@@ -1561,16 +1607,27 @@ async def send_service_order_email(
         "sent_at": now.isoformat(),
         "to": payload.to_emails,
         "subject": payload.subject,
-        "user": current_user.name
+        "user": current_user.name,
+        "status": "SENT",
+        "tracking_id": tracking_id,
+        "message_id": message_id,
+        "portal_url": portal_url,
+        "attachments_count": len(attachments),
     })
     order.email_logs = current_logs
+    flag_modified(order, "email_logs")
     
     try:
         db.commit()
     except Exception as e:
         db.rollback()
         
-    return {"message": "E-mail enviado com sucesso."}
+    return {
+        "message": "E-mail enviado com sucesso.",
+        "tracking_id": tracking_id,
+        "portal_url": portal_url,
+        "message_id": message_id,
+    }
 
 
 @router.post("/service-orders/{order_id}/split")

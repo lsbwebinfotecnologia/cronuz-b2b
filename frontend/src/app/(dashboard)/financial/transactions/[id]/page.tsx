@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, use } from 'react';
-import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen, RefreshCw, Mail, Upload, Info } from 'lucide-react';
+import { ArrowLeft, Clock, CheckCircle, Tag, TrendingUp, TrendingDown, DollarSign, Pencil, X, Save, FileText, QrCode, BookOpen, RefreshCw, Mail, Upload, Info, AlertTriangle, Download, Eye, ExternalLink, Copy, MessageCircle, Check } from 'lucide-react';
 import { toast } from 'sonner';
 import { getToken, getUser } from '@/lib/auth';
 import Link from 'next/link';
@@ -356,6 +356,37 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
         setShowEmailModal(true);
     };
 
+    const handleShareBillingPortal = async (mode: 'copy' | 'whatsapp' | 'open') => {
+        try {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${trans.id}/billing-portal-link`, {
+                headers: { 'Authorization': `Bearer ${getToken()}` }
+            });
+            if (!res.ok) throw new Error('Falha ao gerar link do portal da fatura.');
+            const data = await res.json();
+            if (mode === 'copy') {
+                await navigator.clipboard.writeText(data.portal_url);
+                toast.success('Link seguro da fatura copiado!');
+            } else if (mode === 'open') {
+                window.open(data.portal_url, '_blank');
+            } else if (mode === 'whatsapp') {
+                if (data.whatsapp_url) {
+                    window.open(data.whatsapp_url, '_blank');
+                } else {
+                    const fallback = `https://wa.me/?text=${encodeURIComponent(data.whatsapp_text)}`;
+                    window.open(fallback, '_blank');
+                    toast('Telefone do cliente não cadastrado; escolha o contato no WhatsApp.', { icon: '💬' });
+                }
+            }
+        } catch (err: any) {
+            toast.error(err.message || 'Erro ao gerar link da fatura.');
+        }
+    };
+
+    const lastEmailLog = Array.isArray(trans?.email_logs) && trans.email_logs.length > 0
+        ? trans.email_logs[trans.email_logs.length - 1]
+        : null;
+    const lastEmailStatus = (lastEmailLog?.status || (lastEmailLog ? 'SENT' : null));
+
     return (
         <div className="p-6 md:p-8 max-w-5xl mx-auto space-y-6">
             <Link href="/financial" className="text-slate-500 hover:text-slate-800 flex items-center gap-2 dark:text-slate-400 dark:hover:text-white font-medium mb-2 w-fit">
@@ -405,12 +436,34 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                                 <QrCode className="w-4 h-4"/> Gerar Boletos
                             </button>
                         )}
-                        <button onClick={openEmailModal} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm">
+                        <button onClick={openEmailModal} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm cursor-pointer">
                             <Mail className="w-4 h-4"/> Enviar E-mail
                         </button>
+                        <button
+                            type="button"
+                            onClick={() => handleShareBillingPortal('whatsapp')}
+                            className="px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300 rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm border border-emerald-200 dark:border-emerald-800/50 cursor-pointer"
+                        >
+                            <MessageCircle className="w-4 h-4"/> WhatsApp Fatura
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => handleShareBillingPortal('copy')}
+                            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700 cursor-pointer"
+                        >
+                            <Copy className="w-4 h-4"/> Link Fatura
+                        </button>
                         {trans.email_sent_at && (
-                            <button onClick={() => setShowEmailHistoryModal(true)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700">
-                                <Info className="w-4 h-4 text-emerald-500"/> Histórico de Envios
+                            <button onClick={() => setShowEmailHistoryModal(true)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl font-bold text-sm transition flex items-center gap-2 shadow-sm border border-slate-200 dark:border-slate-700 cursor-pointer">
+                                {lastEmailStatus === 'BOUNCED' ? (
+                                    <><AlertTriangle className="w-4 h-4 text-rose-500"/> Falha no E-mail (Bounce)</>
+                                ) : lastEmailStatus === 'DOWNLOADED' ? (
+                                    <><Download className="w-4 h-4 text-emerald-600"/> PDF Baixado pelo Cliente</>
+                                ) : lastEmailStatus === 'VIEWED_PORTAL' || lastEmailStatus === 'OPENED' ? (
+                                    <><Eye className="w-4 h-4 text-sky-600"/> Lido pelo Cliente</>
+                                ) : (
+                                    <><Info className="w-4 h-4 text-emerald-500"/> Histórico de Envios</>
+                                )}
                             </button>
                         )}
                         <label className={`px-4 py-2 ${uploadingPdf ? 'bg-slate-300' : 'bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700'} text-slate-700 dark:text-slate-300 rounded-xl font-bold text-sm transition flex items-center gap-2 cursor-pointer shadow-sm`}>
@@ -727,23 +780,84 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
                         <div className="p-6 overflow-y-auto">
                             {trans.email_logs && trans.email_logs.length > 0 ? (
                                 <div className="space-y-4">
-                                    {[...trans.email_logs].reverse().map((log: any, idx: number) => (
-                                        <div key={idx} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50">
-                                            <div className="flex justify-between items-start mb-2">
-                                                <div className="flex items-center gap-2">
-                                                    <Mail className="w-4 h-4 text-emerald-500" />
-                                                    <span className="font-bold text-sm text-slate-800 dark:text-slate-200">{log.subject}</span>
+                                    {[...trans.email_logs].reverse().map((log: any, idx: number) => {
+                                        const st = String(log.status || 'SENT').toUpperCase();
+                                        return (
+                                            <div key={idx} className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-700/50 space-y-2.5">
+                                                <div className="flex justify-between items-start gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <Mail className="w-4 h-4 text-emerald-500 shrink-0" />
+                                                        <span className="font-bold text-sm text-slate-800 dark:text-slate-200">{log.subject}</span>
+                                                    </div>
+                                                    <span className="text-[10px] font-bold text-slate-500 uppercase px-2 py-1 bg-white dark:bg-slate-900 rounded border border-slate-200 dark:border-slate-700">
+                                                        {new Date(log.sent_at).toLocaleString('pt-BR')}
+                                                    </span>
                                                 </div>
-                                                <span className="text-[10px] font-bold text-slate-500 uppercase px-2 py-1 bg-white dark:bg-slate-900 rounded border border-slate-200 dark:border-slate-700">
-                                                    {new Date(log.sent_at).toLocaleString('pt-BR')}
-                                                </span>
+
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    {st === 'BOUNCED' ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 text-xs font-extrabold">
+                                                            <AlertTriangle className="w-3.5 h-3.5" /> Bloqueado / Bounce no Destinatário
+                                                        </span>
+                                                    ) : st === 'DOWNLOADED' ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-xs font-extrabold">
+                                                            <Download className="w-3.5 h-3.5" /> Nota / Boleto Baixado pelo Cliente
+                                                        </span>
+                                                    ) : st === 'VIEWED_PORTAL' ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 text-xs font-extrabold">
+                                                            <Eye className="w-3.5 h-3.5" /> Portal da Fatura Acessado pelo Cliente
+                                                        </span>
+                                                    ) : st === 'OPENED' ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 text-xs font-extrabold">
+                                                            <Eye className="w-3.5 h-3.5" /> E-mail Aberto pelo Cliente ({log.opens_count || 1}x)
+                                                        </span>
+                                                    ) : st === 'DELIVERED' ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300 text-xs font-bold">
+                                                            <Check className="w-3.5 h-3.5" /> Entregue na Caixa do Cliente
+                                                        </span>
+                                                    ) : (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-200/80 text-slate-700 dark:bg-slate-700 dark:text-slate-300 text-xs font-bold">
+                                                            <Mail className="w-3.5 h-3.5" /> Enviado ao Servidor SMTP
+                                                        </span>
+                                                    )}
+                                                </div>
+
+                                                {log.bounce_reason && (
+                                                    <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-300 font-mono">
+                                                        <strong>Motivo da recusa:</strong> {log.bounce_reason}
+                                                    </div>
+                                                )}
+
+                                                <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                                                    <p><strong>Para:</strong> {log.to}</p>
+                                                    <p><strong>Enviado por:</strong> {log.user || 'Sistema'}</p>
+                                                    {log.opened_at && (
+                                                        <p className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                                                            <strong>1ª Abertura:</strong> {new Date(log.opened_at).toLocaleString('pt-BR')}
+                                                        </p>
+                                                    )}
+                                                    {log.downloaded_at && (
+                                                        <p className="text-emerald-700 dark:text-emerald-300 font-bold">
+                                                            <strong>Download de PDF:</strong> {new Date(log.downloaded_at).toLocaleString('pt-BR')}
+                                                        </p>
+                                                    )}
+                                                </div>
+
+                                                {log.portal_url && (
+                                                    <div className="pt-1">
+                                                        <a
+                                                            href={log.portal_url}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:underline"
+                                                        >
+                                                            <ExternalLink className="w-3.5 h-3.5" /> Abrir Portal da Fatura Enviado
+                                                        </a>
+                                                    </div>
+                                                )}
                                             </div>
-                                            <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
-                                                <p><strong>Para:</strong> {log.to}</p>
-                                                <p><strong>Enviado por:</strong> {log.user || 'Sistema'}</p>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             ) : (
                                 <div className="text-center py-10 text-slate-500">

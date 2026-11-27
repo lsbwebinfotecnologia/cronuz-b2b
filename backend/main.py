@@ -122,6 +122,7 @@ from app.api import horus_api_bridge as horus_api_bridge_api
 from app.api import mercadolivre as mercadolivre_api
 from app.api import estantevirtual as estantevirtual_api
 from app.api import event_management as event_management_api
+from app.api import billing_portal as billing_portal_api
 from app.models import backorder as backorder_models
 from app.models import encomenda as encomenda_models
 from app.models import product_address as product_address_models
@@ -398,6 +399,7 @@ if _SERVER_ROLE != "horus_api_only":
     app.include_router(bookinfo_purchases.router, tags=["bookinfo_purchases"])
     app.include_router(bookinfo_purchase_logs.router, tags=["bookinfo_purchase_logs"])
     app.include_router(services.router, tags=["services"])
+    app.include_router(billing_portal_api.router, tags=["billing-portal"])
     app.include_router(proposals.router, tags=["proposals"])
     app.include_router(print_points.router, prefix="/print-points", tags=["print-points"])
     app.include_router(bank_slips.router, tags=["financial"])

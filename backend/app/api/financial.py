@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -446,7 +446,8 @@ def list_generic_installments(
             "bank_slip_pdf": inst.bank_slip_pdf_url,
             "bank_slip_nosso_numero": inst.bank_slip_nosso_numero,
             "inter_enabled": inter_enabled or False,
-            "email_sent_at": trans.email_sent_at
+            "email_sent_at": trans.email_sent_at,
+            "email_logs": trans.email_logs or []
         })
     return {
         "items": items,
@@ -597,6 +598,7 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
 def send_financial_transaction_email(
     trans_id: int,
     payload: SendEmailRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -689,9 +691,50 @@ def send_financial_transaction_email(
                     print(f"Erro ao baixar boleto da parcela {inst.id}: {str(e)}")
                     pass
                     
+    import uuid
+    import json
+    from app.api.billing_portal import (
+        create_billing_token,
+        resolve_public_urls,
+        build_trackable_billing_email_html,
+    )
+    from sqlalchemy.orm.attributes import flag_modified
+
+    company = db.query(Company).filter(Company.id == cid).first()
+    company_display_name = (company.name if company else "Financeiro").strip()
+
+    tracking_id = uuid.uuid4().hex[:12]
+    portal_token = create_billing_token("tx", trans.id, cid, tracking_id=tracking_id)
+    front_base, api_base = resolve_public_urls(request)
+    portal_url = f"{front_base}/public/fatura/{portal_token}"
+    pixel_url = f"{api_base}/public/billing-track/{portal_token}/pixel.gif"
+
+    val_fmt = f"R$ {float(trans.total_amount or 0.0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    ref_label = trans.description or f"Fatura #{trans.id}"
+
+    html_body = build_trackable_billing_email_html(
+        raw_body_text=payload.body,
+        portal_url=portal_url,
+        pixel_url=pixel_url,
+        company_name=company_display_name,
+        reference_label=ref_label,
+        total_formatted=val_fmt,
+    )
+    plain_body = (
+        f"{payload.body.strip()}\n\n"
+        f"---\n"
+        f"Acesse sua fatura, Nota Fiscal e Boleto Bancário online:\n"
+        f"{portal_url}"
+    )
+    brevo_custom_header = json.dumps({
+        "entity_type": "tx",
+        "entity_id": trans.id,
+        "company_id": cid,
+        "tracking_id": tracking_id,
+    })
+
     try:
-        html_body = payload.body.replace('\n', '<br>')
-        send_smtp_email(
+        message_id = send_smtp_email(
             smtp_host=settings.smtp_host,
             smtp_port=settings.smtp_port,
             smtp_username=settings.smtp_username,
@@ -702,7 +745,10 @@ def send_financial_transaction_email(
             html_content=html_body,
             use_ssl=settings.smtp_use_ssl,
             bcc_email=settings.smtp_bcc_email,
-            attachments=attachments
+            attachments=attachments,
+            sender_name=f"{company_display_name} - Financeiro",
+            plain_text=plain_body,
+            custom_headers={"X-Mailin-custom": brevo_custom_header},
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro no envio de e-mail: {str(e)}")
@@ -718,17 +764,28 @@ def send_financial_transaction_email(
         "sent_at": now.isoformat(),
         "to": payload.to_emails,
         "subject": payload.subject,
-        "user": current_user.name
+        "user": current_user.name,
+        "status": "SENT",
+        "tracking_id": tracking_id,
+        "message_id": message_id,
+        "portal_url": portal_url,
+        "attachments_count": len(attachments),
     })
     trans.email_logs = current_logs
+    flag_modified(trans, "email_logs")
     
     try:
         db.commit()
     except Exception as e:
         db.rollback()
-        # We don't fail the request if just the DB update fails, since the email was sent successfully.
         
-    return {"message": "E-mail enviado com sucesso", "attachments_count": len(attachments)}
+    return {
+        "message": "E-mail enviado com sucesso",
+        "attachments_count": len(attachments),
+        "tracking_id": tracking_id,
+        "portal_url": portal_url,
+        "message_id": message_id,
+    }
 
 @router.patch("/financial/generic_installments/{inst_id}/pay")
 def pay_generic_installment(
