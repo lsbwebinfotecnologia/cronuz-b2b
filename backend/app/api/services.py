@@ -1489,10 +1489,8 @@ async def send_service_order_email(
             })
             
     if payload.attach_boletos:
-        from app.models.financial import FinancialTransaction, FinancialInstallment
-        transactions = db.query(FinancialTransaction).filter(
-            FinancialTransaction.service_order_id == order.id
-        ).all()
+        from app.api.billing_portal import _find_transactions_for_order
+        transactions = _find_transactions_for_order(db, order, current_user.company_id)
         
         if transactions:
             from app.integrators.inter_client import BancoInterClient
@@ -1511,12 +1509,26 @@ async def send_service_order_email(
                 
             for tx in transactions:
                 for inst in tx.installments:
+                    if getattr(inst, "bank_slip_pdf_url", None):
+                        from app.api.upload import UPLOADS_DIR
+                        local_path_suffix = inst.bank_slip_pdf_url.replace("/uploads/", "", 1)
+                        local_pdf_path = UPLOADS_DIR / local_path_suffix
+                        if local_pdf_path.exists():
+                            with open(local_pdf_path, "rb") as f:
+                                pdf_bytes = f.read()
+                            attachments.append({
+                                "filename": f"Boleto_{inst.number or 1}_OS_{order.local_id or order.id}.pdf",
+                                "content": pdf_bytes,
+                                "maintype": "application",
+                                "subtype": "pdf"
+                            })
+                            continue
                     if inst.bank_slip_nosso_numero and inter_client:
                         try:
                             nosso_numero = inst.bank_slip_nosso_numero
                             if nosso_numero.startswith("V3_REQ|"):
-                                _, codigo_solicitacao, _ = nosso_numero.split("|")
-                                target_id = codigo_solicitacao
+                                parts = nosso_numero.split("|")
+                                target_id = parts[1] if len(parts) >= 2 else nosso_numero
                             else:
                                 target_id = nosso_numero
                                 
@@ -1524,7 +1536,7 @@ async def send_service_order_email(
                             if pdf_base64:
                                 pdf_bytes = base64.b64decode(pdf_base64)
                                 attachments.append({
-                                    "filename": f"Boleto_{inst.installment_number}_OS_{order.local_id}.pdf",
+                                    "filename": f"Boleto_{inst.number or 1}_OS_{order.local_id or order.id}.pdf",
                                     "content": pdf_bytes,
                                     "maintype": "application",
                                     "subtype": "pdf"

@@ -591,7 +591,9 @@ def transaction_details(trans_id: int, db: Session = Depends(get_db), current_us
         "category_name": category_name, "installments": installments,
         "customer_id": trans.customer_id, "category_id": trans.category_id, "order_id": trans.order_id,
         "nfse_url": nfse_url, "nfse_number": nfse_number,
-        "customer": customer_data
+        "customer": customer_data,
+        "email_sent_at": trans.email_sent_at,
+        "email_logs": trans.email_logs or []
     }
 
 @router.post("/financial/transactions/{trans_id}/send-email", response_model=dict)

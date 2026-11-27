@@ -254,6 +254,48 @@ def _update_logs_list(
     return new_logs, True
 
 
+def _find_transactions_for_order(db: Session, order: ServiceOrder, company_id: int) -> List[FinancialTransaction]:
+    target_ids = [order.id]
+    if getattr(order, "grouped_in_id", None):
+        target_ids.append(order.grouped_in_id)
+    txs: List[FinancialTransaction] = []
+    seen_ids = set()
+    for oid in target_ids:
+        matched = db.query(FinancialTransaction).filter(
+            FinancialTransaction.company_id == company_id,
+            FinancialTransaction.description.op("~")(f"OS #{oid}" + r"(\s|\)|,|-|$)"),
+        ).all()
+        if not matched:
+            matched = db.query(FinancialTransaction).filter(
+                FinancialTransaction.company_id == company_id,
+                FinancialTransaction.description.like(f"%OS #{oid}%"),
+            ).all()
+        for t in matched:
+            if t.id not in seen_ids:
+                seen_ids.add(t.id)
+                txs.append(t)
+    return txs
+
+
+def _find_order_for_transaction(db: Session, tx: FinancialTransaction, company_id: int) -> Optional[ServiceOrder]:
+    if not tx or not tx.description or "OS #" not in tx.description:
+        return None
+    m = re.search(r"OS #(\d+)", tx.description)
+    if not m:
+        return None
+    parsed_num = int(m.group(1))
+    order = db.query(ServiceOrder).filter(
+        ServiceOrder.id == parsed_num,
+        ServiceOrder.company_id == company_id,
+    ).first()
+    if not order:
+        order = db.query(ServiceOrder).filter(
+            ServiceOrder.local_id == parsed_num,
+            ServiceOrder.company_id == company_id,
+        ).first()
+    return order
+
+
 def record_billing_tracking_event(
     db: Session,
     entity_type: str,
@@ -277,10 +319,7 @@ def record_billing_tracking_event(
                 order.email_logs = updated_logs
                 flag_modified(order, "email_logs")
             # Sincroniza também com transações financeiras vinculadas à OS
-            txs = db.query(FinancialTransaction).filter(
-                FinancialTransaction.service_order_id == order.id,
-                FinancialTransaction.company_id == company_id,
-            ).all()
+            txs = _find_transactions_for_order(db, order, company_id)
             for tx in txs:
                 tx_logs, tx_changed = _update_logs_list(tx.email_logs, tracking_id, message_id, event_type, extra)
                 if tx_changed:
@@ -298,16 +337,12 @@ def record_billing_tracking_event(
             if changed:
                 tx.email_logs = updated_logs
                 flag_modified(tx, "email_logs")
-            if tx.service_order_id:
-                order = db.query(ServiceOrder).filter(
-                    ServiceOrder.id == tx.service_order_id,
-                    ServiceOrder.company_id == company_id,
-                ).first()
-                if order:
-                    os_logs, os_changed = _update_logs_list(order.email_logs, tracking_id, message_id, event_type, extra)
-                    if os_changed:
-                        order.email_logs = os_logs
-                        flag_modified(order, "email_logs")
+            order = _find_order_for_transaction(db, tx, company_id)
+            if order:
+                os_logs, os_changed = _update_logs_list(order.email_logs, tracking_id, message_id, event_type, extra)
+                if os_changed:
+                    order.email_logs = os_logs
+                    flag_modified(order, "email_logs")
             db.commit()
     except Exception:
         db.rollback()
@@ -327,15 +362,7 @@ def _resolve_order_and_transactions(
         ).first()
         if not order:
             raise HTTPException(status_code=404, detail="Ordem de Serviço não encontrada.")
-        txs = db.query(FinancialTransaction).filter(
-            FinancialTransaction.service_order_id == order.id,
-            FinancialTransaction.company_id == company_id,
-        ).all()
-        if not txs and order.grouped_in_id:
-            txs = db.query(FinancialTransaction).filter(
-                FinancialTransaction.service_order_id == order.grouped_in_id,
-                FinancialTransaction.company_id == company_id,
-            ).all()
+        txs = _find_transactions_for_order(db, order, company_id)
         return order, txs, order.customer, company
     elif entity_type == "tx":
         tx = db.query(FinancialTransaction).filter(
@@ -344,19 +371,7 @@ def _resolve_order_and_transactions(
         ).first()
         if not tx:
             raise HTTPException(status_code=404, detail="Lançamento financeiro não encontrado.")
-        order = None
-        if tx.service_order_id:
-            order = db.query(ServiceOrder).filter(
-                ServiceOrder.id == tx.service_order_id,
-                ServiceOrder.company_id == company_id,
-            ).first()
-        elif tx.description and "OS #" in tx.description:
-            m = re.search(r"OS #(\d+)", tx.description)
-            if m:
-                order = db.query(ServiceOrder).filter(
-                    ServiceOrder.local_id == int(m.group(1)),
-                    ServiceOrder.company_id == company_id,
-                ).first()
+        order = _find_order_for_transaction(db, tx, company_id)
         cust = tx.customer or (order.customer if order else None)
         return order, [tx], cust, company
     raise HTTPException(status_code=400, detail="Tipo de entidade inválido.")
@@ -417,34 +432,53 @@ def get_public_billing_portal_data(
 
     has_invoice_pdf = False
     invoice_number = None
-    if order and order.invoice_pdf_url:
-        from app.api.upload import UPLOADS_DIR
-        local_path_suffix = order.invoice_pdf_url.replace("/uploads/", "", 1)
-        if (UPLOADS_DIR / local_path_suffix).exists():
-            has_invoice_pdf = True
-    if order and getattr(order, "nfse_number", None):
+    if order:
+        if order.invoice_pdf_url:
+            from app.api.upload import UPLOADS_DIR
+            local_path_suffix = order.invoice_pdf_url.replace("/uploads/", "", 1)
+            if (UPLOADS_DIR / local_path_suffix).exists():
+                has_invoice_pdf = True
+        try:
+            from app.models.nfse import NFSeQueue
+            nfse_q = db.query(NFSeQueue).filter(
+                NFSeQueue.service_order_id == order.id
+            ).order_by(NFSeQueue.created_at.desc()).first()
+            if nfse_q:
+                if nfse_q.xml_protocol_id:
+                    invoice_number = str(nfse_q.xml_protocol_id)
+                if nfse_q.xml_retorno or nfse_q.status == "SUCCESS":
+                    has_invoice_pdf = True
+        except Exception:
+            pass
+    if order and not invoice_number and getattr(order, "nfse_number", None):
         invoice_number = order.nfse_number
 
     installments_out = []
     for tx in txs:
         for inst in sorted(tx.installments, key=lambda x: x.number or 1):
             nosso_num = inst.bank_slip_nosso_numero or ""
-            linha_digitavel = inst.bank_slip_barcode or None
+            linha_digitavel = (
+                getattr(inst, "bank_slip_linha_digitavel", None)
+                or getattr(inst, "bank_slip_codigo_barras", None)
+                or getattr(inst, "bank_slip_barcode", None)
+                or None
+            )
             pix_copia_e_cola = None
             if nosso_num.startswith("V3_REQ|"):
                 parts = nosso_num.split("|")
-                if len(parts) >= 3 and parts[2]:
+                if len(parts) >= 3 and parts[2] and len(parts[2]) > 30:
                     pix_copia_e_cola = parts[2]
+            has_boleto = bool(nosso_num or getattr(inst, "bank_slip_pdf_url", None))
             installments_out.append({
                 "id": inst.id,
                 "number": inst.number,
                 "due_date": inst.due_date.isoformat() if inst.due_date else None,
                 "amount": float(inst.amount or 0.0),
                 "status": str(getattr(inst.status, "value", inst.status) or "PENDING"),
-                "has_boleto": bool(nosso_num),
+                "has_boleto": has_boleto,
                 "digitable_line": linha_digitavel,
                 "pix_emv": pix_copia_e_cola,
-                "download_url": f"/public/billing-portal/{token}/boleto/{inst.id}.pdf" if nosso_num else None,
+                "download_url": f"/public/billing-portal/{token}/boleto/{inst.id}.pdf" if has_boleto else None,
             })
 
     if order:
@@ -502,17 +536,40 @@ def download_public_billing_invoice_pdf(
     tracking_id = str(data.get("trk") or "") or None
 
     order, _, _, _ = _resolve_order_and_transactions(db, entity_type, entity_id, company_id)
-    if not order or not order.invoice_pdf_url:
+    if not order:
         raise HTTPException(status_code=404, detail="Nota Fiscal em PDF não disponível para esta cobrança.")
 
+    pdf_bytes = None
     from app.api.upload import UPLOADS_DIR
-    local_path_suffix = order.invoice_pdf_url.replace("/uploads/", "", 1)
-    local_pdf_path = UPLOADS_DIR / local_path_suffix
-    if not local_pdf_path.exists():
-        raise HTTPException(status_code=404, detail="Arquivo PDF da Nota Fiscal não encontrado no servidor.")
+    if order.invoice_pdf_url:
+        local_path_suffix = order.invoice_pdf_url.replace("/uploads/", "", 1)
+        local_pdf_path = UPLOADS_DIR / local_path_suffix
+        if local_pdf_path.exists():
+            with open(local_pdf_path, "rb") as f:
+                pdf_bytes = f.read()
 
-    with open(local_pdf_path, "rb") as f:
-        pdf_bytes = f.read()
+    if not pdf_bytes:
+        from app.models.nfse import NFSeQueue
+        nfse_q = db.query(NFSeQueue).filter(
+            NFSeQueue.service_order_id == order.id
+        ).order_by(NFSeQueue.created_at.desc()).first()
+        if nfse_q and nfse_q.xml_retorno:
+            from app.core.danfse_generator import DanfseGenerator
+            prestador_nome = (order.company.razao_social or order.company.name) if order.company else "Prestador"
+            prestador_email = (order.company.domain or "") if order.company else ""
+            tomador_nome = order.customer.name if order.customer else "Tomador"
+            tomador_email = (order.customer.email or "") if order.customer else ""
+            generator = DanfseGenerator(
+                xml_content=nfse_q.xml_retorno,
+                prestador_nome=prestador_nome,
+                prestador_email=prestador_email,
+                tomador_nome=tomador_nome,
+                tomador_email=tomador_email,
+            )
+            pdf_bytes = bytes(generator.generate_pdf())
+
+    if not pdf_bytes:
+        raise HTTPException(status_code=404, detail="Arquivo PDF da Nota Fiscal não encontrado no servidor.")
 
     record_billing_tracking_event(
         db=db,
@@ -552,37 +609,50 @@ def download_public_billing_boleto_pdf(
     tx_ids = {t.id for t in txs}
 
     inst = db.query(FinancialInstallment).filter(FinancialInstallment.id == installment_id).first()
-    if not inst or inst.transaction_id not in tx_ids or not inst.bank_slip_nosso_numero:
+    if not inst or inst.transaction_id not in tx_ids or not (inst.bank_slip_nosso_numero or getattr(inst, "bank_slip_pdf_url", None)):
         raise HTTPException(status_code=404, detail="Boleto não encontrado para esta fatura.")
 
-    settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
-    if not settings or not settings.inter_enabled:
-        raise HTTPException(status_code=400, detail="Integração bancária de boleto não habilitada.")
+    pdf_bytes = None
+    if getattr(inst, "bank_slip_pdf_url", None):
+        from app.api.upload import UPLOADS_DIR
+        local_path_suffix = inst.bank_slip_pdf_url.replace("/uploads/", "", 1)
+        local_pdf_path = UPLOADS_DIR / local_path_suffix
+        if local_pdf_path.exists():
+            with open(local_pdf_path, "rb") as f:
+                pdf_bytes = f.read()
 
-    from app.integrators.inter_client import BancoInterClient
-    inter_client = BancoInterClient(
-        client_id=settings.inter_client_id,
-        client_secret=settings.inter_client_secret,
-        cert_path=settings.inter_cert_path,
-        key_path=settings.inter_key_path,
-        cert_content=settings.inter_cert_content,
-        key_content=settings.inter_key_content,
-        sandbox=settings.inter_sandbox,
-        api_version=settings.inter_api_version,
-    )
+    if not pdf_bytes:
+        if not inst.bank_slip_nosso_numero:
+            raise HTTPException(status_code=404, detail="Arquivo PDF do boleto não encontrado no servidor.")
+        settings = db.query(CompanySettings).filter(CompanySettings.company_id == company_id).first()
+        if not settings or not settings.inter_enabled:
+            raise HTTPException(status_code=400, detail="Integração bancária de boleto não habilitada.")
 
-    nosso_numero = inst.bank_slip_nosso_numero
-    if nosso_numero.startswith("V3_REQ|"):
-        _, codigo_solicitacao, _ = nosso_numero.split("|")
-        target_id = codigo_solicitacao
-    else:
-        target_id = nosso_numero
+        from app.integrators.inter_client import BancoInterClient
+        inter_client = BancoInterClient(
+            client_id=settings.inter_client_id,
+            client_secret=settings.inter_client_secret,
+            cert_path=settings.inter_cert_path,
+            key_path=settings.inter_key_path,
+            cert_content=settings.inter_cert_content,
+            key_content=settings.inter_key_content,
+            sandbox=settings.inter_sandbox,
+            account_number=getattr(settings, "inter_account_number", None),
+            api_version=settings.inter_api_version,
+        )
 
-    pdf_base64 = inter_client.get_boleto_pdf(target_id)
-    if not pdf_base64:
-        raise HTTPException(status_code=502, detail="Não foi possível obter o PDF do boleto junto ao banco.")
+        nosso_numero = inst.bank_slip_nosso_numero
+        if nosso_numero.startswith("V3_REQ|"):
+            parts = nosso_numero.split("|")
+            target_id = parts[1] if len(parts) >= 2 else nosso_numero
+        else:
+            target_id = nosso_numero
 
-    pdf_bytes = base64.b64decode(pdf_base64)
+        pdf_base64 = inter_client.get_boleto_pdf(target_id)
+        if not pdf_base64:
+            raise HTTPException(status_code=502, detail="Não foi possível obter o PDF do boleto junto ao banco.")
+
+        pdf_bytes = base64.b64decode(pdf_base64)
 
     record_billing_tracking_event(
         db=db,
