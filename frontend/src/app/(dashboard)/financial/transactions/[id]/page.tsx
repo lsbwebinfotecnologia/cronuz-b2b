@@ -358,11 +358,11 @@ export default function FinancialTransactionDetailsPage({ params }: { params: an
 
     const handleShareBillingPortal = async (mode: 'copy' | 'whatsapp' | 'open') => {
         try {
-            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${trans.id}/billing-portal-link`, {
+            const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/financial/transactions/${trans.id}/billing-link`, {
                 headers: { 'Authorization': `Bearer ${getToken()}` }
             });
-            if (!res.ok) throw new Error('Falha ao gerar link do portal da fatura.');
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.detail || `Falha ao gerar link do portal da fatura (HTTP ${res.status}).`);
             if (mode === 'copy') {
                 await navigator.clipboard.writeText(data.portal_url);
                 toast.success('Link seguro da fatura copiado!');

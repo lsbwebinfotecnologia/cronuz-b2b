@@ -705,6 +705,7 @@ async def brevo_transactional_email_webhook(
 
 
 @router.get("/services/orders/{order_id}/billing-link")
+@router.get("/services/orders/{order_id}/billing-portal-link")
 def get_service_order_billing_link(
     order_id: int,
     request: Request,
@@ -765,6 +766,7 @@ def get_service_order_billing_link(
 
 
 @router.get("/financial/transactions/{trans_id}/billing-link")
+@router.get("/financial/transactions/{trans_id}/billing-portal-link")
 def get_financial_transaction_billing_link(
     trans_id: int,
     request: Request,
