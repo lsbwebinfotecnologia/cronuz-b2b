@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from app.integrators.horus import HorusClient, HorusConfigurationError
+from app.core.utils import parse_horus_price
 
 from app.db.session import get_db
 from app.models.user import User
@@ -188,6 +189,8 @@ async def search_horus_orders(
     try:
         if data_fim:
             dt_fim = parse_input_date(data_fim)
+            if len(data_fim.strip()) == 10:
+                dt_fim = dt_fim.replace(hour=23, minute=59, second=59)
         else:
             dt_fim = now
 
@@ -217,12 +220,13 @@ async def search_horus_orders(
 
     params = {
         "INTEGRADOR_COMPRA": integrador,
-        "STATUS_PEDIDO_COMPRA": status_filtro,
         "DATA_INI": horus_data_ini,
         "DATA_FIM": horus_data_fim,
         "CNPJ_ORIGEM": cnpj_origem,
         "CNPJ_DESTINO": cnpj_destino_masked
     }
+    if status_filtro and status_filtro != "T":
+        params["STATUS_PEDIDO_COMPRA"] = status_filtro
     if transmitido in ["S", "N"]:
         params["TRANSMITIDO"] = transmitido
 
@@ -402,15 +406,7 @@ async def send_transmission(
         raise HTTPException(status_code=400, detail="CNPJ do cliente ou da empresa ausente.")
 
     def to_float(val: Any) -> float:
-        if not val:
-            return 0.0
-        if isinstance(val, (int, float)):
-            return float(val)
-        val_str = str(val).replace(".", "").replace(",", ".")
-        try:
-            return float(val_str)
-        except ValueError:
-            return 0.0
+        return round(parse_horus_price(val), 2)
 
     itens_payload = []
     for item in order_data.get("ITENS", []):
@@ -568,6 +564,8 @@ async def sync_transmission(
             raise HTTPException(status_code=502, detail=f"Erro ao consultar Bookinfo: {str(e)}")
 
     # Update items
+    order_level_status = str(bookinfo_data.get("status") or "").strip().upper()
+    fallback_order_status = order_level_status if order_level_status in ("RECUSADO", "CANCELADO", "REJEITADO") else None
     bookinfo_items = bookinfo_data.get("itens", [])
     items_map = {}
     for bi_item in bookinfo_items:
@@ -589,8 +587,8 @@ async def sync_transmission(
 
     for t_item in local_items:
         bi_item = items_map.get(t_item.cod_barra)
-        if bi_item:
-            status_item = bi_item.get("status")
+        if bi_item is not None or fallback_order_status:
+            status_item = (bi_item.get("status") if bi_item else None) or fallback_order_status
             t_item.situacao_retorno = status_item
             t_item.obs_item = status_item if status_item else ""
             t_item.synced_at = datetime.utcnow()

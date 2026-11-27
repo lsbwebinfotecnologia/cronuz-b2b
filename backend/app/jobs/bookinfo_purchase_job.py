@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
+from app.core.utils import parse_horus_price
 
 from app.models.company_settings import CompanySettings
 from app.models.bookinfo_supplier import BookinfoSupplier
@@ -35,7 +36,7 @@ logger = logging.getLogger("background_jobs")
 TZ_BRASILIA = ZoneInfo("America/Sao_Paulo")
 
 # Statuses finais — transmissoes com todos os itens nesse status nao sao re-sincronizadas
-FINALIZED_STATUSES = {"RESERVADO_TOTAL", "ATENDIDO", "SEM_ESTOQUE", "CANCELADO", "REJEITADO"}
+FINALIZED_STATUSES = {"RESERVADO_TOTAL", "ATENDIDO", "SEM_ESTOQUE", "CANCELADO", "REJEITADO", "RECUSADO"}
 
 
 def _is_transmission_finalized(transmission: BookinfoTransmission, items: list) -> bool:
@@ -64,15 +65,7 @@ def _format_cnpj(cnpj_digits: str) -> str:
 
 
 def _to_float(val) -> float:
-    if not val:
-        return 0.0
-    if isinstance(val, (int, float)):
-        return float(val)
-    val_str = str(val).replace(".", "").replace(",", ".")
-    try:
-        return float(val_str)
-    except ValueError:
-        return 0.0
+    return round(parse_horus_price(val), 2)
 
 
 async def _fetch_horus_orders(db: Session, company_id: int, supplier: BookinfoSupplier) -> list:
@@ -358,6 +351,8 @@ async def _sync_transmission(
             db.commit()
             return {"status": "error", "detail": str(e)}
 
+    order_level_status = str(bookinfo_data.get("status") or "").strip().upper()
+    fallback_order_status = order_level_status if order_level_status in ("RECUSADO", "CANCELADO", "REJEITADO") else None
     bookinfo_items = bookinfo_data.get("itens", [])
     items_map = {bi.get("isbn13"): bi for bi in bookinfo_items if bi.get("isbn13")}
 
@@ -370,8 +365,8 @@ async def _sync_transmission(
 
     for t_item in items:
         bi_item = items_map.get(t_item.cod_barra)
-        if bi_item:
-            status_item = bi_item.get("status")
+        if bi_item is not None or fallback_order_status:
+            status_item = (bi_item.get("status") if bi_item else None) or fallback_order_status
             t_item.situacao_retorno = status_item
             t_item.obs_item = status_item if status_item else ""
             t_item.synced_at = datetime.utcnow()

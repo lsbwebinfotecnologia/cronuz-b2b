@@ -26,7 +26,7 @@ const isTransmissionFinalized = (t: any) => {
   if (t.status !== 'SYNCED') return false;
   if (!t.items || t.items.length === 0) return false;
   
-  const finalizedStatuses = ['RESERVADO_TOTAL', 'ATENDIDO', 'SEM_ESTOQUE', 'CANCELADO', 'REJEITADO'];
+  const finalizedStatuses = ['RESERVADO_TOTAL', 'ATENDIDO', 'SEM_ESTOQUE', 'CANCELADO', 'REJEITADO', 'RECUSADO'];
   return t.items.every((item: any) => 
     item.situacao_retorno && finalizedStatuses.includes(item.situacao_retorno)
   );
@@ -481,11 +481,12 @@ export default function BookinfoPurchasesPage() {
   };
 
   const handleSearchSingleOrderHorus = async (codPedido: number, sentAtStr: string) => {
-    if (!selectedSupplier) return;
+    const supplierId = selectedSupplier?.id || selectedOrder?.transmission?.supplier_id;
+    if (!supplierId) return;
     try {
       setSearchingHorus(true);
       const orderDate = new Date(sentAtStr);
-      const iniDate = formatDateInput(new Date(orderDate.getTime() - 2 * 24 * 60 * 60 * 1000));
+      const iniDate = formatDateInput(new Date(orderDate.getTime() - 60 * 24 * 60 * 60 * 1000));
       const fimDate = formatDateInput(new Date(orderDate.getTime() + 2 * 24 * 60 * 60 * 1000));
       
       const token = getToken();
@@ -495,7 +496,7 @@ export default function BookinfoPurchasesPage() {
       params.append('status', 'T');
       params.append('transmitido', 'T');
       
-      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${selectedSupplier.id}/search-horus?${params.toString()}`, {
+      const res = await fetch(`${API_URL}/bookinfo-purchases/suppliers/${supplierId}/search-horus?${params.toString()}`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${token}` }
       });
@@ -534,6 +535,7 @@ export default function BookinfoPurchasesPage() {
       SEM_ESTOQUE: { label: 'Sem Estoque', class: 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-950/30 dark:text-rose-350 dark:border-rose-900/50' },
       CANCELADO: { label: 'Cancelado', class: 'bg-rose-100 text-rose-800 border-rose-200 dark:bg-rose-950/30 dark:text-rose-350 dark:border-rose-900/50' },
       REJEITADO: { label: 'Rejeitado', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950/30 dark:text-red-350 dark:border-red-900/50' },
+      RECUSADO: { label: 'Recusado', class: 'bg-red-100 text-red-800 border-red-200 dark:bg-red-950/30 dark:text-red-350 dark:border-red-900/50' },
       PENDING: { label: 'Pendente', class: 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-950/30 dark:text-amber-350 dark:border-amber-900/50' },
       SENT: { label: 'Enviado', class: 'bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-950/30 dark:text-blue-350 dark:border-blue-900/50' }
     };
