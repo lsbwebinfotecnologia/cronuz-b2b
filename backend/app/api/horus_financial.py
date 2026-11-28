@@ -3476,3 +3476,252 @@ def get_reconciliation_closing_detail(
             "items": r.items_json or [],
         },
     }
+
+
+@router.post("/companies/{company_id}/horus-sql/reconciliation/closings/{closing_id}/revert")
+def revert_reconciliation_closing_bordero(
+    company_id: int,
+    closing_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Estorna e desfaz atomicamente um Borderô gerado pela conciliação no Horus ERP:
+      1. Remove do extrato/fechamento bancário (`BLANCTOS`) todos os lançamentos automáticos (`STA_RASTREIO = 'CAR'`) dos títulos do Borderô.
+      2. Remove eventuais despesas de taxa lançadas em `LANCTOS_CPAGAR_GERAL` (`NRO_DUPLICATA LIKE 'BRD-<cod_bordero>%'`) e seus reflexos em `BLANCTOS` (`STA_RASTREIO = 'CAP'`).
+      3. Exclui eventuais lançamentos filhos de Crédito Maior desmembrados (`novo_lancamento_credito_maior`) e devolve o valor cheio da nota aos títulos pais.
+      4. Restaura todos os títulos do Borderô em `LANCTOS_CRECEBER` e `LANCTOS_CRECEBERA` para Aberto (`STA_LANCTO_CRECEBER = 'AB'`, `COD_SITUACAO = 1`, `COD_BORDERO = NULL`, `DAT_PAGTO_CRECEBER = NULL`, `VLR_LANCTO_ABATIMENTO = 0`, `VLR_LANCTO_PAGO = 0`) com o valor cheio unificado da nota (`valor_horus_original`).
+      5. Remove o cabeçalho do Borderô na tabela `dbo.BORDERO` e o registro do fechamento no Cronuz.
+    """
+    _assert_ownership(current_user, company_id)
+    closing = (
+        db.query(HorusReconciliationClosing)
+        .filter(
+            HorusReconciliationClosing.company_id == company_id,
+            HorusReconciliationClosing.id == closing_id,
+        )
+        .first()
+    )
+    if not closing:
+        raise HTTPException(status_code=404, detail="Registro de fechamento não encontrado.")
+
+    cod_bordero = int(closing.cod_bordero)
+    cod_empresa = int(str(closing.cod_empresa or "1").strip() or "1")
+    cod_filial = int(str(closing.cod_filial or "1").strip() or "1")
+    items = closing.items_json or []
+    if not items:
+        raise HTTPException(
+            status_code=400,
+            detail=f"O fechamento do Borderô #{cod_bordero} não possui snapshot de itens para estorno seguro.",
+        )
+
+    snap_map: Dict[int, Dict[str, Any]] = {}
+    cred_children: List[int] = []
+    for it in items:
+        lid = it.get("nro_lancamento")
+        if lid:
+            snap_map[int(lid)] = it
+        c_child = it.get("novo_lancamento_credito_maior")
+        if c_child:
+            try:
+                cred_children.append(int(c_child))
+            except Exception:
+                pass
+
+    all_lids = sorted(list(snap_map.keys()))
+    cred_children = sorted(list(set(cred_children)))
+    if not all_lids:
+        raise HTTPException(status_code=400, detail="Nenhum número de lançamento válido no snapshot.")
+
+    try:
+        sql_client = HorusSQLClient(db, company_id)
+    except HorusSQLConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    conn = sql_client.create_dedicated_connection(autocommit=False, timeout=600)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "DECLARE @ctx varbinary(128) = CAST('IGNORARTRIGGER' AS varbinary(128)); SET CONTEXT_INFO @ctx;"
+        )
+
+        # 1. Remove BLANCTOS entries for the CR titles (and any for cred_children)
+        target_blanctos_ids = all_lids + cred_children
+        for i in range(0, len(target_blanctos_ids), 200):
+            chunk = target_blanctos_ids[i : i + 200]
+            ph = ", ".join(["%s"] * len(chunk))
+            cur.execute(
+                f"""
+                DELETE FROM BLANCTOS
+                WHERE COD_EMPRESA = %s
+                  AND COD_FILIAL = %s
+                  AND STA_RASTREIO = 'CAR'
+                  AND COD_RASTREIO IN ({ph})
+                """,
+                tuple([cod_empresa, cod_filial] + chunk),
+            )
+
+        # 2. Remove eventuais despesas de taxa lançadas em LANCTOS_CPAGAR_GERAL (4ª Opção) e seus reflexos em BLANCTOS
+        dup_prefix = f"BRD-{cod_bordero}%"
+        cur.execute(
+            """
+            SELECT NRO_LANCTO_CPAGAR
+            FROM LANCTOS_CPAGAR_GERAL WITH (NOLOCK)
+            WHERE COD_EMPRESA = %s
+              AND COD_FILIAL = %s
+              AND NRO_DUPLICATA LIKE %s
+            """,
+            (cod_empresa, cod_filial, dup_prefix),
+        )
+        cp_rows = cur.fetchall() or []
+        cp_ids = [
+            int(r["NRO_LANCTO_CPAGAR"] if isinstance(r, dict) else r[0])
+            for r in cp_rows
+        ]
+        if cp_ids:
+            ph_cp = ", ".join(["%s"] * len(cp_ids))
+            cur.execute(
+                f"""
+                DELETE FROM BLANCTOS
+                WHERE COD_EMPRESA = %s
+                  AND COD_FILIAL = %s
+                  AND STA_RASTREIO = 'CAP'
+                  AND COD_RASTREIO IN ({ph_cp})
+                """,
+                tuple([cod_empresa, cod_filial] + cp_ids),
+            )
+            cur.execute(
+                f"""
+                DELETE FROM LANCTOS_CPAGAR_GERAL
+                WHERE COD_EMPRESA = %s
+                  AND COD_FILIAL = %s
+                  AND NRO_LANCTO_CPAGAR IN ({ph_cp})
+                """,
+                tuple([cod_empresa, cod_filial] + cp_ids),
+            )
+
+        # 3. Exclui lançamentos filhos de Crédito Maior desmembrados
+        if cred_children:
+            ph_c = ", ".join(["%s"] * len(cred_children))
+            cur.execute(
+                f"""
+                DELETE FROM LANCTOS_CRECEBERA
+                WHERE COD_EMPRESA = %s
+                  AND COD_FILIAL = %s
+                  AND NRO_LANCTO_CRECEBER IN ({ph_c})
+                """,
+                tuple([cod_empresa, cod_filial] + cred_children),
+            )
+            cur.execute(
+                f"""
+                DELETE FROM LANCTOS_CRECEBER
+                WHERE COD_EMPRESA = %s
+                  AND COD_FILIAL = %s
+                  AND NRO_LANCTO_CRECEBER IN ({ph_c})
+                """,
+                tuple([cod_empresa, cod_filial] + cred_children),
+            )
+
+        # 4. Restaura os títulos em LANCTOS_CRECEBER e LANCTOS_CRECEBERA em lotes de 50
+        for i in range(0, len(all_lids), 50):
+            chunk_lids = all_lids[i : i + 50]
+            val_clauses = []
+            val_params: List[Any] = []
+            for lid in chunk_lids:
+                s_it = snap_map[lid]
+                v_cred_m = round(float(s_it.get("valor_credito_maior") or 0.0), 2)
+                v_orig = round(
+                    float(
+                        s_it.get("valor_horus_original")
+                        or s_it.get("valor_bruto")
+                        or 0.0
+                    ),
+                    2,
+                )
+                has_cred_flag = 1 if v_cred_m > 0.009 else 0
+                val_clauses.append("(%s, %s, %s)")
+                val_params.extend([lid, v_orig, has_cred_flag])
+            values_sql = ", ".join(val_clauses)
+
+            cur.execute(
+                f"""
+                UPDATE LR
+                SET LR.STA_LANCTO_CRECEBER = 'AB',
+                    LR.COD_BORDERO = NULL,
+                    LR.DAT_PAGTO_CRECEBER = NULL,
+                    LR.DAT_PAGTO_CONTA = NULL,
+                    LR.DAT_PAGTO_CRECEBER_REAL = NULL,
+                    LR.VLR_LANCTO_ABATIMENTO = 0,
+                    LR.VLR_LANCTO_PAGO = 0,
+                    LR.VLR_LANCTO_RECEBIDO = 0,
+                    LR.VLR_LANCTO_CRECEBER = CASE WHEN V.has_cred = 1 THEN V.v_orig ELSE LR.VLR_LANCTO_CRECEBER END,
+                    LR.VLR_LANCTO_TOTAL = V.v_orig,
+                    LR.DAT_ULT_ATL = GETDATE()
+                FROM LANCTOS_CRECEBER LR
+                INNER JOIN (VALUES {values_sql}) AS V(lid, v_orig, has_cred)
+                    ON LR.NRO_LANCTO_CRECEBER = V.lid
+                WHERE LR.COD_EMPRESA = %s AND LR.COD_FILIAL = %s
+                """,
+                tuple(val_params + [cod_empresa, cod_filial]),
+            )
+
+            cur.execute(
+                f"""
+                UPDATE LRA
+                SET LRA.STA_LANCTO_CRECEBER = 'AB',
+                    LRA.COD_SITUACAO = 1,
+                    LRA.COD_BORDERO = NULL,
+                    LRA.DAT_PAGTO_CRECEBER = NULL,
+                    LRA.DAT_PAGTO_CONTA = NULL,
+                    LRA.DAT_PAGTO_CRECEBER_REAL = NULL,
+                    LRA.VLR_LANCTO_ABATIMENTO = 0,
+                    LRA.VLR_LANCTO_PAGO = 0,
+                    LRA.VLR_LANCTO_RECEBIDO = 0,
+                    LRA.VLR_LANCTO_CRECEBER = CASE WHEN V.has_cred = 1 THEN V.v_orig ELSE LRA.VLR_LANCTO_CRECEBER END,
+                    LRA.VLR_LANCTO_TOTAL = V.v_orig,
+                    LRA.DAT_ULT_ATL = GETDATE()
+                FROM LANCTOS_CRECEBERA LRA
+                INNER JOIN (VALUES {values_sql}) AS V(lid, v_orig, has_cred)
+                    ON LRA.NRO_LANCTO_CRECEBER = V.lid
+                WHERE LRA.COD_EMPRESA = %s AND LRA.COD_FILIAL = %s
+                """,
+                tuple(val_params + [cod_empresa, cod_filial]),
+            )
+
+        # 5. Remove o cabeçalho do Borderô na tabela BORDERO
+        cur.execute(
+            "DELETE FROM BORDERO WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_BORDERO = %s",
+            (cod_empresa, cod_filial, cod_bordero),
+        )
+
+        conn.commit()
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.error("[HorusRevertBordero] Falha ao estornar Bordero #%s: %s", cod_bordero, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Falha ao estornar Borderô #{cod_bordero} no Horus (Rollback executado): {e}",
+        )
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    db.delete(closing)
+    db.commit()
+
+    return {
+        "success": True,
+        "cod_bordero": cod_bordero,
+        "restored_titles": len(all_lids),
+        "deleted_credito_maior_children": len(cred_children),
+        "deleted_cpagar_expenses": len(cp_ids),
+        "message": (
+            f"Borderô #{cod_bordero} estornado com sucesso! {len(all_lids)} título(s) voltaram para Aberto (AB) "
+            f"unificados com o valor da nota e foram removidos do fechamento bancário."
+        ),
+    }

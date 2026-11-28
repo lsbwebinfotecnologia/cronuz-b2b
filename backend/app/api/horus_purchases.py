@@ -341,6 +341,11 @@ class ChangePurchaseOrderStatusPayload(BaseModel):
     reason: Optional[str] = None
 
 
+class ChangePurchaseOrderPendenciaPayload(BaseModel):
+    company_id: Optional[int] = None
+    gerar_pendencia: str  # 'S' (SIM) ou 'N' (NÃO)
+
+
 # ── 1. Filiais e Parametrização Individual por Filial (Opções + E-mail) ──────
 
 @router.get("/branches")
@@ -3763,6 +3768,121 @@ def change_horus_purchase_order_status(
         "horus_status": order.horus_status,
         "status_label": HORUS_STATUS_LABELS.get(order.horus_status, order.status),
         "message": f"Status do pedido #{order.horus_cod_pedido} atualizado para {order.horus_status} ({HORUS_STATUS_LABELS.get(order.horus_status, order.status)})!",
+    }
+
+
+@router.patch("/orders/{order_id}/gerar-pendencia")
+def change_horus_purchase_order_pendencia(
+    order_id: int,
+    payload: ChangePurchaseOrderPendenciaPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Atualiza diretamente o campo GERAR_PEND ('S' = SIM / 'N' = NÃO) em PEDIDOS_COMPRA no Horus
+    e no Cronuz, respeitando todas as travas de segurança (bloqueia se finalizado, itens conferidos ou NF vinculada).
+    """
+    seller_id = _resolve_seller_id(current_user, payload.company_id)
+    order = (
+        db.query(HorusPurchaseOrder)
+        .filter(HorusPurchaseOrder.id == int(order_id), HorusPurchaseOrder.company_id == seller_id)
+        .first()
+    )
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido de compra não encontrado.")
+
+    target_gp = "N" if str(payload.gerar_pendencia or "S").strip().upper() == "N" else "S"
+    old_gp = getattr(order, "gerar_pendencia", "S") or "S"
+    uid, uname, horus_user_upper = _user_meta(current_user)
+
+    if order.horus_cod_pedido:
+        conn = _open_horus_tx_connection(db, seller_id)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    _HORUS_ORDER_SAFETY_SQL,
+                    (order.cod_empresa, order.cod_filial, order.horus_cod_pedido),
+                )
+                safety_row = cur.fetchone()
+                if not safety_row:
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"Pedido #{order.horus_cod_pedido} não encontrado em PEDIDOS_COMPRA no Horus.",
+                    )
+                safety = _evaluate_horus_safety_row(safety_row, order.horus_status)
+                if safety["has_blocking_movement"]:
+                    conn.rollback()
+                    raise HTTPException(status_code=400, detail=safety["block_reason"])
+                if safety["live_horus_status"] not in ("AB", "AP", "AE"):
+                    conn.rollback()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Somente pedidos em AB, AP ou AE podem ter o campo Gerar Pendência alterado "
+                            f"(status atual no Horus: {safety['live_horus_status']})."
+                        ),
+                    )
+                old_gp = safety.get("gerar_pendencia") or old_gp
+                cur.execute(
+                    """
+                    UPDATE PEDIDOS_COMPRA
+                    SET GERAR_PEND = %s,
+                        DAT_ULT_ATL = GETDATE(),
+                        NOM_USUARIO = %s
+                    WHERE COD_EMPRESA = %s AND COD_FILIAL = %s AND COD_PEDIDO = %s
+                    """,
+                    (
+                        target_gp,
+                        horus_user_upper,
+                        order.cod_empresa,
+                        order.cod_filial,
+                        order.horus_cod_pedido,
+                    ),
+                )
+                conn.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=500,
+                detail=f"Falha ao atualizar GERAR_PEND em PEDIDOS_COMPRA no Horus: {e}",
+            )
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    order.gerar_pendencia = target_gp
+    order.updated_by_id = uid
+    order.updated_by_name = uname
+    old_lbl = "SIM" if old_gp == "S" else "NÃO"
+    new_lbl = "SIM" if target_gp == "S" else "NÃO"
+    db.add(
+        HorusPurchaseOrderLog(
+            order_id=order.id,
+            action="PENDENCIA_CHANGED",
+            old_status=order.status,
+            new_status=order.status,
+            old_horus_status=order.horus_status,
+            new_horus_status=order.horus_status,
+            details=f"Campo Gerar Pendência alterado de {old_lbl} ({old_gp}) para {new_lbl} ({target_gp}) por {uname}.",
+            user_id=uid,
+            user_name=uname,
+        )
+    )
+    db.commit()
+    db.refresh(order)
+
+    return {
+        "success": True,
+        "gerar_pendencia": target_gp,
+        "message": f"Gerar Pendência do pedido #{order.horus_cod_pedido or order.id} alterado para {new_lbl} no Horus!",
     }
 
 

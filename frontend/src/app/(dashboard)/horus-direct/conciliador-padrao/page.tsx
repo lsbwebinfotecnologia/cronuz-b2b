@@ -33,7 +33,14 @@ import {
   Trash2,
   Sparkles,
   Sliders,
+  Pin,
+  ArrowRightLeft,
+  DollarSign,
+  CheckSquare,
+  Square,
+  Save,
 } from 'lucide-react';
+import Link from 'next/link';
 import { getToken, getUser } from '@/lib/auth';
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -474,6 +481,10 @@ export default function ConciliadorPadraoPage() {
     cp_cod_forma: '',
   });
 
+  // Aba Principal Estilo Access Moderno (/horus-direct/compras): DESK (Mesa), HISTORY (Histórico de Borderôs), BUILDER (Construtor/Configurar Modelo)
+  const [activeMainTab, setActiveMainTab] = useState<'DESK' | 'HISTORY' | 'BUILDER'>('DESK');
+  const [revertingClosingId, setRevertingClosingId] = useState<number | null>(null);
+
   // Histórico de Fechamentos
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [closingsList, setClosingsList] = useState<any[]>([]);
@@ -809,7 +820,8 @@ export default function ConciliadorPadraoPage() {
       setFornecedorSearchQuery(baseBank?.cp_nom_fornecedor || '');
       fetchHorusOptions(baseBank?.cp_nom_fornecedor || undefined);
     }
-    setShowBuilderModal(true);
+    setActiveMainTab('BUILDER');
+    setShowBuilderModal(false);
   };
 
   // Inspeciona planilha de exemplo para preencher automaticamente os cabeçalhos do De -> Para
@@ -981,6 +993,7 @@ export default function ConciliadorPadraoPage() {
         setActiveTemplateId(data.template.id);
       }
       setShowBuilderModal(false);
+      setActiveMainTab('DESK');
       toast.success(
         editingTemplateId
           ? `Modelo "${builderForm.name}" atualizado com sucesso!`
@@ -1008,6 +1021,7 @@ export default function ConciliadorPadraoPage() {
       if (!res.ok) throw new Error(data.detail || 'Erro ao excluir modelo.');
       setTemplates(data.templates || []);
       setShowBuilderModal(false);
+      setActiveMainTab('DESK');
       toast.success(`Modelo "${tpl.name}" removido.`);
     } catch (e: any) {
       toast.error(e.message || 'Erro ao remover modelo.');
@@ -1430,9 +1444,7 @@ export default function ConciliadorPadraoPage() {
   };
 
   // Histórico de Fechamentos salvos no banco do Cronuz
-  const openHistoryModal = async () => {
-    setShowHistoryModal(true);
-    setSelectedClosingDetail(null);
+  const loadClosingsList = async () => {
     setLoadingClosings(true);
     try {
       const token = getToken();
@@ -1445,10 +1457,21 @@ export default function ConciliadorPadraoPage() {
         setClosingsList(data.closings || []);
       }
     } catch {
-      toast.error('Erro ao carregar histórico de fechamentos.');
+      // silencioso
     } finally {
       setLoadingClosings(false);
     }
+  };
+
+  useEffect(() => {
+    loadClosingsList();
+  }, [companyId]);
+
+  const openHistoryModal = async () => {
+    setActiveMainTab('HISTORY');
+    setShowHistoryModal(false);
+    setSelectedClosingDetail(null);
+    await loadClosingsList();
   };
 
   const handleInspectClosingDetail = async (closingId: number) => {
@@ -1462,6 +1485,8 @@ export default function ConciliadorPadraoPage() {
       if (res.ok) {
         const data = await res.json();
         setSelectedClosingDetail(data.closing);
+      } else {
+        toast.error('Erro ao carregar detalhes do fechamento.');
       }
     } catch {
       toast.error('Erro ao carregar itens do fechamento.');
@@ -1470,741 +1495,1040 @@ export default function ConciliadorPadraoPage() {
     }
   };
 
+  const handleRevertClosingBordero = async (closing: any) => {
+    const codBordero = closing?.cod_bordero || closing?.bordero_number;
+    const totalTitles = closing?.total_titles || 0;
+    if (
+      !window.confirm(
+        `Confirma DESFAZER e ESTORNAR o Borderô #${codBordero} (${totalTitles} títulos) no Horus ERP?\n\n` +
+          `• Os ${totalTitles} títulos voltarão para Aberto (AB) unificados com o valor cheio da nota;\n` +
+          `• Os lançamentos automáticos serão removidos do Fechamento Bancário (BLANCTOS);\n` +
+          `• Eventuais lançamentos separados de Crédito Maior ou Despesas de Taxa vinculadas a este Borderô serão desfeitos.`
+      )
+    ) {
+      return;
+    }
+
+    setRevertingClosingId(closing.id);
+    try {
+      const token = getToken();
+      const res = await fetch(
+        `${API}/companies/${companyId}/horus-sql/reconciliation/closings/${closing.id}/revert`,
+        {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.detail || `Erro ao estornar Borderô #${codBordero}.`);
+      }
+      toast.success(
+        data.message || `Borderô #${codBordero} desfeito e restaurado para Aberto (AB) no Horus!`
+      );
+      setSelectedClosingDetail(null);
+      await loadClosingsList();
+    } catch (e: any) {
+      toast.error(e.message || 'Falha ao estornar Borderô no Horus.');
+    } finally {
+      setRevertingClosingId(null);
+    }
+  };
+
+  const exportClosingDetailToCsv = (closing: any) => {
+    const items = closing?.items || [];
+    if (!items.length) {
+      toast.error('Nenhum item registrado neste fechamento.');
+      return;
+    }
+    const headers = [
+      'Borderô Horus',
+      'Modelo',
+      'Pedido Canal / Chave',
+      'Pedido Tray',
+      'Pedido Horus',
+      'Lançamento Principal',
+      'NF',
+      'Cliente',
+      'Valor Bruto',
+      'Taxa Abatida',
+      'Valor Líquido Baixado',
+      'Valor Orig. Horus',
+      'Crédito Maior Separado',
+      'Novo Lanç. Crédito Maior',
+      'Parcelas Unificadas',
+      'Data Pagamento',
+    ];
+    const escape = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const fmtNum = (v: number | undefined) =>
+      v !== undefined && v !== null ? Number(v).toFixed(2).replace('.', ',') : '0,00';
+
+    const rows = items.map((it: any) =>
+      [
+        closing.cod_bordero || closing.bordero_number,
+        closing.profile_name || closing.profile_code,
+        it.pedido_canal || it.pedido_web || '',
+        it.pedido_tray || '-',
+        it.cod_ped_venda || '',
+        it.nro_lancamento || '',
+        it.nro_nota_fiscal || '',
+        it.cliente_nome || '',
+        fmtNum(it.valor_bruto),
+        fmtNum(it.taxa),
+        fmtNum(it.valor_liquido),
+        fmtNum(it.valor_horus_original),
+        fmtNum(it.valor_credito_maior),
+        it.novo_lancamento_credito_maior || '-',
+        it.unificadas_qtd || 1,
+        it.data_pagamento || '',
+      ]
+        .map(escape)
+        .join(';')
+    );
+
+    const bom = '\uFEFF';
+    const csv = bom + [headers.map(escape).join(';'), ...rows].join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `fechamento_bordero_${closing.cod_bordero || closing.bordero_number}_${(closing.profile_code || 'modelo').toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast.success(`Fechamento do Borderô #${closing.cod_bordero || closing.bordero_number} exportado com sucesso!`);
+  };
+
   const matchMeta =
     HORUS_MATCH_LABELS[activeTemplate?.horus_match_field || 'AUTO'] || HORUS_MATCH_LABELS.AUTO;
 
   return (
-    <div className="p-3 sm:p-5 max-w-[1650px] mx-auto space-y-4">
-      {/* ─── BARRA DE TOPO COMPACTA: TÍTULO + FILIAL + AÇÕES DE MODELOS ─── */}
-      <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 px-4 py-3 shadow-xs space-y-3">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-xs">
-              <Sliders className="h-5 w-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <h1 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white tracking-tight">
-                  Conciliador Dinâmico &amp; Construtor de Modelos (Horus ERP)
-                </h1>
-                <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                  <Sparkles className="h-3 w-3" /> De/Para Configurável
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Vincule planilhas por <b>Nota Fiscal</b>, <b>Pedido Horus</b>, <b>Nº do Lançamento</b> ou{' '}
-                <b>Pedido Web/Ponte</b> com parâmetros bancários dedicados por modelo.
-              </p>
-            </div>
-          </div>
+    <div className="w-full space-y-2.5 pb-12 font-sans text-xs">
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* BARRA DE NAVEGAÇÃO FIXA NO TOPO (PADRÃO ACCESS MODERNO / COMPRAS)     */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center justify-between gap-2 bg-slate-100/90 dark:bg-slate-900 border border-slate-300/90 dark:border-slate-800 rounded-xl px-2.5 py-1.5 shadow-2xs overflow-x-auto scrollbar-none">
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+          <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 shrink-0">
+            <Pin className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+            Modelos De/Para
+          </span>
 
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Filial Horus */}
-            <div className="flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5">
-              <span className="text-[11px] font-bold text-slate-500 uppercase">Filial:</span>
-              <input
-                type="text"
-                value={selectedFilial}
-                onChange={(e) => setSelectedFilial(e.target.value)}
-                className="w-9 bg-transparent text-center font-mono text-xs font-extrabold text-slate-900 dark:text-white focus:outline-none"
-              />
-            </div>
+          <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-0.5 shrink-0" />
 
-            {/* Botão Migrar / Sincronizar Padrões (Shopee, Vindi + 3 Formatos) */}
-            <button
-              type="button"
-              onClick={handleMigratePresets}
-              disabled={migratingPresets}
-              title="Sincroniza os códigos bancários da rotina atual (Vindi/Shopee) e garante os 5 modelos padrão"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
-            >
-              {migratingPresets ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" />
-              ) : (
-                <RefreshCw className="h-3.5 w-3.5 text-indigo-600" />
-              )}
-              Sincronizar Padrões
-            </button>
-
-            {/* Botão Histórico de Fechamentos */}
-            <button
-              type="button"
-              onClick={openHistoryModal}
-              className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 dark:border-indigo-800 bg-indigo-50/70 dark:bg-indigo-950/40 hover:bg-indigo-100 px-3 py-1.5 text-xs font-bold text-indigo-700 dark:text-indigo-300 cursor-pointer"
-            >
-              <History className="h-3.5 w-3.5" />
-              Histórico de Borderôs
-            </button>
-
-            {/* Botão Editar Modelo Ativo */}
-            {activeTemplate && (
-              <button
-                type="button"
-                onClick={() => openBuilderModal(activeTemplate)}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold border transition-all cursor-pointer ${
-                  activeTemplate.bank_configured
-                    ? 'border-emerald-200 bg-emerald-50/60 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
-                    : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300'
+          <button
+            type="button"
+            onClick={() => setActiveMainTab('DESK')}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-all shrink-0 cursor-pointer border ${
+              activeMainTab === 'DESK'
+                ? 'bg-indigo-600 border-indigo-700 text-white font-bold shadow-2xs'
+                : 'bg-white/80 dark:bg-slate-900 border-transparent hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-white dark:hover:bg-slate-800'
+            }`}
+          >
+            <Sliders className={`w-3.5 h-3.5 ${activeMainTab === 'DESK' ? 'text-white' : 'text-slate-500'}`} />
+            <span>Mesa de Conciliação</span>
+            {summary && (
+              <span
+                className={`px-1.5 py-0.2 rounded font-mono text-[10px] font-bold ${
+                  activeMainTab === 'DESK'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
                 }`}
               >
-                <Settings className="h-3.5 w-3.5" />
-                {activeTemplate.bank_configured
-                  ? `Editar Modelo (Banco ${activeTemplate.effective_bank.banco} • Forma ${activeTemplate.effective_bank.forma_pagto})`
-                  : 'Configurar Modelo & Banco'}
-              </button>
+                {summary.abertos_qtd ?? summary.ready_qtd} AB
+              </span>
             )}
+          </button>
 
-            {/* Botão + Novo Modelo de Conciliação */}
+          <button
+            type="button"
+            onClick={openHistoryModal}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-all shrink-0 cursor-pointer border ${
+              activeMainTab === 'HISTORY'
+                ? 'bg-indigo-600 border-indigo-700 text-white font-bold shadow-2xs'
+                : 'bg-white/80 dark:bg-slate-900 border-transparent hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-white dark:hover:bg-slate-800'
+            }`}
+          >
+            <History className={`w-3.5 h-3.5 ${activeMainTab === 'HISTORY' ? 'text-white' : 'text-slate-500'}`} />
+            <span>Histórico de Borderôs</span>
+            {closingsList.length > 0 && (
+              <span
+                className={`px-1.5 py-0.2 rounded font-mono text-[10px] font-bold ${
+                  activeMainTab === 'HISTORY'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-200/80 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                {closingsList.length}
+              </span>
+            )}
+          </button>
+
+          {activeTemplate && (
             <button
               type="button"
-              onClick={() => openBuilderModal(undefined)}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3.5 py-1.5 text-xs font-bold text-white shadow-xs cursor-pointer"
+              onClick={() => openBuilderModal(activeTemplate)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] transition-all shrink-0 cursor-pointer border ${
+                activeMainTab === 'BUILDER' && editingTemplateId
+                  ? 'bg-indigo-600 border-indigo-700 text-white font-bold shadow-2xs'
+                  : 'bg-white/80 dark:bg-slate-900 border-transparent hover:border-slate-300 dark:hover:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold hover:bg-white dark:hover:bg-slate-800'
+              }`}
             >
-              <Plus className="h-3.5 w-3.5" />
-              Novo Modelo
+              <Settings
+                className={`w-3.5 h-3.5 ${
+                  activeMainTab === 'BUILDER' && editingTemplateId ? 'text-white' : 'text-slate-500'
+                }`}
+              />
+              <span>Configurar Modelo ({activeTemplate.short_name})</span>
             </button>
-
-            {/* Botão Conciliar no Horus */}
-            <button
-              type="button"
-              onClick={handleRunReconciliation}
-              disabled={reading || !channelFile || (isDualFileMode && !trayFile)}
-              className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 px-4 py-2 text-xs font-extrabold text-white shadow-xs transition-all cursor-pointer"
-            >
-              {reading ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Processando...
-                </>
-              ) : (
-                <>
-                  <Database className="h-3.5 w-3.5" />
-                  Conciliar no Horus
-                </>
-              )}
-            </button>
-          </div>
-        </div>
-
-        {/* Seletor de Modelos (Tabs Dinâmicas) */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pt-2 border-t border-slate-100 dark:border-slate-800">
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mr-1 shrink-0">
-            Modelos:
-          </span>
-          {loadingTemplates ? (
-            <span className="text-xs text-slate-400 flex items-center gap-1.5">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando modelos...
-            </span>
-          ) : (
-            templates.map((tpl) => {
-              const isSelected = tpl.id === activeTemplate?.id;
-              return (
-                <button
-                  key={tpl.id}
-                  type="button"
-                  onClick={() => handleSelectTemplate(tpl.id)}
-                  className={`inline-flex items-center gap-2 rounded-xl px-3 py-1.5 text-xs font-bold transition-all shrink-0 cursor-pointer ${
-                    isSelected
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200'
-                  }`}
-                >
-                  <span>{tpl.short_name}</span>
-                  <span
-                    className={`rounded px-1.5 py-0.2 text-[9px] font-extrabold uppercase ${
-                      isSelected
-                        ? 'bg-white/20 text-white'
-                        : 'bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400'
-                    }`}
-                  >
-                    {tpl.mode === 'DUAL_FILE' ? '2 Arq.' : tpl.horus_match_field}
-                  </span>
-                </button>
-              );
-            })
           )}
+
+          <button
+            type="button"
+            onClick={() => openBuilderModal(undefined)}
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] transition-all shrink-0 cursor-pointer border ${
+              activeMainTab === 'BUILDER' && !editingTemplateId
+                ? 'bg-indigo-600 border-indigo-700 text-white font-bold shadow-2xs'
+                : 'bg-white/80 dark:bg-slate-900 border-transparent hover:border-slate-300 dark:hover:border-slate-700 text-indigo-700 dark:text-indigo-300 font-bold hover:bg-white dark:hover:bg-slate-800'
+            }`}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Novo Modelo</span>
+          </button>
+
+          <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-0.5 shrink-0" />
+
+          <Link
+            href="/horus-direct/financeiro-vindi"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:bg-white dark:hover:bg-slate-800 border border-transparent hover:border-slate-300 transition-all shrink-0"
+          >
+            <ArrowRightLeft className="w-3.5 h-3.5 text-slate-400" />
+            <span>Conciliações Fixas (Shopee/Vindi)</span>
+          </Link>
         </div>
 
-        {/* Resumo das Regras de Relacionamento do Modelo Ativo + Dropzones */}
+        {/* Resumo Bancário Rápido no Canto Direito */}
         {activeTemplate && (
-          <div className="space-y-2.5 pt-1">
-            <div className="rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/80 dark:border-slate-800 px-3.5 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-bold text-slate-700 dark:text-slate-200">
-                  Relacionamento Horus:
-                </span>
-                <span className="rounded-md bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 px-2 py-0.5 text-[11px] font-mono font-bold">
-                  {matchMeta.label}
-                </span>
-                {activeTemplate.column_mapping?.key_col && (
-                  <span className="text-[11px] text-slate-500">
-                    • Coluna Chave:{' '}
-                    <b className="font-mono text-slate-700 dark:text-slate-300">
-                      {activeTemplate.column_mapping.key_col}
-                    </b>{' '}
-                    ({activeTemplate.column_mapping.key_extract_rule || 'AUTO'})
-                  </span>
-                )}
-                {Boolean(
-                  activeTemplate.use_horus_value ??
-                    activeTemplate.column_mapping?.use_horus_value
-                ) ? (
-                  <span className="rounded-md bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 text-[11px] font-bold">
-                    • Valor: Considerando Lançamento Pago do Horus
-                  </span>
-                ) : (
-                  activeTemplate.column_mapping?.valor_liquido_col && (
-                    <span className="text-[11px] text-slate-500">
-                      • Coluna Valor Líq:{' '}
-                      <b className="font-mono text-slate-700 dark:text-slate-300">
-                        {activeTemplate.column_mapping.valor_liquido_col}
-                      </b>
-                    </span>
-                  )
-                )}
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-slate-500">
-                <span>
-                  Baixa:{' '}
-                  <b className="text-slate-700 dark:text-slate-300">
-                    {activeTemplate.payment_date_mode === 'CHANNEL_DATE'
-                      ? 'Data da Planilha'
-                      : activeTemplate.payment_date_mode === 'SPECIFIC_DATE'
-                      ? 'Data Específica'
-                      : 'Apenas Borderô Aberto (AP)'}
-                  </b>
-                </span>
-              </div>
-            </div>
-
-            {/* Dropzones de 1 ou 2 Planilhas */}
-            <div
-              className={`grid grid-cols-1 ${
-                isDualFileMode ? 'md:grid-cols-2' : 'md:grid-cols-1'
-              } gap-3`}
-            >
-              {/* Slot 1 */}
-              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 p-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                    <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-indigo-600 text-[10px] font-black text-white">
-                      1
-                    </span>
-                    {activeTemplate.file_1_label}
-                  </span>
-                </div>
-                <div
-                  onClick={() => channelFileInputRef.current?.click()}
-                  className={`flex items-center justify-between gap-3 rounded-xl border border-dashed px-3.5 py-2.5 cursor-pointer transition-all ${
-                    channelFile
-                      ? 'border-emerald-400 bg-emerald-50/50 dark:border-emerald-700 dark:bg-emerald-950/20'
-                      : 'border-slate-300 dark:border-slate-700 hover:border-indigo-400 bg-white dark:bg-slate-900'
-                  }`}
-                >
-                  <input
-                    ref={channelFileInputRef}
-                    type="file"
-                    accept=".xlsx,.xls,.csv"
-                    onChange={(e) => validateAndSetFile(e.target.files?.[0], 'CHANNEL')}
-                    className="hidden"
-                  />
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <FileSpreadsheet
-                      className={`h-5 w-5 shrink-0 ${
-                        channelFile ? 'text-emerald-600' : 'text-slate-400'
-                      }`}
-                    />
-                    {channelFile ? (
-                      <div className="truncate">
-                        <p className="text-xs font-bold text-emerald-900 dark:text-emerald-300 truncate">
-                          {channelFile.name}
-                        </p>
-                        <p className="text-[10px] text-emerald-600">
-                          {(channelFile.size / 1024).toFixed(1)} KB pronto para leitura
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-xs text-slate-500 truncate">
-                        Clique para selecionar a planilha (.xlsx ou .csv)
-                      </p>
-                    )}
-                  </div>
-                  <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-slate-600 dark:text-slate-300 shrink-0">
-                    {channelFile ? 'Trocar' : 'Selecionar'}
-                  </span>
-                </div>
-              </div>
-
-              {/* Slot 2 (se DUAL_FILE) */}
-              {isDualFileMode && (
-                <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 p-3">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
-                      <span className="inline-flex h-4 w-4 items-center justify-center rounded bg-violet-600 text-[10px] font-black text-white">
-                        2
-                      </span>
-                      {activeTemplate.file_2_label || '2º Arquivo: Planilha Ponte (.xlsx ou .csv)'}
-                    </span>
-                  </div>
-                  <div
-                    onClick={() => trayFileInputRef.current?.click()}
-                    className={`flex items-center justify-between gap-3 rounded-xl border border-dashed px-3.5 py-2.5 cursor-pointer transition-all ${
-                      trayFile
-                        ? 'border-emerald-400 bg-emerald-50/50 dark:border-emerald-700 dark:bg-emerald-950/20'
-                        : 'border-slate-300 dark:border-slate-700 hover:border-violet-400 bg-white dark:bg-slate-900'
-                    }`}
-                  >
-                    <input
-                      ref={trayFileInputRef}
-                      type="file"
-                      accept=".xlsx,.xls,.csv"
-                      onChange={(e) => validateAndSetFile(e.target.files?.[0], 'TRAY')}
-                      className="hidden"
-                    />
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <Link2
-                        className={`h-5 w-5 shrink-0 ${
-                          trayFile ? 'text-emerald-600' : 'text-slate-400'
-                        }`}
-                      />
-                      {trayFile ? (
-                        <div className="truncate">
-                          <p className="text-xs font-bold text-emerald-900 dark:text-emerald-300 truncate">
-                            {trayFile.name}
-                          </p>
-                          <p className="text-[10px] text-emerald-600">
-                            {(trayFile.size / 1024).toFixed(1)} KB pronto para cruzamento
-                          </p>
-                        </div>
-                      ) : (
-                        <p className="text-xs text-slate-500 truncate">
-                          Clique para selecionar a 2ª planilha ponte (.xlsx ou .csv)
-                        </p>
-                      )}
-                    </div>
-                    <span className="rounded-lg bg-slate-100 dark:bg-slate-800 px-2.5 py-1 text-[11px] font-bold text-slate-600 dark:text-slate-300 shrink-0">
-                      {trayFile ? 'Trocar' : 'Selecionar'}
-                    </span>
-                  </div>
-                </div>
-              )}
-            </div>
+          <div
+            onClick={() => openBuilderModal(activeTemplate)}
+            className="hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-mono text-slate-700 dark:text-slate-200 cursor-pointer hover:border-indigo-400 shrink-0"
+            title="Clique para editar o mapeamento De/Para, Banco e Despesas Contas a Pagar deste modelo"
+          >
+            <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+            <span>
+              {activeTemplate.bank_configured
+                ? `Filial ${selectedFilial} • Forma ${activeTemplate.effective_bank.forma_pagto} • Bco ${activeTemplate.effective_bank.banco} / Ag ${activeTemplate.effective_bank.agencia} / CC ${activeTemplate.effective_bank.conta}`
+                : 'Configurar Banco do Modelo'}
+            </span>
+            {launchFeeAsExpense && (
+              <span className="px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 text-[10px] font-sans font-bold">
+                4ª Opção CP Ativa
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      {/* ─── TELEMETRIA EM TEMPO REAL DURANTE A LEITURA ─── */}
-      <AnimatePresence>
-        {reading && jobProgress && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-white dark:bg-slate-900 p-5 shadow-md space-y-3"
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white">
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                </div>
-                <div>
-                  <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600">
-                    {jobProgress.phase}
-                  </span>
-                  <h3 className="text-sm font-extrabold text-slate-900 dark:text-white">
-                    {jobProgress.message}
-                  </h3>
-                </div>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ABA 1: MESA DE CONCILIAÇÃO DINÂMICA (ESTILO ACCESS MODERNO / COMPRAS) */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeMainTab === 'DESK' && (
+        <div className="space-y-2.5">
+          {/* Barra Superior Compacta: Filial + Pílulas de Modelos + Toggles Rápidos */}
+          <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 flex flex-col xl:flex-row xl:items-center justify-between gap-2 shadow-2xs">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {/* Filial Horus */}
+              <div className="inline-flex items-center gap-1.5 bg-slate-100 dark:bg-slate-950 border border-slate-300 dark:border-slate-800 rounded-lg px-2.5 py-1">
+                <Building2 className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span className="text-[10px] font-bold uppercase text-slate-500">Filial:</span>
+                <input
+                  type="text"
+                  value={selectedFilial}
+                  onChange={(e) => setSelectedFilial(e.target.value)}
+                  className="w-8 bg-transparent text-center font-mono text-[11px] font-bold text-slate-900 dark:text-white focus:outline-none"
+                />
               </div>
-              <span className="text-xl font-black font-mono text-indigo-600">
-                {jobProgress.percent}%
-              </span>
-            </div>
-            <div className="h-2.5 w-full rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-indigo-600 to-emerald-500 transition-all duration-300"
-                style={{ width: `${Math.max(5, Math.min(100, jobProgress.percent))}%` }}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* ─── BANNER DE BORDERÔ GERADO COM SUCESSO ─── */}
-      <AnimatePresence>
-        {borderoSuccess && (
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -8 }}
-            className="rounded-2xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-4 py-3 flex items-center justify-between"
-          >
-            <div className="flex items-center gap-3">
-              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-              <div className="text-xs">
-                <span className="font-extrabold text-emerald-950 dark:text-emerald-200">
-                  Borderô #{borderoSuccess.number} gravado no Horus ERP!
-                </span>{' '}
-                <span className="text-emerald-800 dark:text-emerald-300">
-                  {borderoSuccess.qtd} lançamento(s) • Total Líquido:{' '}
-                  <b className="font-mono">R$ {formatBRL(borderoSuccess.total)}</b>
+              <div className="h-4 w-px bg-slate-300 dark:bg-slate-700 mx-0.5 hidden sm:block" />
+
+              {/* Pílulas de Modelos */}
+              {loadingTemplates ? (
+                <span className="text-[11px] text-slate-400 flex items-center gap-1.5 px-2">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Carregando modelos...
                 </span>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setBorderoSuccess(null)}
-              className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
-            >
-              Fechar
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* ─── INDICADORES E GRADE DE CONCILIAÇÃO ─── */}
-      {summary && (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
-            <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-slate-400 block">
-                1. Lidos ({activeTemplate?.channel_label})
-              </span>
-              <p className="text-lg font-black text-slate-900 dark:text-white font-mono mt-0.5">
-                {summary.total_planilha_qtd}
-                {summary.total_planilha_linhas &&
-                  summary.total_planilha_linhas > summary.total_planilha_qtd && (
-                    <span className="text-[10px] font-normal text-slate-400 ml-1">
-                      ({summary.total_planilha_linhas} linhas)
-                    </span>
-                  )}
-              </p>
-              <p className="text-[11px] font-mono text-slate-600 dark:text-slate-300">
-                Bruto: R$ {formatBRL(summary.total_planilha_valor)}
-              </p>
-              {(summary.total_planilha_saidas_valor ?? 0) > 0 && (
-                <p className="text-[10px] font-mono text-rose-600 dark:text-rose-400">
-                  {summary.total_planilha_saidas_qtd} saídas: -R${' '}
-                  {formatBRL(summary.total_planilha_saidas_valor)}
-                </p>
-              )}
-              <p className="text-[11px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                Líq: R$ {formatBRL(summary.total_planilha_liq ?? summary.total_planilha_valor)}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-violet-200 dark:border-violet-900/50 bg-violet-50/40 dark:bg-violet-950/20 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-violet-700 dark:text-violet-300 block">
-                2. Chave Horus ({summary.horus_match_field})
-              </span>
-              <p className="text-lg font-black text-violet-700 dark:text-violet-300 font-mono mt-0.5">
-                {summary.tray_linked_qtd ?? summary.total_planilha_qtd}
-              </p>
-              <p className="text-[11px] text-violet-700 dark:text-violet-400">
-                {summary.is_dual_file
-                  ? `Ponte: ${summary.tray_total_rows ?? 0} linhas`
-                  : 'Vínculo Direto 1 Planilha'}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-emerald-700 dark:text-emerald-300 block">
-                3. Em Aberto no Horus (AB)
-              </span>
-              <p className="text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono mt-0.5">
-                {summary.abertos_qtd ?? summary.ready_qtd}
-              </p>
-              <p className="text-[11px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
-                Baixar: R${' '}
-                {formatBRL(
-                  summary.abertos_valor_liquido ??
-                    summary.total_planilha_liq ??
-                    summary.abertos_valor
-                )}
-              </p>
-              <p className="text-[10px] font-mono text-slate-500">
-                Bruto Títulos: R$ {formatBRL(summary.abertos_valor ?? summary.ready_valor)}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-amber-200 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-amber-700 dark:text-amber-300 block">
-                4. Divergência Bruto
-              </span>
-              <p className="text-lg font-black text-amber-700 dark:text-amber-300 font-mono mt-0.5">
-                {summary.divergence_qtd}
-              </p>
-              <p className="text-[11px] font-mono text-amber-700 dark:text-amber-400">
-                Dif: R$ {formatBRL(summary.divergence_diff_total)}
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-purple-200 dark:border-purple-900/50 bg-purple-50/40 dark:bg-purple-950/20 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-purple-700 dark:text-purple-300 block">
-                5. Taxas / Abatimentos
-              </span>
-              <p className="text-base font-black text-purple-700 dark:text-purple-300 font-mono mt-1">
-                -R$ {formatBRL(summary.total_taxa_vindi)}
-              </p>
-              <p className="text-[10px] text-purple-600 dark:text-purple-400">
-                Comissão / Tarifa retida
-              </p>
-            </div>
-
-            <div className="rounded-xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20 p-3">
-              <span className="text-[10px] font-extrabold uppercase text-rose-700 dark:text-rose-300 block">
-                6. Não Achados no Horus
-              </span>
-              <p className="text-lg font-black text-rose-700 dark:text-rose-300 font-mono mt-0.5">
-                {summary.not_found_qtd}
-              </p>
-              <p className="text-[11px] font-mono text-rose-700 dark:text-rose-400">
-                R$ {formatBRL(summary.not_found_valor)}
-              </p>
-            </div>
-          </div>
-
-          {/* Grade de Conciliação + Barra de Ação do Borderô */}
-          <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs overflow-hidden">
-            <div className="p-3 border-b border-slate-200 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-2.5 bg-slate-50/70 dark:bg-slate-800/40">
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[
-                  { id: 'all', label: `Todos (${unifiedRows.length})` },
-                  {
-                    id: 'abertos',
-                    label: `Em Aberto AB (${summary.abertos_qtd ?? summary.ready_qtd})`,
-                  },
-                  ...(Number(summary.credito_maior_count || 0) > 0
-                    ? [
-                        {
-                          id: 'credito_maior',
-                          label: `Crédito Maior Separado (${summary.credito_maior_count})`,
-                        },
-                      ]
-                    : []),
-                  { id: 'divergence', label: `Divergências (${itemsDivergence.length})` },
-                  {
-                    id: 'pagos',
-                    label: `Já Baixados (${summary.pagos_qtd ?? itemsAlreadyPaid.length})`,
-                  },
-                  { id: 'not_found', label: `Não Localizados (${itemsNotFound.length})` },
-                ].map((t) => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => setActiveFilterTab(t.id as any)}
-                    className={`rounded-lg px-2.5 py-1.5 text-xs font-bold transition-all cursor-pointer ${
-                      activeFilterTab === t.id
-                        ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-2xs'
-                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="relative w-full sm:w-56">
-                  <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    placeholder="Filtrar chave, NF, pedido, cliente..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 pl-8 pr-3 py-1.5 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => toggleSelectAllOpen(true)}
-                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
-                >
-                  Marcar Abertos
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleSelectAllOpen(false)}
-                  className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
-                >
-                  Desmarcar
-                </button>
-
-                {selectedReleases.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowBorderoModal(true)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 px-3.5 py-1.5 text-xs font-extrabold text-white shadow-xs transition-all cursor-pointer"
-                  >
-                    <Building2 className="h-3.5 w-3.5" />
-                    Gerar Borderô ({selectedReleases.length}) • R$ {formatBRL(totalSelectedAmount)}
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Tabela */}
-            <div className="overflow-x-auto max-h-[58vh]">
-              <table className="w-full text-left border-collapse">
-                <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-800/95 border-b border-slate-200 dark:border-slate-700 text-[10px] font-extrabold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <tr>
-                    <th className="py-2.5 px-2.5 text-center w-9">✓</th>
-                    <th className="py-2.5 px-2 w-12">#</th>
-                    <th className="py-2.5 px-2.5">Chave Planilha</th>
-                    {isDualFileMode && <th className="py-2.5 px-2.5">Ponte</th>}
-                    <th className="py-2.5 px-2.5">Pedido Horus</th>
-                    <th className="py-2.5 px-2.5">Lanç.</th>
-                    <th className="py-2.5 px-2.5">NF</th>
-                    <th className="py-2.5 px-2.5">Cliente</th>
-                    <th className="py-2.5 px-2.5 text-right">Bruto</th>
-                    <th className="py-2.5 px-2.5 text-right">Taxa</th>
-                    <th className="py-2.5 px-2.5 text-right">Líq. Repasse</th>
-                    <th className="py-2.5 px-2.5 text-right">Valor Horus</th>
-                    <th className="py-2.5 px-2.5 text-center">Situação</th>
-                    <th className="py-2.5 px-2.5 text-center">Borderô</th>
-                    <th className="py-2.5 px-2.5">Diagnóstico</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200/70 dark:divide-slate-800 text-xs">
-                  {filteredRows.map((row, idx) => {
-                    const isSelectable =
-                      row._category === 'ready' || row._category === 'divergence';
-                    const isPaid = row.situacao_horus === 'PAGO';
-                    return (
-                      <tr
-                        key={`${row._category}-${row.linha}-${row.nro_lancamento || idx}`}
-                        onClick={() => setActiveRowIndex(idx)}
-                        className={`transition-colors cursor-pointer ${
-                          idx === activeRowIndex
-                            ? 'bg-indigo-50/90 dark:bg-indigo-950/40'
-                            : 'hover:bg-slate-50/80 dark:hover:bg-slate-800/40'
+              ) : (
+                templates.map((tpl) => {
+                  const isSelected = tpl.id === activeTemplate?.id;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      onClick={() => handleSelectTemplate(tpl.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer flex items-center gap-1.5 ${
+                        isSelected
+                          ? 'bg-slate-900 text-white border-slate-900 dark:bg-indigo-600 dark:border-indigo-500 font-bold shadow-2xs'
+                          : 'bg-slate-50 dark:bg-slate-800/70 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      <span>{tpl.short_name}</span>
+                      <span
+                        className={`text-[9px] px-1 py-0.2 rounded font-mono ${
+                          isSelected
+                            ? 'bg-white/20 text-white'
+                            : 'bg-slate-200/70 dark:bg-slate-700 text-slate-500 dark:text-slate-300'
                         }`}
                       >
-                        <td
-                          className="py-2 px-2.5 text-center"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {isSelectable ? (
-                            <input
-                              type="checkbox"
-                              checked={Boolean(row.selected)}
-                              onChange={() => toggleItemSelection(row.nro_lancamento, row._category)}
-                              className="h-3.5 w-3.5 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                            />
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
-                        </td>
-                        <td className="py-2 px-2 font-mono text-[11px] text-slate-400">
-                          {row.linha}
-                        </td>
-                        <td className="py-2 px-2.5 font-mono font-bold text-slate-900 dark:text-white">
-                          {row.pedido_canal || row.pedido_web}
-                        </td>
-                        {isDualFileMode && (
-                          <td className="py-2 px-2.5 font-mono text-violet-700 dark:text-violet-300">
-                            {row.pedido_tray && row.pedido_tray !== '-'
-                              ? `#${row.pedido_tray}`
-                              : '—'}
-                          </td>
-                        )}
-                        <td className="py-2 px-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400">
-                          {row.cod_ped_venda ? `#${row.cod_ped_venda}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 font-mono text-slate-600 dark:text-slate-300">
-                          {row.nro_lancamento ? `#${row.nro_lancamento}` : '—'}
-                          {(row.unificadas_qtd || 1) > 1 && (
-                            <span className="ml-1 rounded bg-violet-100 text-violet-800 px-1 py-0.2 text-[9px] font-extrabold">
-                              {row.unificadas_qtd}x UNIF.
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 px-2.5 font-mono text-slate-600 dark:text-slate-300">
-                          {row.nro_nota_fiscal || '—'}
-                        </td>
-                        <td className="py-2 px-2.5 truncate max-w-[180px] text-slate-800 dark:text-slate-200">
-                          {row.cliente_nome}
-                        </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-semibold">
-                          R$ {formatBRL(row.valor_vindi)}
-                        </td>
-                        <td className="py-2 px-2.5 text-right font-mono text-purple-600">
-                          {(row.taxa || 0) > 0 ? `-R$ ${formatBRL(row.taxa)}` : 'R$ 0,00'}
-                        </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                          R$ {formatBRL(row.valor_liquido ?? row.valor_vindi)}
-                        </td>
-                        <td className="py-2 px-2.5 text-right font-mono font-bold">
-                          {row.valor_horus !== undefined ? `R$ ${formatBRL(row.valor_horus)}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-center">
-                          {row._category === 'not_found' ? (
-                            <span className="rounded bg-rose-100 text-rose-800 px-2 py-0.5 text-[10px] font-extrabold">
-                              NÃO ACHADO
-                            </span>
-                          ) : isPaid ? (
-                            <span className="rounded bg-sky-100 text-sky-800 px-2 py-0.5 text-[10px] font-extrabold">
-                              BAIXADO
-                            </span>
-                          ) : (
-                            <span className="rounded bg-emerald-100 text-emerald-800 px-2 py-0.5 text-[10px] font-extrabold">
-                              ABERTO
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 px-2.5 text-center font-mono">
-                          {row.cod_bordero ? `#${row.cod_bordero}` : '—'}
-                        </td>
-                        <td className="py-2 px-2.5 text-[11px] text-slate-500 max-w-[260px] truncate">
-                          {row.motivo}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                        {tpl.mode === 'DUAL_FILE' ? '2 Arq' : tpl.horus_match_field}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Toggles Rápidos + Sincronizar Padrões */}
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <div
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-950"
+                title="Unifica parcelas em aberto da mesma nota em 1 único lançamento"
+              >
+                <span className="text-[10px] font-bold uppercase text-slate-500">Unificar Parcelas:</span>
+                <button
+                  type="button"
+                  onClick={() => setUnifyInstallments(true)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    unifyInstallments ? 'bg-emerald-600 text-white' : 'text-slate-500'
+                  }`}
+                >
+                  SIM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnifyInstallments(false)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    !unifyInstallments ? 'bg-slate-700 text-white' : 'text-slate-500'
+                  }`}
+                >
+                  NÃO
+                </button>
+              </div>
+
+              <div
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/30"
+                title="4ª Opção: Baixa o valor bruto da venda no Contas a Receber e lança a taxa como Despesa no Contas a Pagar"
+              >
+                <span className="text-[10px] font-bold uppercase text-emerald-800 dark:text-emerald-300">
+                  4ª Opção (Taxa CP):
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setLaunchFeeAsExpense(true)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    launchFeeAsExpense ? 'bg-emerald-600 text-white' : 'text-slate-500'
+                  }`}
+                >
+                  SIM
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLaunchFeeAsExpense(false)}
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold cursor-pointer ${
+                    !launchFeeAsExpense ? 'bg-slate-700 text-white' : 'text-slate-500'
+                  }`}
+                >
+                  NÃO
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleMigratePresets}
+                disabled={migratingPresets}
+                title="Sincroniza os códigos bancários da rotina atual (Vindi/Shopee) e garante os 5 modelos padrão"
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 px-2.5 py-1 text-[11px] font-semibold text-slate-700 dark:text-slate-200 cursor-pointer"
+              >
+                {migratingPresets ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-600" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5 text-indigo-600" />
+                )}
+                Sincronizar Padrões
+              </button>
             </div>
           </div>
-        </div>
-      )}
 
-      {/* ─── MODAL CONSTRUTOR / EDITOR DE MODELO DINÂMICO ("DE -> PARA" + BANCO) ─── */}
-      <AnimatePresence>
-        {showBuilderModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/65 backdrop-blur-xs p-3 sm:p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.96 }}
-              className="w-full max-w-5xl max-h-[92vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
-            >
-              {/* Header */}
-              <div className="bg-indigo-600 px-5 py-3.5 flex items-center justify-between text-white shrink-0">
+          {/* Card Compacto de Entrada de Planilhas + Resumo De/Para do Modelo */}
+          {activeTemplate && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-2.5 shadow-2xs space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-[11px]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="font-bold text-slate-600 dark:text-slate-300">Vínculo Horus:</span>
+                  <span className="rounded bg-indigo-100 dark:bg-indigo-950/70 text-indigo-800 dark:text-indigo-300 px-1.5 py-0.2 text-[10px] font-mono font-bold">
+                    {matchMeta.label}
+                  </span>
+                  {activeTemplate.column_mapping?.key_col && (
+                    <span className="text-slate-500">
+                      • Coluna Chave:{' '}
+                      <b className="font-mono text-slate-800 dark:text-slate-200">
+                        {activeTemplate.column_mapping.key_col}
+                      </b>{' '}
+                      ({activeTemplate.column_mapping.key_extract_rule || 'AUTO'})
+                    </span>
+                  )}
+                  {Boolean(
+                    activeTemplate.use_horus_value ??
+                      activeTemplate.column_mapping?.use_horus_value
+                  ) ? (
+                    <span className="rounded bg-emerald-100 dark:bg-emerald-950/70 text-emerald-800 dark:text-emerald-300 px-1.5 py-0.2 text-[10px] font-bold">
+                      Valor do Título no Horus
+                    </span>
+                  ) : (
+                    activeTemplate.column_mapping?.valor_liquido_col && (
+                      <span className="text-slate-500">
+                        • Coluna Valor Líq:{' '}
+                        <b className="font-mono text-slate-800 dark:text-slate-200">
+                          {activeTemplate.column_mapping.valor_liquido_col}
+                        </b>
+                      </span>
+                    )
+                  )}
+                </div>
+                <span className="text-slate-500">
+                  Regra:{' '}
+                  <b className="text-slate-700 dark:text-slate-200">
+                    {activeTemplate.payment_date_mode === 'CHANNEL_DATE'
+                      ? 'Data da Planilha (PG)'
+                      : activeTemplate.payment_date_mode === 'SPECIFIC_DATE'
+                      ? 'Data Específica (PG)'
+                      : 'Borderô Aberto (AP)'}
+                  </b>
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-2 items-center">
+                {/* Slot 1 */}
+                <div className={isDualFileMode ? 'lg:col-span-5' : 'lg:col-span-9'}>
+                  <div
+                    onClick={() => channelFileInputRef.current?.click()}
+                    className={`cursor-pointer rounded-lg border px-3 py-2 transition-all flex items-center justify-between gap-2 ${
+                      channelFile
+                        ? 'border-emerald-400 bg-emerald-50/50 dark:border-emerald-700 dark:bg-emerald-950/20'
+                        : 'border-slate-300 hover:border-indigo-400 bg-slate-50/70 dark:border-slate-700 dark:bg-slate-950'
+                    }`}
+                  >
+                    <input
+                      ref={channelFileInputRef}
+                      type="file"
+                      accept=".xlsx,.xls,.csv"
+                      onChange={(e) => validateAndSetFile(e.target.files?.[0], 'CHANNEL')}
+                      className="hidden"
+                    />
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="w-5 h-5 rounded bg-indigo-600 text-white text-[10px] font-mono font-bold flex items-center justify-center shrink-0">
+                        1
+                      </span>
+                      <FileSpreadsheet
+                        className={`h-4 w-4 shrink-0 ${
+                          channelFile ? 'text-emerald-600' : 'text-slate-400'
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate">
+                          {channelFile ? channelFile.name : activeTemplate.file_1_label}
+                        </p>
+                        <p className="text-[10px] text-slate-400 truncate">
+                          {channelFile
+                            ? `${(channelFile.size / 1024).toFixed(1)} KB pronto para leitura`
+                            : 'Clique para selecionar a planilha (.xlsx ou .csv)'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="rounded bg-slate-200/80 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                      {channelFile ? 'Trocar' : 'Abrir'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Slot 2 (se DUAL_FILE) */}
+                {isDualFileMode && (
+                  <div className="lg:col-span-5">
+                    <div
+                      onClick={() => trayFileInputRef.current?.click()}
+                      className={`cursor-pointer rounded-lg border px-3 py-2 transition-all flex items-center justify-between gap-2 ${
+                        trayFile
+                          ? 'border-emerald-400 bg-emerald-50/50 dark:border-emerald-700 dark:bg-emerald-950/20'
+                          : 'border-indigo-200 hover:border-violet-400 bg-indigo-50/20 dark:border-indigo-900/60 dark:bg-slate-950'
+                      }`}
+                    >
+                      <input
+                        ref={trayFileInputRef}
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={(e) => validateAndSetFile(e.target.files?.[0], 'TRAY')}
+                        className="hidden"
+                      />
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-5 h-5 rounded bg-violet-600 text-white text-[10px] font-mono font-bold flex items-center justify-center shrink-0">
+                          2
+                        </span>
+                        <Link2
+                          className={`h-4 w-4 shrink-0 ${
+                            trayFile ? 'text-emerald-600' : 'text-violet-500'
+                          }`}
+                        />
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-slate-800 dark:text-slate-200 truncate">
+                            {trayFile
+                              ? trayFile.name
+                              : activeTemplate.file_2_label || '2º Arquivo: Planilha Ponte (.xlsx ou .csv)'}
+                          </p>
+                          <p className="text-[10px] text-slate-400 truncate">
+                            {trayFile
+                              ? `${(trayFile.size / 1024).toFixed(1)} KB pronto para cruzamento`
+                              : 'Clique para selecionar a 2ª planilha ponte'}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="rounded bg-slate-200/80 dark:bg-slate-800 px-2 py-0.5 text-[10px] font-bold text-slate-700 dark:text-slate-300 shrink-0">
+                        {trayFile ? 'Trocar' : 'Abrir'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Botão Executar Conciliação */}
+                <div className={isDualFileMode ? 'lg:col-span-2' : 'lg:col-span-3'}>
+                  <button
+                    type="button"
+                    onClick={handleRunReconciliation}
+                    disabled={reading || !channelFile || (isDualFileMode && !trayFile)}
+                    className="w-full flex items-center justify-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 px-3 py-2.5 text-[11px] font-bold text-white shadow-2xs transition cursor-pointer"
+                  >
+                    {reading ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        <span>{jobProgress ? `${jobProgress.percent}%...` : 'Lendo...'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Database className="h-3.5 w-3.5" />
+                        <span>Conciliar no Horus</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {/* TELEMETRIA EM TEMPO REAL DURANTE A LEITURA */}
+              <AnimatePresence>
+                {reading && jobProgress && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/50 dark:bg-indigo-950/30 p-3 space-y-2 overflow-hidden"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <Loader2 className="h-4 w-4 text-indigo-600 animate-spin shrink-0" />
+                        <div>
+                          <span className="text-[10px] font-black uppercase tracking-wider text-indigo-600 block">
+                            {jobProgress.phase}
+                          </span>
+                          <p className="text-xs font-bold text-slate-900 dark:text-white">
+                            {jobProgress.message}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="text-sm font-black font-mono text-indigo-600">
+                        {jobProgress.percent}%
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-800 overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-indigo-600 to-emerald-500 transition-all duration-300"
+                        style={{ width: `${Math.max(5, Math.min(100, jobProgress.percent))}%` }}
+                      />
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+
+          {/* BANNER DE BORDERÔ GERADO COM SUCESSO */}
+          <AnimatePresence>
+            {borderoSuccess && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -8 }}
+                className="rounded-xl border border-emerald-300 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 px-3.5 py-2.5 flex items-center justify-between"
+              >
                 <div className="flex items-center gap-2.5">
-                  <Sliders className="h-5 w-5" />
-                  <div>
-                    <h3 className="text-sm sm:text-base font-bold">
-                      {editingTemplateId
-                        ? `Configurar Modelo de Conciliação: ${builderForm.name}`
-                        : 'Novo Modelo Dinâmico de Conciliação Horus ERP'}
-                    </h3>
-                    <p className="text-[11px] text-indigo-100">
-                      Defina o campo de vínculo no Horus (NF, Pedido, Lançamento), o De/Para de colunas da planilha e os códigos bancários do Borderô
-                    </p>
+                  <CheckCircle2 className="h-4 w-4 text-emerald-600 shrink-0" />
+                  <div className="text-xs">
+                    <span className="font-extrabold text-emerald-950 dark:text-emerald-200">
+                      Borderô #{borderoSuccess.number} gravado no Horus ERP!
+                    </span>{' '}
+                    <span className="text-emerald-800 dark:text-emerald-300">
+                      {borderoSuccess.qtd} lançamento(s) • Total:{' '}
+                      <b className="font-mono">R$ {formatBRL(borderoSuccess.total)}</b>
+                    </span>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setShowBuilderModal(false)}
-                  className="text-white/80 hover:text-white text-sm font-bold px-2 py-1 rounded-lg hover:bg-white/10 cursor-pointer"
+                  onClick={() => setBorderoSuccess(null)}
+                  className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
                 >
-                  ✕
+                  Fechar
                 </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* ESTADO INICIAL QUANDO NENHUMA PLANILHA FOI PROCESSADA */}
+          {!summary && !reading && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-800 rounded-xl p-6 text-center space-y-2 shadow-2xs">
+              <div className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 dark:bg-slate-800 text-indigo-600 dark:text-indigo-400">
+                <Sliders className="h-5 w-5" />
+              </div>
+              <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                Mesa de Conciliação Dinâmica — {activeTemplate?.name || 'Selecione um Modelo'}
+              </h3>
+              <p className="text-[11px] text-slate-500 max-w-xl mx-auto">
+                Envie acima a planilha para conciliar pelo campo{' '}
+                <b>{activeTemplate?.horus_match_field || 'configurado'}</b> ou clique em{' '}
+                <b>Configurar Modelo</b> na barra superior para ajustar colunas De/Para, Banco e Despesa Contas a Pagar.
+              </p>
+            </div>
+          )}
+
+          {/* INDICADORES E GRADE DATASHEET DE CONCILIAÇÃO */}
+          {summary && (
+            <div className="space-y-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+                <div className="rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                    1. Lidos ({activeTemplate?.channel_label})
+                  </span>
+                  <p className="text-base font-black text-slate-900 dark:text-white font-mono mt-0.5">
+                    {summary.total_planilha_qtd}
+                    {summary.total_planilha_linhas &&
+                      summary.total_planilha_linhas > summary.total_planilha_qtd && (
+                        <span className="text-[10px] font-normal text-slate-400 ml-1">
+                          ({summary.total_planilha_linhas} lin)
+                        </span>
+                      )}
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-600 dark:text-slate-300">
+                    Bruto: R$ {formatBRL(summary.total_planilha_valor)}
+                  </p>
+                  <p className="text-[10px] font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                    Líq: R$ {formatBRL(summary.total_planilha_liq ?? summary.total_planilha_valor)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-violet-300 dark:border-violet-900/50 bg-violet-50/40 dark:bg-violet-950/20 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-violet-700 dark:text-violet-300 block">
+                    2. Chave ({summary.horus_match_field})
+                  </span>
+                  <p className="text-base font-black text-violet-700 dark:text-violet-300 font-mono mt-0.5">
+                    {summary.tray_linked_qtd ?? summary.total_planilha_qtd}
+                  </p>
+                  <p className="text-[10px] text-violet-700 dark:text-violet-400">
+                    {summary.is_dual_file
+                      ? `Ponte: ${summary.tray_total_rows ?? 0} linhas`
+                      : 'Vínculo Direto 1 Planilha'}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-emerald-300 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-300 block">
+                    3. Em Aberto (AB)
+                  </span>
+                  <p className="text-base font-black text-emerald-700 dark:text-emerald-300 font-mono mt-0.5">
+                    {summary.abertos_qtd ?? summary.ready_qtd}
+                  </p>
+                  <p className="text-[10px] font-mono font-bold text-emerald-700 dark:text-emerald-400">
+                    Baixar: R${' '}
+                    {formatBRL(
+                      launchFeeAsExpense
+                        ? summary.abertos_valor ?? summary.ready_valor
+                        : summary.abertos_valor_liquido ??
+                          summary.total_planilha_liq ??
+                          summary.abertos_valor
+                    )}
+                  </p>
+                  <p className="text-[10px] font-mono text-slate-500">
+                    Bruto: R$ {formatBRL(summary.abertos_valor ?? summary.ready_valor)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-amber-300 dark:border-amber-900/50 bg-amber-50/40 dark:bg-amber-950/20 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-300 block">
+                    4. Divergência Bruto
+                  </span>
+                  <p className="text-base font-black text-amber-700 dark:text-amber-300 font-mono mt-0.5">
+                    {summary.divergence_qtd}
+                  </p>
+                  <p className="text-[10px] font-mono text-amber-700 dark:text-amber-400">
+                    Dif: R$ {formatBRL(summary.divergence_diff_total)}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-purple-300 dark:border-purple-900/50 bg-purple-50/40 dark:bg-purple-950/20 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-purple-700 dark:text-purple-300 block">
+                    5. Taxas / Tarifas
+                  </span>
+                  <p className="text-base font-black text-purple-700 dark:text-purple-300 font-mono mt-0.5">
+                    -R$ {formatBRL(summary.total_taxa_vindi)}
+                  </p>
+                  <p className="text-[10px] text-purple-600 dark:text-purple-400">
+                    {launchFeeAsExpense ? 'Lançar em Despesa CP' : 'Abatimento no Título'}
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-rose-300 dark:border-rose-900/50 bg-rose-50/40 dark:bg-rose-950/20 px-3 py-2 shadow-2xs">
+                  <span className="text-[10px] font-bold uppercase text-rose-700 dark:text-rose-300 block">
+                    6. Não Localizados
+                  </span>
+                  <p className="text-base font-black text-rose-700 dark:text-rose-300 font-mono mt-0.5">
+                    {summary.not_found_qtd}
+                  </p>
+                  <p className="text-[10px] font-mono text-rose-700 dark:text-rose-400">
+                    R$ {formatBRL(summary.not_found_valor)}
+                  </p>
+                </div>
               </div>
 
-              {/* Body em 2 Colunas */}
-              <div className="p-4 sm:p-5 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 gap-5">
+              {/* Grade Datasheet de Conciliação */}
+              <div className="rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs overflow-hidden flex flex-col">
+                <div className="px-3 py-2 border-b border-slate-300 dark:border-slate-800 flex flex-col xl:flex-row xl:items-center justify-between gap-2 bg-slate-100/90 dark:bg-slate-950">
+                  <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+                    {[
+                      { id: 'all', label: `Todos (${unifiedRows.length})` },
+                      {
+                        id: 'abertos',
+                        label: `Em Aberto AB (${summary.abertos_qtd ?? summary.ready_qtd})`,
+                      },
+                      ...(Number(summary.credito_maior_count || 0) > 0
+                        ? [
+                            {
+                              id: 'credito_maior',
+                              label: `Créd. Maior (${summary.credito_maior_count})`,
+                            },
+                          ]
+                        : []),
+                      { id: 'divergence', label: `Divergências (${itemsDivergence.length})` },
+                      {
+                        id: 'pagos',
+                        label: `Já Baixados (${summary.pagos_qtd ?? itemsAlreadyPaid.length})`,
+                      },
+                      { id: 'not_found', label: `Não Localizados (${itemsNotFound.length})` },
+                    ].map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => setActiveFilterTab(t.id as any)}
+                        className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition-all whitespace-nowrap cursor-pointer border ${
+                          activeFilterTab === t.id
+                            ? 'bg-slate-900 border-slate-900 text-white dark:bg-indigo-600 dark:border-indigo-500 shadow-2xs'
+                            : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:bg-slate-50'
+                        }`}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <div className="relative flex-1 sm:w-56">
+                      <Search className="h-3.5 w-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        placeholder="Filtrar chave, NF, pedido, cliente..."
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 pl-8 pr-2.5 py-1 text-[11px] text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => toggleSelectAllOpen(true)}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+                    >
+                      Marcar AB
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSelectAllOpen(false)}
+                      className="rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px] font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 cursor-pointer"
+                    >
+                      Desmarcar
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={selectedReleases.length === 0}
+                      onClick={() => setShowBorderoModal(true)}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 px-3 py-1 text-[11px] font-extrabold text-white shadow-2xs transition-all cursor-pointer"
+                    >
+                      <DollarSign className="h-3.5 w-3.5" />
+                      Gerar Borderô ({selectedReleases.length}) • R${' '}
+                      {formatBRL(launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount)}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tabela Datasheet */}
+                <div className="overflow-x-auto max-h-[540px] overflow-y-auto">
+                  <table className="w-full text-left border-collapse select-none text-[11px]">
+                    <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-slate-800/95 border-b border-slate-300 dark:border-slate-700 text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                      <tr className="divide-x divide-slate-200 dark:divide-slate-700">
+                        <th className="py-2 px-2 text-center w-8">✓</th>
+                        <th className="py-2 px-2 w-10 text-center">#</th>
+                        <th className="py-2 px-2.5">Chave Planilha</th>
+                        {isDualFileMode && <th className="py-2 px-2.5">Ponte</th>}
+                        <th className="py-2 px-2.5">Ped. Horus</th>
+                        <th className="py-2 px-2">Lanç.</th>
+                        <th className="py-2 px-2">NF</th>
+                        <th className="py-2 px-2.5">Cliente</th>
+                        <th className="py-2 px-2.5 text-right">Bruto</th>
+                        <th className="py-2 px-2.5 text-right">Taxa</th>
+                        <th className="py-2 px-2.5 text-right">Líq. Repasse</th>
+                        <th className="py-2 px-2.5 text-right">Valor Horus</th>
+                        <th className="py-2 px-2 text-center">Situação</th>
+                        <th className="py-2 px-2 text-center">Borderô</th>
+                        <th className="py-2 px-2.5">Diagnóstico</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                      {filteredRows.map((row, idx) => {
+                        const isSelectable =
+                          row._category === 'ready' || row._category === 'divergence';
+                        const isPaid = row.situacao_horus === 'PAGO';
+                        return (
+                          <tr
+                            key={`${row._category}-${row.linha}-${row.nro_lancamento || idx}`}
+                            onClick={() => setActiveRowIndex(idx)}
+                            className={`divide-x divide-slate-200/60 dark:divide-slate-800/60 transition-colors cursor-pointer ${
+                              idx === activeRowIndex
+                                ? 'bg-indigo-100/80 dark:bg-indigo-950/60 ring-1 ring-inset ring-indigo-500'
+                                : row.selected
+                                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 hover:bg-indigo-50/50 dark:hover:bg-slate-800/50'
+                                : idx % 2 === 1
+                                ? 'bg-slate-50/60 dark:bg-slate-900/40 hover:bg-indigo-50/40 dark:hover:bg-slate-800/40'
+                                : 'hover:bg-indigo-50/40 dark:hover:bg-slate-800/40'
+                            }`}
+                          >
+                            <td
+                              className="py-1.5 px-2 text-center"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (isSelectable) {
+                                  toggleItemSelection(row.nro_lancamento, row._category);
+                                }
+                              }}
+                            >
+                              {isSelectable ? (
+                                <button
+                                  type="button"
+                                  className="text-indigo-600 dark:text-indigo-400 cursor-pointer"
+                                >
+                                  {row.selected ? (
+                                    <CheckSquare className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Square className="h-3.5 w-3.5 text-slate-400" />
+                                  )}
+                                </button>
+                              ) : (
+                                <span className="text-slate-300 dark:text-slate-700">—</span>
+                              )}
+                            </td>
+                            <td className="py-1.5 px-2 text-center font-mono text-[10px] text-slate-400">
+                              {row.linha}
+                            </td>
+                            <td className="py-1.5 px-2.5 font-mono font-bold text-slate-900 dark:text-white whitespace-nowrap">
+                              {row.pedido_canal || row.pedido_web}
+                            </td>
+                            {isDualFileMode && (
+                              <td className="py-1.5 px-2.5 font-mono text-violet-700 dark:text-violet-300 whitespace-nowrap">
+                                {row.pedido_tray && row.pedido_tray !== '-'
+                                  ? `#${row.pedido_tray}`
+                                  : '—'}
+                              </td>
+                            )}
+                            <td className="py-1.5 px-2.5 font-mono font-bold text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                              {row.cod_ped_venda ? `#${row.cod_ped_venda}` : '—'}
+                            </td>
+                            <td className="py-1.5 px-2 font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                              {row.nro_lancamento ? `#${row.nro_lancamento}` : '—'}
+                              {(row.unificadas_qtd || 1) > 1 && (
+                                <span className="ml-1 rounded bg-violet-100 text-violet-800 px-1 py-0.2 text-[9px] font-extrabold">
+                                  {row.unificadas_qtd}x UNIF.
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-1.5 px-2 font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">
+                              {row.nro_nota_fiscal || '—'}
+                            </td>
+                            <td className="py-1.5 px-2.5 truncate max-w-[180px] text-slate-800 dark:text-slate-200">
+                              {row.cliente_nome}
+                            </td>
+                            <td className="py-1.5 px-2.5 text-right font-mono font-semibold whitespace-nowrap">
+                              R$ {formatBRL(row.valor_vindi)}
+                            </td>
+                            <td className="py-1.5 px-2.5 text-right font-mono text-purple-600 whitespace-nowrap">
+                              {(row.taxa || 0) > 0 ? `-R$ ${formatBRL(row.taxa)}` : '—'}
+                            </td>
+                            <td className="py-1.5 px-2.5 text-right font-mono font-bold text-indigo-700 dark:text-indigo-300 whitespace-nowrap">
+                              R$ {formatBRL(row.valor_liquido ?? row.valor_vindi)}
+                            </td>
+                            <td className="py-1.5 px-2.5 text-right font-mono font-bold whitespace-nowrap">
+                              {row.valor_horus !== undefined ? `R$ ${formatBRL(row.valor_horus)}` : '—'}
+                            </td>
+                            <td className="py-1.5 px-2 text-center whitespace-nowrap">
+                              {row._category === 'not_found' ? (
+                                <span className="rounded bg-rose-100 text-rose-800 px-1.5 py-0.5 text-[10px] font-extrabold">
+                                  NÃO LOC.
+                                </span>
+                              ) : isPaid ? (
+                                <span className="rounded bg-sky-100 text-sky-800 px-1.5 py-0.5 text-[10px] font-extrabold">
+                                  PAGO
+                                </span>
+                              ) : (
+                                <span className="rounded bg-emerald-100 text-emerald-800 px-1.5 py-0.5 text-[10px] font-extrabold">
+                                  ABERTO
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-1.5 px-2 text-center font-mono whitespace-nowrap">
+                              {row.cod_bordero ? `#${row.cod_bordero}` : '—'}
+                            </td>
+                            <td className="py-1.5 px-2.5 text-[11px] text-slate-500 max-w-[260px] truncate">
+                              {row.motivo}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Barra Inferior de Navegação Estilo Access */}
+                <div className="px-3.5 py-2 bg-slate-100 dark:bg-slate-950 border-t border-slate-300 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setActiveRowIndex(0)}
+                      disabled={filteredRows.length === 0 || activeRowIndex <= 0}
+                      className="p-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                    >
+                      <ChevronsLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveRowIndex((p) => Math.max(0, p - 1))}
+                      disabled={filteredRows.length === 0 || activeRowIndex <= 0}
+                      className="p-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <span className="px-3 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 font-mono font-bold text-[11px] text-slate-800 dark:text-slate-200">
+                      Registro {filteredRows.length > 0 ? activeRowIndex + 1 : 0} de {filteredRows.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setActiveRowIndex((p) => Math.min(filteredRows.length - 1, p + 1))
+                      }
+                      disabled={filteredRows.length === 0 || activeRowIndex >= filteredRows.length - 1}
+                      className="p-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveRowIndex(Math.max(0, filteredRows.length - 1))}
+                      disabled={filteredRows.length === 0 || activeRowIndex >= filteredRows.length - 1}
+                      className="p-1 rounded border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 disabled:opacity-40 cursor-pointer"
+                    >
+                      <ChevronsRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="font-mono text-xs font-bold text-emerald-700 dark:text-emerald-400">
+                    Selecionados p/ Baixa: {selectedReleases.length} título(s) • Total: R${' '}
+                    {formatBRL(launchFeeAsExpense ? totalSelectedBrutoAmount : totalSelectedAmount)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ABA 3: CONSTRUTOR / EDITOR DE MODELO DINÂMICO ("DE -> PARA" + BANCO)  */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {(activeMainTab === 'BUILDER' || showBuilderModal) && (
+        <div className="rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs overflow-hidden flex flex-col">
+          {/* Header Compacto Estilo Datasheet Compras */}
+          <div className="bg-slate-100/90 dark:bg-slate-950 border-b border-slate-300 dark:border-slate-800 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBuilderModal(false);
+                  setActiveMainTab('DESK');
+                }}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold text-[11px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+              >
+                ← Voltar à Mesa
+              </button>
+              <Sliders className="h-4 w-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <div>
+                <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                  {editingTemplateId
+                    ? `Configurar Modelo de Conciliação: ${builderForm.name}`
+                    : 'Novo Modelo Dinâmico de Conciliação Horus ERP'}
+                </h3>
+                <p className="text-[10px] text-slate-500">
+                  Defina o campo de vínculo no Horus (NF, Pedido, Lançamento), o De/Para de colunas da planilha e os códigos bancários/despesas do Borderô
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5">
+              {templates.map((tpl) => {
+                const isSelected = tpl.id === editingTemplateId;
+                return (
+                  <button
+                    key={tpl.id}
+                    type="button"
+                    onClick={() => {
+                      handleSelectTemplate(tpl.id);
+                      openBuilderModal(tpl);
+                    }}
+                    className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition cursor-pointer ${
+                      isSelected
+                        ? 'bg-slate-900 text-white border-slate-900 dark:bg-indigo-600 dark:border-indigo-500'
+                        : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-300 dark:border-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {tpl.short_name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Body em 2 Colunas */}
+          <div className="p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
                 {/* COLUNA ESQUERDA (7 cols): Identificação, Relacionamento Horus e De/Para da Planilha */}
                 <div className="lg:col-span-7 space-y-4">
                   {/* Bloco 1: Nome, Modo de Arquivos e Chave de Relacionamento Horus */}
@@ -3166,49 +3490,50 @@ export default function ConciliadorPadraoPage() {
                 </div>
               </div>
 
-              {/* Footer */}
-              <div className="px-5 py-3 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
-                <div>
-                  {editingTemplateId && activeTemplate && !activeTemplate.is_system_preset && (
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteTemplate(activeTemplate)}
-                      className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 cursor-pointer"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" /> Excluir Modelo
-                    </button>
-                  )}
-                </div>
-                <div className="flex items-center gap-2.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowBuilderModal(false)}
-                    className="rounded-xl px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 cursor-pointer"
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleSaveTemplate}
-                    disabled={savingTemplate}
-                    className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-5 py-2 text-xs font-bold text-white shadow-md cursor-pointer"
-                  >
-                    {savingTemplate ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" /> Salvando...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle2 className="h-4 w-4" /> Salvar Modelo de Conciliação
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-            </motion.div>
+          {/* Footer */}
+          <div className="px-4 py-2.5 bg-slate-100/90 dark:bg-slate-950 border-t border-slate-300 dark:border-slate-800 flex items-center justify-between gap-3 shrink-0">
+            <div>
+              {editingTemplateId && activeTemplate && !activeTemplate.is_system_preset && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteTemplate(activeTemplate)}
+                  className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-rose-600 hover:bg-rose-50 cursor-pointer"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Excluir Modelo
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowBuilderModal(false);
+                  setActiveMainTab('DESK');
+                }}
+                className="rounded-lg px-3.5 py-1.5 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-200/70 cursor-pointer"
+              >
+                Voltar à Mesa
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveTemplate}
+                disabled={savingTemplate}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 px-4 py-1.5 text-xs font-bold text-white shadow-2xs cursor-pointer"
+              >
+                {savingTemplate ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" /> Salvando...
+                  </>
+                ) : (
+                  <>
+                    <Save className="h-3.5 w-3.5" /> Salvar Modelo de Conciliação
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
 
       {/* ─── MODAL COMPACTA EM 2 COLUNAS DE GERAÇÃO E ACOMPANHAMENTO DO BORDERÔ ─── */}
       <AnimatePresence>
@@ -3561,75 +3886,284 @@ export default function ConciliadorPadraoPage() {
         )}
       </AnimatePresence>
 
-      {/* ─── MODAL DE HISTÓRICO DE FECHAMENTOS / BORDERÔS ─── */}
-      <AnimatePresence>
-        {showHistoryModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="w-full max-w-4xl max-h-[88vh] flex flex-col rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-2xl overflow-hidden"
-            >
-              <div className="bg-indigo-600 px-5 py-3.5 flex items-center justify-between text-white shrink-0">
-                <div className="flex items-center gap-2.5">
-                  <History className="h-5 w-5" />
-                  <h3 className="text-sm font-bold">
-                    Histórico de Fechamentos &amp; Borderôs Gerados no Cronuz B2B
-                  </h3>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowHistoryModal(false)}
-                  className="text-white/80 hover:text-white text-sm font-bold cursor-pointer"
-                >
-                  ✕
-                </button>
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* ABA 2: HISTÓRICO DE BORDERÔS (DATASHEET INLINE COM OPÇÃO DE ESTORNO)  */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {(activeMainTab === 'HISTORY' || showHistoryModal) && (
+        <div className="rounded-xl border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs overflow-hidden flex flex-col">
+          {/* Cabeçalho Estilo Datasheet Compras */}
+          <div className="bg-slate-100/90 dark:bg-slate-950 border-b border-slate-300 dark:border-slate-800 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setSelectedClosingDetail(null);
+                  setActiveMainTab('DESK');
+                }}
+                className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 font-bold text-[11px] text-slate-700 dark:text-slate-300 hover:bg-slate-50 cursor-pointer"
+              >
+                ← Voltar à Mesa
+              </button>
+              <History className="h-4 w-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <div>
+                <h3 className="text-xs font-extrabold text-slate-900 dark:text-white uppercase tracking-wider">
+                  Histórico de Fechamentos &amp; Borderôs Gerados no Cronuz B2B
+                </h3>
+                <p className="text-[10px] text-slate-500">
+                  Auditoria permanente dos borderôs gerados no Horus com opção de exportação e estorno seguro
+                </p>
               </div>
-              <div className="p-5 overflow-y-auto">
-                {loadingClosings ? (
-                  <div className="py-12 flex items-center justify-center gap-2 text-xs text-slate-500">
-                    <Loader2 className="h-4 w-4 animate-spin" /> Carregando histórico...
+            </div>
+
+            <button
+              type="button"
+              onClick={loadClosingsList}
+              disabled={loadingClosings}
+              className="inline-flex items-center gap-1 rounded-lg bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 px-2.5 py-1 text-[11px] font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+            >
+              <RefreshCw className={`h-3 w-3 ${loadingClosings ? 'animate-spin' : ''}`} />
+              Atualizar Lista
+            </button>
+          </div>
+
+          <div className="p-3.5 space-y-3 text-xs">
+            {selectedClosingDetail ? (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClosingDetail(null)}
+                      className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 font-bold text-[11px] text-slate-700 dark:text-slate-300 cursor-pointer"
+                    >
+                      ← Todos os Borderôs
+                    </button>
+                    <div>
+                      <span className="font-extrabold text-xs text-slate-900 dark:text-white">
+                        Borderô Horus #{selectedClosingDetail.cod_bordero} •{' '}
+                        {selectedClosingDetail.profile_name}
+                      </span>
+                      <span className="block text-[10px] text-slate-500">
+                        Gerado em {selectedClosingDetail.created_at} por{' '}
+                        {selectedClosingDetail.created_by_name} • Banco{' '}
+                        {selectedClosingDetail.banco} / Ag {selectedClosingDetail.agencia} / CC{' '}
+                        {selectedClosingDetail.conta} (Forma {selectedClosingDetail.forma_pagto})
+                      </span>
+                    </div>
                   </div>
-                ) : closingsList.length === 0 ? (
-                  <p className="text-center py-10 text-xs text-slate-500">
-                    Nenhum fechamento registrado até o momento.
-                  </p>
-                ) : (
-                  <table className="w-full text-left border-collapse text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] font-extrabold uppercase text-slate-400">
-                        <th className="py-2 px-2.5">Borderô</th>
-                        <th className="py-2 px-2.5">Modelo</th>
-                        <th className="py-2 px-2.5">Data / Hora</th>
-                        <th className="py-2 px-2.5 text-right">Títulos</th>
-                        <th className="py-2 px-2.5 text-right">Líquido Borderô</th>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleRevertClosingBordero(selectedClosingDetail)}
+                      disabled={revertingClosingId === selectedClosingDetail.id}
+                      className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-[11px] font-extrabold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    >
+                      {revertingClosingId === selectedClosingDetail.id ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Estornando no Horus...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Desfazer / Estornar Borderô no Horus
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportClosingDetailToCsv(selectedClosingDetail)}
+                      className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-extrabold flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Exportar Fechamento (Excel/CSV)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                      Títulos Conciliados
+                    </span>
+                    <b className="text-sm font-mono text-slate-900 dark:text-white">
+                      {selectedClosingDetail.total_titles}
+                    </b>
+                  </div>
+                  <div className="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-800 bg-slate-50 dark:bg-slate-950">
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">
+                      Valor Bruto Títulos
+                    </span>
+                    <b className="text-sm font-mono text-slate-900 dark:text-white">
+                      R$ {formatBRL(selectedClosingDetail.valor_bruto_total)}
+                    </b>
+                  </div>
+                  <div className="px-3 py-2 rounded-xl border border-purple-300 dark:border-purple-900/50 bg-purple-50/40 dark:bg-purple-950/20">
+                    <span className="text-[10px] font-bold uppercase text-purple-700 block">
+                      Taxas / Tarifas
+                    </span>
+                    <b className="text-sm font-mono text-purple-700 dark:text-purple-300">
+                      -R$ {formatBRL(selectedClosingDetail.valor_taxa_total)}
+                    </b>
+                  </div>
+                  <div className="px-3 py-2 rounded-xl border border-emerald-300 dark:border-emerald-900/50 bg-emerald-50/40 dark:bg-emerald-950/20">
+                    <span className="text-[10px] font-bold uppercase text-emerald-700 block">
+                      Valor Baixado no Borderô
+                    </span>
+                    <b className="text-sm font-mono text-emerald-700 dark:text-emerald-300">
+                      R$ {formatBRL(selectedClosingDetail.valor_liquido_bordero)}
+                    </b>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto max-h-[460px] rounded-xl border border-slate-300 dark:border-slate-800">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead className="sticky top-0 bg-slate-100 dark:bg-slate-800 text-[10px] font-bold uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
+                      <tr className="divide-x divide-slate-200 dark:divide-slate-700">
+                        <th className="py-2 px-2.5">Pedido / Chave</th>
+                        <th className="py-2 px-2.5">Pedido Tray</th>
+                        <th className="py-2 px-2.5">Ped. Horus</th>
+                        <th className="py-2 px-2.5">Lanç.</th>
+                        <th className="py-2 px-2.5">NF</th>
+                        <th className="py-2 px-2.5">Cliente</th>
+                        <th className="py-2 px-2.5 text-right">Bruto</th>
+                        <th className="py-2 px-2.5 text-right">Taxa</th>
+                        <th className="py-2 px-2.5 text-right">Líq. Baixado</th>
+                        <th className="py-2 px-2.5 text-right">Créd. Maior</th>
+                        <th className="py-2 px-2.5">Data Pagto</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {closingsList.map((c) => (
-                        <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                          <td className="py-2.5 px-2.5 font-mono font-black text-emerald-600">
-                            #{c.bordero_number}
+                    <tbody className="divide-y divide-slate-200 dark:divide-slate-800 font-mono text-[11px]">
+                      {(selectedClosingDetail.items || []).map((it: any, i: number) => (
+                        <tr
+                          key={i}
+                          className={`divide-x divide-slate-200/60 dark:divide-slate-800/60 ${
+                            i % 2 === 1 ? 'bg-slate-50/60 dark:bg-slate-900/40' : ''
+                          } hover:bg-indigo-50/40 dark:hover:bg-slate-800/40`}
+                        >
+                          <td className="py-1.5 px-2.5 font-bold">
+                            {it.pedido_canal || it.pedido_web}
                           </td>
-                          <td className="py-2.5 px-2.5 font-bold">{c.profile_code}</td>
-                          <td className="py-2.5 px-2.5 font-mono text-slate-500">
-                            {c.created_at_br || c.created_at}
+                          <td className="py-1.5 px-2.5 text-violet-700 dark:text-violet-300">
+                            {it.pedido_tray ? `#${it.pedido_tray}` : '—'}
                           </td>
-                          <td className="py-2.5 px-2.5 text-right font-mono">{c.total_titles}</td>
-                          <td className="py-2.5 px-2.5 text-right font-mono font-bold text-indigo-600">
-                            R$ {formatBRL(c.total_net_bordero)}
+                          <td className="py-1.5 px-2.5 text-indigo-700 dark:text-indigo-300">
+                            {it.cod_ped_venda ? `#${it.cod_ped_venda}` : '—'}
                           </td>
+                          <td className="py-1.5 px-2.5">#{it.nro_lancamento}</td>
+                          <td className="py-1.5 px-2.5">{it.nro_nota_fiscal || '—'}</td>
+                          <td className="py-1.5 px-2.5 font-sans max-w-[180px] truncate">
+                            {it.cliente_nome || '—'}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right">
+                            R$ {formatBRL(it.valor_bruto)}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right text-purple-600">
+                            {(it.taxa || 0) > 0 ? `-R$ ${formatBRL(it.taxa)}` : '—'}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right font-bold text-emerald-700 dark:text-emerald-400">
+                            R$ {formatBRL(it.valor_liquido)}
+                          </td>
+                          <td className="py-1.5 px-2.5 text-right text-amber-700 dark:text-amber-400">
+                            {(it.valor_credito_maior || 0) > 0
+                              ? `+R$ ${formatBRL(it.valor_credito_maior)} (#${
+                                  it.novo_lancamento_credito_maior || 'AB'
+                                })`
+                              : '—'}
+                          </td>
+                          <td className="py-1.5 px-2.5">{it.data_pagamento || '—'}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                )}
+                </div>
               </div>
-            </motion.div>
+            ) : loadingClosings || loadingClosingDetail ? (
+              <div className="py-10 flex items-center justify-center gap-2 text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin text-indigo-600" />
+                <span>Carregando histórico de fechamentos...</span>
+              </div>
+            ) : closingsList.length === 0 ? (
+              <p className="text-center py-10 text-xs text-slate-400">
+                Nenhum fechamento registrado até o momento.
+              </p>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-slate-300 dark:border-slate-800">
+                <table className="w-full text-left border-collapse text-[11px]">
+                  <thead className="bg-slate-100 dark:bg-slate-800 text-[10px] font-bold uppercase text-slate-600 dark:text-slate-300 border-b border-slate-300 dark:border-slate-700">
+                    <tr className="divide-x divide-slate-200 dark:divide-slate-700">
+                      <th className="py-2 px-2.5">Borderô Horus</th>
+                      <th className="py-2 px-2.5">Data / Hora</th>
+                      <th className="py-2 px-2.5">Modelo</th>
+                      <th className="py-2 px-2.5 text-center">Títulos</th>
+                      <th className="py-2 px-2.5 text-right">Bruto</th>
+                      <th className="py-2 px-2.5 text-right">Taxas</th>
+                      <th className="py-2 px-2.5 text-right">Líq. Baixado</th>
+                      <th className="py-2 px-2.5 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {closingsList.map((c, idx) => (
+                      <tr
+                        key={c.id}
+                        className={`divide-x divide-slate-200/60 dark:divide-slate-800/60 transition-colors ${
+                          idx % 2 === 1 ? 'bg-slate-50/60 dark:bg-slate-900/40' : ''
+                        } hover:bg-indigo-50/40 dark:hover:bg-slate-800/40`}
+                      >
+                        <td className="py-1.5 px-2.5 font-mono font-extrabold text-indigo-700 dark:text-indigo-300">
+                          #{c.cod_bordero || c.bordero_number}{' '}
+                          <span className="text-[9px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 ml-1">
+                            {c.sta_bordero || 'PG'}
+                          </span>
+                        </td>
+                        <td className="py-1.5 px-2.5 font-mono text-slate-500">
+                          {c.created_at_br || c.created_at}
+                        </td>
+                        <td className="py-1.5 px-2.5 font-bold text-slate-800 dark:text-slate-200">
+                          {c.profile_name || c.profile_code}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-center font-mono font-bold">
+                          {c.total_titles}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right font-mono">
+                          R$ {formatBRL(c.valor_bruto_total ?? c.total_net_bordero)}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right font-mono text-purple-600">
+                          -R$ {formatBRL(c.valor_taxa_total ?? 0)}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right font-mono font-extrabold text-emerald-700 dark:text-emerald-400">
+                          R$ {formatBRL(c.valor_liquido_bordero ?? c.total_net_bordero)}
+                        </td>
+                        <td className="py-1.5 px-2.5 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleInspectClosingDetail(c.id)}
+                              className="px-2 py-1 rounded-md bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 font-bold text-[10px] cursor-pointer"
+                            >
+                              Consultar Itens
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleRevertClosingBordero(c)}
+                              disabled={revertingClosingId === c.id}
+                              className="px-2 py-1 rounded-md bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 font-bold text-[10px] cursor-pointer disabled:opacity-50"
+                              title="Voltar títulos para Aberto (AB) e remover do fechamento bancário no Horus"
+                            >
+                              {revertingClosingId === c.id ? 'Estornando...' : 'Desfazer'}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
-        )}
-      </AnimatePresence>
+        </div>
+      )}
     </div>
   );
 }

@@ -313,6 +313,7 @@ def _serialize_guest(g: EventGuest) -> Dict[str, Any]:
         "ticket_resend_count": g.ticket_resend_count or 0,
         "checkin_status": g.checkin_status,
         "checked_in_at": _fmt_dt(g.checked_in_at),
+        "checked_in_by_name": g.checked_in_by.name if getattr(g, "checked_in_by", None) else None,
         "notes": g.notes,
         "ticket": {
             "id": ticket_obj.id,
@@ -514,6 +515,9 @@ class EnqueueDispatchPayload(BaseModel):
 class CheckinPayload(BaseModel):
     guest_id: Optional[int] = None
     qr_code: Optional[str] = None
+    phone_or_cpf: Optional[str] = None
+    cpf_confirmed: Optional[str] = None
+    verification_method: str = "LIST"
     undo: bool = False
 
 
@@ -824,6 +828,99 @@ def list_managed_events(
     events = q.order_by(ManagedEvent.event_date.desc(), ManagedEvent.id.desc()).all()
     stats_map = _compute_event_stats_map(db, comp.id, [e.id for e in events])
     return [_serialize_event(ev, stats_map.get(ev.id)) for ev in events]
+
+
+@router.get("/events/{event_id}")
+def get_single_managed_event(
+    event_id: int,
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    comp = _resolve_company(db, current_user, company_id)
+    ev = (
+        db.query(ManagedEvent)
+        .options(joinedload(ManagedEvent.venue))
+        .filter(ManagedEvent.id == event_id, ManagedEvent.company_id == comp.id)
+        .first()
+    )
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+
+    stats_map = _compute_event_stats_map(db, comp.id, [ev.id])
+    ev_serialized = _serialize_event(ev, stats_map.get(ev.id))
+
+    # Breakdown detalhado por setor para a ficha dedicada do evento e portaria
+    sector_stats: Dict[str, Dict[str, int]] = {}
+    for sec in ev_serialized.get("sectors") or []:
+        s_key = str(sec.get("key") or "VIP").upper()
+        sector_stats[s_key] = {
+            "quota": int(sec.get("courtesy_quota") or 0),
+            "guests": 0,
+            "people": 0,
+            "confirmed": 0,
+            "checked_in": 0,
+            "tickets_available": 0,
+            "tickets_sent": 0,
+        }
+
+    g_rows = (
+        db.query(
+            EventGuest.sector_key,
+            EventGuest.invite_status,
+            EventGuest.checkin_status,
+            func.count(EventGuest.id),
+            func.coalesce(func.sum(EventGuest.companions_count), 0),
+        )
+        .filter(EventGuest.company_id == comp.id, EventGuest.event_id == ev.id)
+        .group_by(EventGuest.sector_key, EventGuest.invite_status, EventGuest.checkin_status)
+        .all()
+    )
+    for sk, inv_st, chk_st, cnt, comps in g_rows:
+        sk_up = (sk or "VIP").upper()
+        if sk_up not in sector_stats:
+            sector_stats[sk_up] = {
+                "quota": 0,
+                "guests": 0,
+                "people": 0,
+                "confirmed": 0,
+                "checked_in": 0,
+                "tickets_available": 0,
+                "tickets_sent": 0,
+            }
+        if inv_st != "CANCELLED":
+            sector_stats[sk_up]["guests"] += int(cnt)
+            sector_stats[sk_up]["people"] += int(cnt) + int(comps)
+        if inv_st == "CONFIRMED":
+            sector_stats[sk_up]["confirmed"] += int(cnt)
+        if chk_st == "CHECKED_IN":
+            sector_stats[sk_up]["checked_in"] += int(cnt)
+
+    t_rows = (
+        db.query(EventTicket.sector_key, EventTicket.status, func.count(EventTicket.id))
+        .filter(EventTicket.company_id == comp.id, EventTicket.event_id == ev.id)
+        .group_by(EventTicket.sector_key, EventTicket.status)
+        .all()
+    )
+    for sk, tk_st, cnt in t_rows:
+        sk_up = (sk or "VIP").upper()
+        if sk_up not in sector_stats:
+            sector_stats[sk_up] = {
+                "quota": 0,
+                "guests": 0,
+                "people": 0,
+                "confirmed": 0,
+                "checked_in": 0,
+                "tickets_available": 0,
+                "tickets_sent": 0,
+            }
+        if tk_st == "AVAILABLE":
+            sector_stats[sk_up]["tickets_available"] += int(cnt)
+        elif tk_st in ("SENT", "DELIVERED"):
+            sector_stats[sk_up]["tickets_sent"] += int(cnt)
+
+    ev_serialized["sector_stats"] = sector_stats
+    return ev_serialized
 
 
 @router.post("/events")
@@ -1842,6 +1939,172 @@ async def import_guests_spreadsheet(
     }
 
 
+@router.get("/events/{event_id}/guests/export-excel")
+def export_event_guests_excel(
+    event_id: int,
+    filter_mode: str = Query("ALL"),  # ALL, CONFIRMED, CHECKED_IN
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    comp = _resolve_company(db, current_user, company_id)
+    ev = db.query(ManagedEvent).filter(ManagedEvent.id == event_id, ManagedEvent.company_id == comp.id).first()
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+
+    q = (
+        db.query(EventGuest)
+        .join(EventContact, EventContact.id == EventGuest.contact_id)
+        .options(joinedload(EventGuest.contact), joinedload(EventGuest.checked_in_by), joinedload(EventGuest.assigned_ticket))
+        .filter(EventGuest.company_id == comp.id, EventGuest.event_id == ev.id)
+    )
+    if filter_mode == "CONFIRMED":
+        q = q.filter(EventGuest.invite_status == "CONFIRMED")
+    elif filter_mode == "CHECKED_IN":
+        q = q.filter(EventGuest.checkin_status == "CHECKED_IN")
+
+    rows = q.order_by(EventGuest.sector_key.asc(), EventContact.full_name.asc()).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Lista_Evento"
+    ws.append([
+        "Nome Completo",
+        "Celular / WhatsApp",
+        "CPF",
+        "Setor",
+        "Acompanhantes",
+        "Promoter / Origem",
+        "Confirmação Presença",
+        "Status Ingresso PDF",
+        "Portaria (Check-in)",
+        "Horário Entrada (BRT)",
+        "Liberado Por",
+    ])
+    for g in rows:
+        c = g.contact
+        chk_time = g.checked_in_at.astimezone(BRT_TZ).strftime("%d/%m/%Y %H:%M:%S") if g.checked_in_at else ""
+        ws.append([
+            c.full_name if c else "",
+            c.phone_display if c else "",
+            c.cpf or "" if c else "",
+            g.sector_key,
+            g.companions_count or 0,
+            g.promoter_name or "",
+            g.invite_status,
+            g.ticket_delivery_status,
+            "ENTROU" if g.checkin_status == "CHECKED_IN" else "PENDENTE",
+            chk_time,
+            g.checked_in_by.name if getattr(g, "checked_in_by", None) else "",
+        ])
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    safe_code = re.sub(r"[^a-zA-Z0-9_-]", "_", ev.code or f"evento_{ev.id}")
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="Lista_{safe_code}_{filter_mode}.xlsx"'},
+    )
+
+
+@router.get("/events/{event_id}/portaria/lookup")
+def lookup_guest_at_portaria(
+    event_id: int,
+    q: str = Query(..., min_length=2),
+    company_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Validador dedicado de Portaria pelo Sistema:
+    Localiza se o convidado está na lista daquele evento utilizando Celular (DDD+Número),
+    CPF, QR Code ou Nome Completo, apontando se já entrou, se confirmou presença ou se não está na lista.
+    """
+    comp = _resolve_company(db, current_user, company_id)
+    ev = db.query(ManagedEvent).filter(ManagedEvent.id == event_id, ManagedEvent.company_id == comp.id).first()
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evento não encontrado.")
+
+    raw_q = q.strip()
+    digits = re.sub(r"\D", "", raw_q)
+
+    base_q = (
+        db.query(EventGuest)
+        .join(EventContact, EventContact.id == EventGuest.contact_id)
+        .options(
+            joinedload(EventGuest.contact),
+            joinedload(EventGuest.checked_in_by),
+            joinedload(EventGuest.assigned_ticket),
+        )
+        .filter(EventGuest.company_id == comp.id, EventGuest.event_id == ev.id)
+    )
+
+    if "EVMQR:" in raw_q:
+        token = raw_q.split("EVMQR:", 1)[1].strip()
+        matched_guests = base_q.filter(EventGuest.rsvp_token == token).all()
+        detected_type = "QR"
+    else:
+        conds = [
+            EventContact.full_name.ilike(f"%{raw_q}%"),
+            EventContact.nickname.ilike(f"%{raw_q}%"),
+        ]
+        detected_type = "NAME"
+        if len(digits) >= 3:
+            conds.append(EventContact.cpf.ilike(f"%{digits}%"))
+            conds.append(EventContact.phone_canonical.ilike(f"%{digits}%"))
+            conds.append(EventContact.phone_base_8.ilike(f"%{digits[-8:]}%" if len(digits) >= 8 else f"%{digits}%"))
+            if len(digits) == 11 and digits[2] != "9":
+                detected_type = "CPF"
+            else:
+                detected_type = "PHONE_OR_CPF"
+        matched_guests = base_q.filter(or_(*conds)).order_by(EventContact.full_name.asc()).limit(25).all()
+
+    results = []
+    for g in matched_guests:
+        c = g.contact
+        if (c and c.is_blocked) or g.invite_status == "CANCELLED":
+            verdict = "BLOCKED"
+        elif g.checkin_status == "CHECKED_IN":
+            verdict = "ALREADY_ENTERED"
+        elif g.invite_status == "CONFIRMED":
+            verdict = "READY_CONFIRMED"
+        elif g.invite_status == "DECLINED":
+            verdict = "DECLINED_WARN"
+        else:
+            verdict = "READY_ON_LIST"
+
+        serialized = _serialize_guest(g)
+        serialized["portaria_verdict"] = verdict
+        results.append(serialized)
+
+    not_in_list_crm = None
+    if not results and len(digits) >= 8:
+        crm_cand = (
+            db.query(EventContact)
+            .filter(
+                EventContact.company_id == comp.id,
+                or_(
+                    EventContact.cpf == digits,
+                    EventContact.phone_canonical.ilike(f"%{digits[-8:]}%"),
+                    EventContact.phone_base_8.ilike(f"%{digits[-8:]}%"),
+                ),
+            )
+            .first()
+        )
+        if crm_cand:
+            not_in_list_crm = _serialize_contact(crm_cand)
+
+    return {
+        "query": raw_q,
+        "detected_type": detected_type,
+        "in_event_list": len(results) > 0,
+        "matches": results,
+        "not_in_list_crm_contact": not_in_list_crm,
+    }
+
+
 @router.post("/events/{event_id}/checkin")
 def perform_event_checkin(
     event_id: int,
@@ -1851,22 +2114,63 @@ def perform_event_checkin(
     current_user: User = Depends(get_current_user),
 ):
     comp = _resolve_company(db, current_user, company_id)
-    q = db.query(EventGuest).options(joinedload(EventGuest.contact)).filter(
-        EventGuest.company_id == comp.id,
-        EventGuest.event_id == event_id,
+    q = (
+        db.query(EventGuest)
+        .join(EventContact, EventContact.id == EventGuest.contact_id)
+        .options(joinedload(EventGuest.contact), joinedload(EventGuest.checked_in_by), joinedload(EventGuest.assigned_ticket))
+        .filter(
+            EventGuest.company_id == comp.id,
+            EventGuest.event_id == event_id,
+        )
     )
     if payload.qr_code:
         raw_qr = payload.qr_code.strip()
         token = raw_qr.split("EVMQR:", 1)[1].strip() if "EVMQR:" in raw_qr else raw_qr.rsplit("/", 1)[-1].strip()
         guest = q.filter(EventGuest.rsvp_token == token).first()
         if not guest:
-            raise HTTPException(status_code=404, detail="QR Code inválido ou não pertence a este evento.")
+            raise HTTPException(status_code=404, detail="QR Code inválido ou convidado não consta na lista deste evento.")
     elif payload.guest_id:
         guest = q.filter(EventGuest.id == payload.guest_id).first()
         if not guest:
-            raise HTTPException(status_code=404, detail="Convidado não localizado neste evento.")
+            raise HTTPException(status_code=404, detail="Convidado não consta na lista deste evento.")
+    elif payload.phone_or_cpf:
+        digits = re.sub(r"\D", "", payload.phone_or_cpf)
+        if len(digits) < 8:
+            raise HTTPException(status_code=400, detail="Informe o Celular com DDD ou o CPF completo para validar na portaria.")
+        cands = q.filter(
+            or_(
+                EventContact.cpf == digits,
+                EventContact.phone_canonical.ilike(f"%{digits[-8:]}%"),
+                EventContact.phone_base_8 == digits[-10:],
+            )
+        ).all()
+        if not cands:
+            raise HTTPException(status_code=404, detail="NÃO CONSTA NA LISTA: nenhum convidado encontrado neste evento com este Celular/CPF.")
+        if len(cands) > 1:
+            raise HTTPException(status_code=409, detail="Mais de um convidado encontrado para esta busca. Selecione na lista abaixo.")
+        guest = cands[0]
     else:
-        raise HTTPException(status_code=400, detail="Informe guest_id ou leia o QR Code do convidado.")
+        raise HTTPException(status_code=400, detail="Informe o convidado, Celular/CPF ou QR Code para validar na portaria.")
+
+    if not payload.undo:
+        if guest.contact and guest.contact.is_blocked:
+            raise HTTPException(
+                status_code=403,
+                detail=f"ENTRADA BLOQUEADA: '{guest.contact.full_name}' possui restrição ativa no CRM ({guest.contact.block_reason or 'Sem motivo detalhado'}).",
+            )
+        if guest.invite_status == "CANCELLED":
+            raise HTTPException(
+                status_code=403,
+                detail=f"ENTRADA BLOQUEADA: o convite de '{guest.contact.full_name if guest.contact else guest.id}' consta como CANCELADO.",
+            )
+
+    # Se a portaria informou/validou o CPF na entrada, grava/atualiza na ficha do contato no CRM
+    if payload.cpf_confirmed and guest.contact:
+        clean_cpf = re.sub(r"\D", "", payload.cpf_confirmed)
+        if len(clean_cpf) == 11:
+            guest.contact.cpf = clean_cpf
+        elif clean_cpf:
+            raise HTTPException(status_code=400, detail="CPF informado na portaria inválido: digite os 11 dígitos do CPF.")
 
     now_brt = datetime.now(BRT_TZ)
     if payload.undo:
@@ -1876,13 +2180,15 @@ def perform_event_checkin(
         guest.checked_in_at = None
         guest.checked_in_by_user_id = None
         action_code = "CHECKIN_UNDONE"
-        msg = f"Check-in estornado para '{guest.contact.full_name if guest.contact else guest.id}'."
+        msg = f"Check-in estornado na portaria para '{guest.contact.full_name if guest.contact else guest.id}'."
     else:
         already = guest.checkin_status == "CHECKED_IN"
         if already:
+            hora_prev = guest.checked_in_at.astimezone(BRT_TZ).strftime("%H:%M:%S") if guest.checked_in_at else ""
+            op_prev = guest.checked_in_by.name if getattr(guest, "checked_in_by", None) else "Portaria"
             return {
                 "already_checked_in": True,
-                "message": f"ATENÇÃO: '{guest.contact.full_name}' JÁ realizou entrada às {guest.checked_in_at.astimezone(BRT_TZ).strftime('%H:%M:%S') if guest.checked_in_at else ''}!",
+                "message": f"ATENÇÃO — DUPLA ENTRADA BLOQUEADA: '{guest.contact.full_name}' JÁ entrou às {hora_prev} (liberado por {op_prev})!",
                 "guest": _serialize_guest(guest),
             }
         guest.checkin_status = "CHECKED_IN"
@@ -1890,8 +2196,9 @@ def perform_event_checkin(
         guest.checked_in_by_user_id = current_user.id
         if guest.contact:
             guest.contact.total_checkins = (guest.contact.total_checkins or 0) + 1
+        method_lbl = {"PHONE": "Celular", "CPF": "CPF", "QR": "QR Code", "LIST": "Lista"}.get(payload.verification_method, payload.verification_method)
         action_code = "GUEST_CHECKED_IN"
-        msg = f"Entrada liberada (Check-in) para '{guest.contact.full_name if guest.contact else guest.id}' no setor {guest.sector_key}."
+        msg = f"Portaria liberada via {method_lbl} para '{guest.contact.full_name if guest.contact else guest.id}' [Setor: {guest.sector_key}]."
 
     _log_audit(
         db,
@@ -1900,10 +2207,11 @@ def perform_event_checkin(
         action_code,
         msg,
         user=current_user,
-        source_channel="WEB_MOBILE",
+        source_channel="PORTARIA",
         event_id=event_id,
         contact_id=guest.contact_id,
         guest_id=guest.id,
+        details={"verification_method": payload.verification_method},
     )
     db.commit()
     db.refresh(guest)

@@ -52,6 +52,7 @@ export default function EventManagementMobilePage() {
 
   // List & Checkin Search
   const [searchTerm, setSearchTerm] = useState('');
+  const [cpfConfirmMap, setCpfConfirmMap] = useState<Record<number, string>>({});
   const [scanningQr, setScanningQr] = useState(false);
   const qrScannerRef = useRef<any>(null);
 
@@ -329,10 +330,25 @@ export default function EventManagementMobilePage() {
   async function handleCheckin(guestId?: number, qrToken?: string, undo = false) {
     if (!selectedEventId) return;
     try {
+      const cpfTyped = guestId ? cpfConfirmMap[guestId] : undefined;
+      const digitsSearch = searchTerm.replace(/\D/g, '');
+      const method = qrToken
+        ? 'QR'
+        : digitsSearch.length === 11 && digitsSearch[2] !== '9'
+          ? 'CPF'
+          : digitsSearch.length >= 8
+            ? 'PHONE'
+            : 'LIST';
       const res = await fetch(`${API_URL}/event-management/events/${selectedEventId}/checkin`, {
         method: 'POST',
         headers: { ...authHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ guest_id: guestId, qr_code: qrToken, undo }),
+        body: JSON.stringify({
+          guest_id: guestId,
+          qr_code: qrToken,
+          cpf_confirmed: cpfTyped ? cpfTyped.replace(/\D/g, '') : undefined,
+          verification_method: method,
+          undo,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Erro no check-in.');
@@ -407,10 +423,10 @@ export default function EventManagementMobilePage() {
             </h1>
           </div>
           <Link
-            href="/event-management"
+            href={selectedEventId ? `/event-management/${selectedEventId}` : '/event-management'}
             className="inline-flex items-center gap-1 text-xs font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 px-2.5 py-1.5 rounded-xl"
           >
-            <ArrowLeft className="w-3.5 h-3.5" /> Painel Completo
+            <ArrowLeft className="w-3.5 h-3.5" /> {selectedEventId ? 'Ficha do Evento' : 'Painel Completo'}
           </Link>
         </div>
 
@@ -783,49 +799,81 @@ export default function EventManagementMobilePage() {
             <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
             <input
               type="text"
-              placeholder="Portaria: buscar nome, telefone ou CPF..."
+              placeholder="Portaria: digite Celular (DDD), CPF ou Nome..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-sm"
+              className="w-full pl-10 pr-4 py-2.5 rounded-2xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-sm font-mono font-semibold"
             />
           </div>
 
+          {searchTerm.trim().length >= 3 && filteredGuests.length === 0 && (
+            <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs font-bold text-center">
+              NÃO CONSTA NA LISTA DESTE EVENTO para &ldquo;{searchTerm}&rdquo;.
+            </div>
+          )}
+
           {filteredGuests.map((g) => {
             const isChecked = g.checkin_status === 'CHECKED_IN';
+            const currentCpf =
+              cpfConfirmMap[g.id] !== undefined ? cpfConfirmMap[g.id] : g.contact?.cpf || '';
             return (
               <div
                 key={g.id}
-                className={`border rounded-2xl p-4 flex items-center justify-between gap-3 ${
+                className={`border rounded-2xl p-3.5 space-y-2 ${
                   isChecked
                     ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-300 dark:border-emerald-800'
                     : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800'
                 }`}
               >
-                <div className="min-w-0">
-                  <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
-                    {g.contact?.full_name}
-                  </div>
-                  <div className="text-xs font-mono text-slate-500">
-                    {g.contact?.phone_display} • <strong>{g.sector_key}</strong>
-                    {g.companions_count > 0 ? ` (+${g.companions_count})` : ''}
-                  </div>
-                  {g.contact?.is_blocked && (
-                    <div className="text-[11px] text-rose-600 font-bold flex items-center gap-1 mt-0.5">
-                      <ShieldAlert className="w-3.5 h-3.5" /> RESTRIÇÃO NO CRM
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm text-slate-900 dark:text-white truncate">
+                      {g.contact?.full_name}
                     </div>
-                  )}
+                    <div className="text-xs font-mono text-slate-500">
+                      {g.contact?.phone_display} • <strong>{g.sector_key}</strong>
+                      {g.companions_count > 0 ? ` (+${g.companions_count})` : ''}
+                    </div>
+                    <div className="text-[11px] mt-0.5">
+                      {g.invite_status === 'CONFIRMED' ? (
+                        <span className="text-emerald-600 font-bold">Confirmou Presença ✓</span>
+                      ) : (
+                        <span className="text-slate-400">Na lista (RSVP: {g.invite_status})</span>
+                      )}
+                    </div>
+                    {g.contact?.is_blocked && (
+                      <div className="text-[11px] text-rose-600 font-bold flex items-center gap-1 mt-0.5">
+                        <ShieldAlert className="w-3.5 h-3.5" /> RESTRIÇÃO NO CRM
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    onClick={() => handleCheckin(g.id, undefined, isChecked)}
+                    className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
+                      isChecked
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-slate-900 dark:bg-indigo-600 text-white'
+                    }`}
+                  >
+                    {isChecked ? 'Entrou ✓' : 'Confirmar'}
+                  </button>
                 </div>
 
-                <button
-                  onClick={() => handleCheckin(g.id, undefined, isChecked)}
-                  className={`shrink-0 px-4 py-2.5 rounded-xl text-xs font-bold transition ${
-                    isChecked
-                      ? 'bg-emerald-600 text-white'
-                      : 'bg-slate-900 dark:bg-indigo-600 text-white'
-                  }`}
-                >
-                  {isChecked ? 'Entrou ✓' : 'Check-in'}
-                </button>
+                {!isChecked && (
+                  <div className="flex items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                    <span className="text-[11px] font-semibold text-slate-500 shrink-0">CPF:</span>
+                    <input
+                      type="tel"
+                      placeholder="Confirmar/digitar CPF na entrada"
+                      value={currentCpf}
+                      onChange={(e) =>
+                        setCpfConfirmMap((prev) => ({ ...prev, [g.id]: e.target.value }))
+                      }
+                      className="flex-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-xs font-mono"
+                    />
+                  </div>
+                )}
               </div>
             );
           })}
